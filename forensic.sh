@@ -307,6 +307,7 @@ afficher_commande() {   # <commande> [indentation]
 
 menu() {   # clé=texte ... — la première clé est celle de la touche Entrée
     local e ligne=""
+    [[ "$SANS_QUESTION" == "true" ]] && return 0
     for e in "$@"; do
         ligne+="${ligne:+$ESTOMPE · $C0}${GRAS}${e%%=*}${C0} ${ESTOMPE}${e#*=}${C0}"
     done
@@ -458,9 +459,7 @@ trap gerer_int INT
 # lire <invite> <variable> : Entrée vide = défaut ; Ctrl-D = arrêt.
 lire() {
     local rc
-    if [[ "$SANS_QUESTION" == "true" ]]; then
-        printf -v "$2" '%s' ""; printf '%s%s[-y]%s\n' "$1" "$ESTOMPE" "$C0"; return 0
-    fi
+    [[ "$SANS_QUESTION" == "true" ]] && { printf -v "$2" '%s' ""; return 0; }
     EN_SAISIE=1
     # shellcheck disable=SC2229
     read -r -p "$1" "$2" < "$ENTREE"; rc=$?
@@ -529,7 +528,8 @@ valeur_valide() {
     return 0
 }
 
-ou_sert() {   # <nom> : « 2, 3, liste home »
+etapes_mot() { if [[ "$1" == *,* ]]; then printf 'aux étapes'; else printf "à l'étape"; fi; }
+ou_sert() {   # <nom> : « 2, 3 et par la liste home »
     local i
     for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do
         [[ "${PH_SIMPLES[$i]}" == "$1" ]] && { printf '%s' "${USAGE_SIMPLES[$i]}"; return 0; }
@@ -591,7 +591,7 @@ demander_valeur() {
     INTERROMPU=0
     ou="$(ou_sert "$nom")"; n=${#v[@]}
 
-    printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$BLEU" "$C0" "$GRAS$CYAN" "$nom" "$C0" "$ESTOMPE" "${ou:+  — sert aux étapes $ou}"
+    printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$BLEU" "$C0" "$GRAS$CYAN" "$nom" "$C0" "$ESTOMPE" "${ou:+  — utilisé $(etapes_mot "$ou") $ou}"
     if (( n > 0 )); then
         printf '    %s│%s\n' "$BLEU" "$C0"
         for i in "${!v[@]}"; do
@@ -600,9 +600,11 @@ demander_valeur() {
             printf '\n'
         done
         printf '    %s│%s\n' "$BLEU" "$C0"
-        printf '    %s│%s  %s a%s  %ssaisir une autre valeur%s\n' "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
-        printf '    %s│%s  %s p%s  %spasser cette étape%s\n'       "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
-        printf '    %s│%s  %s q%s  %squitter le script%s\n'        "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+        if [[ "$SANS_QUESTION" != "true" ]]; then
+            printf '    %s│%s  %s a%s  %ssaisir une autre valeur%s\n' "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+            printf '    %s│%s  %s p%s  %spasser cette étape%s\n'       "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+            printf '    %s│%s  %s q%s  %squitter le script%s\n'        "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+        fi
         while true; do
             choix=""; lire "    $BLEU└─$C0 votre choix ${ESTOMPE}[1]${C0} ${GRAS}›${C0} " choix
             [[ -z "$choix" ]] && choix=1
@@ -731,7 +733,8 @@ scanner_placeholders() {
         local -n noms="$1"; local -n usages="$2"; local j t=-1
         for j in "${!noms[@]}"; do [[ "${noms[$j]}" == "$3" ]] && t=$j; done
         if (( t < 0 )); then noms+=("$3"); usages+=("$4")
-        elif [[ "${usages[$t]}" != *"$4"* ]]; then usages[$t]+=", $4"; fi
+        elif [[ "${usages[$t]}" != *"$4"* ]]; then
+            if [[ "$4" == et\ * ]]; then usages[$t]+=" $4"; else usages[$t]+=", $4"; fi; fi
     }
     for e in "${COMMANDES[@]}"; do
         i=$(( i + 1 )); cmd="${e#*|}"; cmd="${cmd#*|}"
@@ -740,8 +743,8 @@ scanner_placeholders() {
     done
     while (( k < ${#PH_LISTES[@]} )); do
         nom="${PH_LISTES[$k]}"; gen="${GENERATEUR[$nom]:-}"; k=$(( k + 1 ))
-        while [[ "$gen" =~ $RE_SIMPLE ]]; do e="${BASH_REMATCH[1]}"; gen="${gen//\[\[$e\]\]/}"; _noter PH_SIMPLES USAGE_SIMPLES "$e" "liste $nom"; done
-        while [[ "$gen" =~ $RE_LISTE ]];  do e="${BASH_REMATCH[1]}"; gen="${gen//\{\{$e\}\}/}"; _noter PH_LISTES USAGE_LISTES "$(liste_de "$e")" "liste $nom"; done
+        while [[ "$gen" =~ $RE_SIMPLE ]]; do e="${BASH_REMATCH[1]}"; gen="${gen//\[\[$e\]\]/}"; _noter PH_SIMPLES USAGE_SIMPLES "$e" "et par la liste $nom"; done
+        while [[ "$gen" =~ $RE_LISTE ]];  do e="${BASH_REMATCH[1]}"; gen="${gen//\{\{$e\}\}/}"; _noter PH_LISTES USAGE_LISTES "$(liste_de "$e")" "et par la liste $nom"; done
     done
     unset -f _noter
 }
@@ -881,7 +884,8 @@ plan_initial() {   # [oui] = avec les commandes
         else ligne_tache skip "$i" "${e%%|*}" "hors filtre"; fi
         [[ "${1:-}" == "oui" ]] && afficher_commande "${reste#*|}" "        "
     done
-    regle
+    [[ "${1:-}" == "oui" ]] && regle
+    return 0
 }
 
 recap() {
@@ -971,11 +975,11 @@ if [[ "$LISTER_VARS" == "true" ]]; then
     printf '\n'
     (( ${#PH_SIMPLES[@]} + ${#PH_LISTES[@]} > 0 )) || info "aucune valeur à fournir."
     for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do
-        printf '  %s[[%s]]%s  %s%s · étapes %s%s\n' "$CYAN" "${PH_SIMPLES[$i]}" "$C0" "$ESTOMPE" \
-               "$( [[ -n "${GENERATEUR[${PH_SIMPLES[$i]}]:-}" ]] && printf menu || printf saisie)" "${USAGE_SIMPLES[$i]}" "$C0"
+        printf '  %s[[%s]]%s  %s%s · %s %s%s\n' "$CYAN" "${PH_SIMPLES[$i]}" "$C0" "$ESTOMPE" \
+               "$( [[ -n "${GENERATEUR[${PH_SIMPLES[$i]}]:-}" ]] && printf menu || printf saisie)" "$(etapes_mot "${USAGE_SIMPLES[$i]}")" "${USAGE_SIMPLES[$i]}" "$C0"
     done
     for i in ${PH_LISTES[@]+"${!PH_LISTES[@]}"}; do
-        printf '  %s{{%s}}%s  %sétapes %s%s\n         %s\n' "$MAGENTA" "${PH_LISTES[$i]}" "$C0" "$ESTOMPE" "${USAGE_LISTES[$i]}" "$C0" "${GENERATEUR[${PH_LISTES[$i]}]:-(figée)}"
+        printf '  %s{{%s}}%s  %s%s %s%s\n         %s\n' "$MAGENTA" "${PH_LISTES[$i]}" "$C0" "$ESTOMPE" "$(etapes_mot "${USAGE_LISTES[$i]}")" "${USAGE_LISTES[$i]}" "$C0" "${GENERATEUR[${PH_LISTES[$i]}]:-(figée)}"
     done
     printf '\n  %s--var nom=valeur fournit une [[valeur]], --liste nom=a,b fige une {{liste}}%s\n\n' "$ESTOMPE" "$C0"
     exit 0
@@ -998,20 +1002,21 @@ done
 
 if [[ "$LISTER_ETAPES" == "true" ]]; then plan_initial oui; printf '\n'; exit 0; fi
 
-[[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"; exit 1; }
+[[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"
+    info "réglez IMAGE en section 1, ou : --image /chemin.dd · -c poste.conf · --demo pour essayer sans image"; exit 1; }
 [[ -r "$IMAGE" ]] || { erreur "image illisible : $IMAGE"; exit 1; }
 [[ -d /usr/share/zoneinfo && ! -e "/usr/share/zoneinfo/$TZ_MACTIME" ]] && attention "fuseau inconnu du système : $TZ_MACTIME"
 [[ "$INTERACTIF" == "non" && "$SANS_QUESTION" != "true" ]] && attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
 MANQUANTS=""; for b in "${REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
 [[ -n "$MANQUANTS" ]] && attention "binaires absents :$MANQUANTS"
 
-printf '\n %sDossiers%s\n' "$GRAS" "$C0"
+CREES=0
 for nom in ${!DIR_@}; do
     d="${!nom}"
     [[ -n "$d" ]] || { erreur "$nom est vide."; exit 1; }
-    if [[ -d "$d" ]]; then printf '  %sok    %s%s\n' "$ESTOMPE" "$d" "$C0"
-    elif [[ "$SIMULATION" == "true" ]]; then printf '  %s(sim) à créer : %s%s\n' "$BLEU" "$d" "$C0"
-    else mkdir -p "$d" || { erreur "création impossible : $d"; exit 1; }; printf '  %scréé  %s%s\n' "$VERT" "$d" "$C0"; fi
+    if [[ ! -d "$d" && "$SIMULATION" != "true" ]]; then
+        mkdir -p "$d" || { erreur "création impossible : $d"; exit 1; }; CREES=$(( CREES + 1 ))
+    fi
     [[ "$SIMULATION" == "true" || -w "$d" ]] || attention "dossier non inscriptible : $d"
 done
 [[ "$SIMULATION" == "true" ]] || { LOG="$DIR_LOGS/${PREFIX}_script.log"; : >> "$LOG" || { erreur "journal non inscriptible : $LOG"; exit 1; }; }
@@ -1030,7 +1035,7 @@ printf '\n'; regle "$GRAS"
 printf ' %sforensic.sh%s  %s%s · %s · %s%s\n' "$GRAS" "$C0" "$CYAN" "$PC" "$SALLE" "$OS" "$C0"
 regle "$GRAS"
 entete "image"    "$IMAGE"
-entete "sortie"   "$DEST"
+entete "sortie"   "$DEST$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
 entete "fuseau"   "$TZ_MACTIME"
 entete "analyste" "$OPERATEUR"
 entete "journal"  "$LOG"
@@ -1122,9 +1127,11 @@ for entree in "${COMMANDES[@]}"; do
                         RECAP+=("$NUM|ok|$G_OK/$N$( (( EXP_TRONQUE )) && printf ' tronq') $(duree "$G_DUREE")|$TITRE"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
                     elif (( G_KO > 0 )); then RECAP+=("$NUM|ko|$G_KO KO /$N|$TITRE"); NB_KO=$(( NB_KO + 1 ))
                     else RECAP+=("$NUM|int|$G_OK/$N ok|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); fi
-                    printf '\n  %s└─%s  %s%d réussie%s%s · %s%d échec%s%s · %s%d interrompue%s%s · %s%d passée%s%s · %s%s%s\n' \
-                           "$ESTOMPE" "$C0" "$VERT" "$G_OK" "$(pluriel "$G_OK")" "$C0" "$ROUGE" "$G_KO" "$(pluriel "$G_KO")" "$C0" \
-                           "$JAUNE" "$G_INT" "$(pluriel "$G_INT")" "$C0" "$ESTOMPE" "$G_SKIP" "$(pluriel "$G_SKIP")" "$C0" "$ESTOMPE" "$(duree "$G_DUREE")" "$C0"
+                    BILAN="$VERT$G_OK réussie$(pluriel "$G_OK")$C0"
+                    (( G_KO ))   && BILAN+=" · $ROUGE$G_KO échec$(pluriel "$G_KO")$C0"
+                    (( G_INT ))  && BILAN+=" · $JAUNE$G_INT interrompue$(pluriel "$G_INT")$C0"
+                    (( G_SKIP )) && BILAN+=" · $ESTOMPE$G_SKIP passée$(pluriel "$G_SKIP")$C0"
+                    printf '\n  %s└─%s  %s · %s%s%s\n' "$ESTOMPE" "$C0" "$BILAN" "$ESTOMPE" "$(duree "$G_DUREE")" "$C0"
                 elif (( G_INT )); then
                     RECAP+=("$NUM|int|$(duree "$G_DUREE")|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 ))
                     (( G_ARRET )) || demander_oui_non "  Passer à l'étape suivante ? ${ESTOMPE}[O/n]${C0} " || quitter 130

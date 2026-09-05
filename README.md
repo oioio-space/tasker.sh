@@ -327,6 +327,14 @@ d'analyse sans copier le script.
 
 ---
 
+## Sans image sous la main
+
+```
+$ ./forensic.sh
+✗  image absente : /images/pc07.dd
+   réglez IMAGE en section 1, ou : --image /chemin.dd · -c poste.conf · --demo pour essayer sans image
+```
+
 ## Limites connues
 
 * Les commandes passent par `eval` : `>`, `|` et `sudo tee` fonctionnent, mais
