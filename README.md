@@ -344,6 +344,35 @@ $ ./forensic.sh
    réglez IMAGE en section 1, ou : --set IMAGE=/chemin.dd · -c poste.conf · --demo pour essayer sans image
 ```
 
+## sudo, et les commandes qui prennent le terminal
+
+Une étape peut contenir `sudo`, ou être un programme plein écran comme
+`photorec`. Ce qui est prévu :
+
+* **Le mot de passe de `sudo`** est demandé sur le terminal, au moment où
+  la commande part — donc au milieu du déroulé, y compris depuis une
+  commande de `LISTES`. Cela fonctionne aussi avec l'option `log`, car
+  `sudo` écrit son invite sur `/dev/tty` et non sur la sortie standard.
+* **Avec `-y`**, personne n'est là pour répondre et le script attendrait
+  indéfiniment. Il vous prévient au démarrage s'il repère `sudo` dans une
+  étape : lancez `sudo -v` juste avant.
+* **Le terminal est rendu tel qu'il était** après chaque commande. Sans
+  cela, un `photorec` interrompu au mauvais moment laisse l'écran en mode
+  brut — plus d'écho des touches, plus de validation par Entrée — et le
+  reste de la session est inutilisable.
+* **Sous `sudo`**, le rapport note qui a réellement lancé le script
+  (`SUDO_USER`) et signale l'exécution en root :
+  `par        mathieu (root) sur poste-analyse`.
+  Les fichiers écrits appartiennent alors à root : pensez-y avant de
+  vouloir les rouvrir sans privilèges.
+
+Deux détails d'affichage à connaître :
+
+* Une commande dont la sortie ne finit pas par un saut de ligne colle la
+  ligne de résultat : `bonjour  ●  terminée en 0s`.
+* Si une commande de `LISTES` pose une question, son invite s'affiche à la
+  suite du message « … lecture de la liste ».
+
 ## Limites connues
 
 * Les commandes passent par `eval` : `>`, `|` et `sudo tee` fonctionnent, mais

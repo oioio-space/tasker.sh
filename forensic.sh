@@ -20,7 +20,7 @@ PC="PC07"                      # poste
 SALLE="B204"                   # salle
 OS="windows"                   # windows ou linux
 BASE="/cases"                  # racine où tout est écrit
-OPERATEUR="${USER:-inconnu}"   # noté dans le journal et le rapport
+OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # SUDO_USER : la vraie personne sous sudo
 TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ (un nom de zone, jamais UTC+1)
 TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -v)
 MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
@@ -385,6 +385,12 @@ Question posée      1 2 3 choisir · a autre valeur · p passer · q quitter
 Ctrl-C              pendant une commande : l'interrompt, le script continue
                     pendant une question : arrête le script proprement
 
+sudo                une étape peut en contenir : le mot de passe est demandé
+                    sur le terminal, au moment où la commande part. Avec -y,
+                    personne ne répondrait : faites « sudo -v » avant.
+                    Sous sudo, le rapport note qui a lancé (SUDO_USER) et
+                    les fichiers écrits appartiennent à root.
+
 Dans le script      1. variables    ce qui change d'une exécution à l'autre
                     2. commandes    "Titre|true|commande"   true = demander avant
                     3. listes       "nom|commande"          une valeur par ligne
@@ -501,6 +507,18 @@ else ENTREE="/dev/stdin"; INTERACTIF="non"; fi
 
 LOG="/dev/null"
 journal() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+
+# Une commande peut laisser le terminal inutilisable : photorec et
+# testdisk passent en plein écran, et un Ctrl-C au mauvais moment ne rend
+# pas la main proprement — les touches ne s'affichent plus, Entrée ne
+# valide plus. On mémorise les réglages et on les remet après chaque
+# commande, ainsi qu'en sortant.
+TTY_ETAT=""
+[[ -r /dev/tty ]] && TTY_ETAT="$(stty -g < /dev/tty 2>/dev/null)"
+restaurer_terminal() {
+    [[ -n "$TTY_ETAT" ]] && stty "$TTY_ETAT" < /dev/tty 2>/dev/null
+    return 0
+}
 
 # Ctrl-C pendant une commande : on interrompt la commande, INTERROMPU=1.
 # Ctrl-C pendant une question : arrêt propre. Ce second cas est
@@ -629,6 +647,7 @@ generer_liste() {
         journal "LISTE $nom : $gen"
         [[ -t 1 ]] && printf '  %s… lecture de la liste « %s »%s' "$ESTOMPE" "$nom" "$C0"
         sortie="$(eval "$gen" 2>> "$LOG")"; rc=$?
+        restaurer_terminal
         [[ -t 1 ]] && printf '\r%s\r' "$(repeter ' ' $(( ${#nom} + 30 )))"
         if (( rc != 0 && ${#sortie} == 0 )); then erreur "la liste « $nom » a échoué (code $rc) — voir $LOG"; return 1; fi
         CACHE_LISTE["$gen"]="${sortie:-$'\001'}"
@@ -860,6 +879,7 @@ executer_une() {
     else
         eval "$1"; rc=$?
     fi
+    restaurer_terminal
     DUREE_S=$(( SECONDS - debut )); journal "code $rc en $(duree "$DUREE_S")"
     return "$rc"
 }
@@ -986,7 +1006,8 @@ recap() {
     printf '  %sjournal  %s%s\n' "$ESTOMPE" "$LOG" "$C0"
     ecrire_rapport
 }
-trap recap EXIT
+au_revoir() { restaurer_terminal; recap; }
+trap au_revoir EXIT
 
 # Au-delà de dix itérations, seules celles qui ont mal tourné sont montrées.
 recap_enfants() {
@@ -1015,7 +1036,7 @@ ecrire_rapport() {
     {
         printf 'Rapport %s\n  sujet      %s\n' "$NOM_SCRIPT" "$SUJET"
         for l in ${DETAILS[@]+"${DETAILS[@]}"}; do printf '  %-10s %s\n' "${l%%=*}" "${l#*=}"; done
-        printf '  par         %s sur %s\n' "$OPERATEUR" "$(hostname 2>/dev/null || printf '?')"
+        printf '  par        %s%s sur %s\n' "$OPERATEUR" "$( (( EUID == 0 )) && printf ' (root)')" "$(hostname 2>/dev/null || printf '?')"
         printf '  debut      %s\n  fin        %s\n  duree      %s\n\n' "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$(duree "$SECONDS")"
         for l in "${RECAP[@]}"; do
             num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
@@ -1093,6 +1114,17 @@ verifier || exit 1
 MANQUANTS=""; for b in "${REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
 [[ -n "$MANQUANTS" ]] && attention "binaires absents :$MANQUANTS"
 
+# sudo demande son mot de passe sur le terminal, au moment où la commande
+# part — donc au milieu du déroulé. Avec -y, personne n'est là pour
+# répondre et le script attendrait indéfiniment.
+if (( EUID != 0 )) && printf '%s\n' "${COMMANDES[@]}" ${LISTES[@]+"${LISTES[@]}"} | grep -qw sudo; then
+    if [[ "$SANS_QUESTION" == "true" ]]; then
+        attention "des étapes utilisent sudo : lancez « sudo -v » avant, sinon -y restera bloqué sur la demande de mot de passe"
+    else
+        info "des étapes utilisent sudo : le mot de passe sera demandé au moment voulu"
+    fi
+fi
+
 CREES=0
 for nom in ${!DIR_@}; do
     d="${!nom}"
@@ -1119,7 +1151,7 @@ printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$CYAN" "$SUJET" "$C0"
 regle "$GRAS"
 for l in ${DETAILS[@]+"${DETAILS[@]}"}; do entete "${l%%=*}" "${l#*=}"; done
 entete "sortie"   "${DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
-entete "par"      "$OPERATEUR"
+entete "par"      "$OPERATEUR$( (( EUID == 0 )) && printf ' (root)')"
 entete "journal"  "$LOG"
 [[ -n "$CONF" ]]                 && entete "config"     "$CONF"
 [[ "$SIMULATION" == "true" ]]    && entete "simulation" "rien ne sera exécuté"
