@@ -31,9 +31,10 @@ mécanismes** — menus, étapes répétées, boucles imbriquées, journal — a
 `ls`, `wc` et `sha256sum`. Aucune image disque, aucun outil forensique,
 rien à installer, rien à casser.
 
-Les étapes de la démonstration sont dans le script, **section 2 bis**,
-commentées une à une : c'est le meilleur endroit pour comprendre avant de
-toucher à de vrais scellés.
+Les étapes de la démonstration sont dans `exemples/demo.conf`, commentées
+une à une. C'est aussi un exemple complet de fichier `-c` : il fixe les
+variables, définit ses propres commandes et listes, et ajoute deux
+fonctions.
 
 👉 **[TUTORIEL.md](TUTORIEL.md)** reprend tout depuis zéro, avec des
 exemples exécutables.
@@ -215,7 +216,7 @@ Pour figer une liste sans l'interroger : `--liste home=41-144-1,52-144-1`.
 
 ## Écrire une fonction plutôt qu'une ligne à rallonge
 
-Au-delà de deux ou trois instructions, écrivez une fonction en **section 3** et
+Au-delà de deux ou trois instructions, écrivez une fonction en **section 4** et
 appelez-la depuis le tableau. Plus d'échappements à gérer, et la ligne reste
 lisible à l'affichage.
 
@@ -309,6 +310,20 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 Toute variable nommée `DIR_quelquechose` est vue comme un dossier de travail :
 le script la vérifie et la crée au besoin. En ajouter un ne demande rien d'autre
 que de l'écrire dans `calculer_chemins`.
+
+## Organisation du script
+
+| section | contenu | on y touche |
+|---|---|---|
+| 1 | variables : image, poste, fuseau… | à chaque analyse |
+| 2 | `COMMANDES` : les étapes | souvent |
+| 3 | `LISTES` : d'où viennent `[[valeurs]]` et `{{listes}}` | avec les commandes |
+| 4 | fonctions : vos traitements | parfois |
+| 5 | mécanique | jamais |
+
+Un fichier `-c` peut redéfinir `definir_commandes` et ajouter des fonctions :
+`exemples/demo.conf` le fait, ce qui permet d'avoir un jeu d'étapes par type
+d'analyse sans copier le script.
 
 ---
 

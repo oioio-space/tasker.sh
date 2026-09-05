@@ -16,8 +16,8 @@ fabrique un bac à sable dans `/tmp/forensic-demo` et y rejoue tous ses
 mécanismes avec `ls`, `wc` et `sha256sum`. C'est le même moteur, ligne
 pour ligne, que celui qui tournera sur vos scellés.
 
-Le tableau de cette démonstration est dans le script, **section 2 bis**,
-commenté étape par étape. Lisez-le en parallèle de ce tutoriel.
+Le tableau de cette démonstration est dans `exemples/demo.conf`, commenté
+étape par étape. Lisez-le en parallèle de ce tutoriel.
 
 ---
 
@@ -255,7 +255,7 @@ Essayez-le tout de suite :
 ## 8. Écrire une fonction plutôt qu'une ligne à rallonge
 
 Au-delà de deux ou trois instructions, la ligne devient illisible et les
-échappements ingérables. Écrivez une fonction en **section 3** :
+échappements ingérables. Écrivez une fonction en **section 4** :
 
 ```bash
 lister_agents() {
