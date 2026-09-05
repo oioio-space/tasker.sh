@@ -20,6 +20,26 @@ reprendre la main à n'importe quel moment.
 
 ---
 
+## Commencer par la démonstration
+
+```bash
+./forensic.sh --demo
+```
+
+Un bac à sable est fabriqué dans `/tmp` et le script y rejoue **tous ses
+mécanismes** — menus, étapes répétées, boucles imbriquées, journal — avec
+`ls`, `wc` et `sha256sum`. Aucune image disque, aucun outil forensique,
+rien à installer, rien à casser.
+
+Les étapes de la démonstration sont dans le script, **section 2 bis**,
+commentées une à une : c'est le meilleur endroit pour comprendre avant de
+toucher à de vrais scellés.
+
+👉 **[TUTORIEL.md](TUTORIEL.md)** reprend tout depuis zéro, avec des
+exemples exécutables.
+
+---
+
 ## Démarrer
 
 ```bash
@@ -45,6 +65,44 @@ Priorité : section 1 &lt; fichier `-c` &lt; options de la ligne de commande.
 
 Prérequis : **bash 4.3+** et la Sleuth Kit / TestDisk. Un binaire manquant
 n'est qu'un avertissement : on peut vouloir ne lancer qu'une partie des étapes.
+
+---
+
+## Lire l'écran
+
+Le plan s'affiche au démarrage, le récapitulatif à la sortie. Les deux
+emploient les mêmes marques, et les itérations d'une étape répétée
+apparaissent en dessous d'elle, comme des sous-tâches.
+
+| | |
+|---|---|
+| `○` | à faire |
+| `◐` | en cours |
+| `●` | réussie |
+| `✗` | échec |
+| `⊘` | passée |
+| `⊗` | interrompue |
+| `◌` | simulée (`-n`) |
+
+```
+────────────────────────────────────────────────────────────
+ Récapitulatif   PC07 · B204 · windows
+────────────────────────────────────────────────────────────
+  ●  1  Table des partitions                            0s
+  ●  2  Fichiers alloués et supprimés                   4s
+  ⊘  3  Inodes non alloués                          passee
+  ●  4  Fusion des body files                           0s
+  ●  6  Inventaire par utilisateur                 3/3  4s
+      ├─ ● home=Users/alice                             1s
+      ├─ ● home=Users/bruno                             2s
+      └─ ✗ home=Users/celia                        code 1
+────────────────────────────────────────────────────────────
+  4 réussies · 1 en échec · 1 passée · total 9s
+```
+
+Les titres accentués sont alignés correctement même sous une locale
+`POSIX`, où `printf` compte les octets : le script mesure la largeur
+réelle des chaînes (`largeur_texte`).
 
 ---
 
@@ -186,13 +244,35 @@ Une fonction de **liste** écrit une valeur par ligne sur sa sortie standard
 | `p` | passer cette étape |
 | `e` | éditer la ligne pour cette exécution seulement |
 | `r` | ressaisir les `[[valeurs]]` de l'étape |
-| `s` | revoir la commande en clair, coupée aux espaces |
 | `q` | arrêter le script |
 | `u` | *(étape répétée)* exécuter une itération à la fois |
 | `l` | *(étape répétée)* lister toutes les itérations prévues |
 
-`Ctrl-C` interrompt la commande en cours sans tuer le script : il vous demande
-si vous continuez.
+### Ctrl-C, Ctrl-D
+
+| quand | ce qui se passe |
+|---|---|
+| pendant une **commande** | la commande est interrompue, **pas** le script ; il vous demande si vous continuez avec la suivante |
+| pendant une **question** | arrêt propre, avec le récapitulatif et le rapport |
+| `Ctrl-D` à une question | plus personne au clavier : arrêt, plutôt qu'une réponse inventée |
+
+Attention : Ctrl-C interrompt **la commande en cours**, pas la ligne
+entière. Sur une étape `a ; b`, `b` s'exécutera quand même — écrivez
+`a && b` si ce n'est pas ce que vous voulez. Et dans une boucle de vos
+propres fonctions, mettez `(( INTERROMPU )) && return 130` en première
+ligne.
+
+### À une question de valeur
+
+| touche | effet |
+|---|---|
+| `1` `2` `3` | choisir dans le menu |
+| `Entrée` | prendre la proposition 1 |
+| `a` | saisir une autre valeur |
+| `p` | passer cette étape |
+| `q` | quitter le script |
+
+Après un `a`, `p` et `q` redeviennent des valeurs ordinaires.
 
 ---
 
@@ -242,6 +322,10 @@ que de l'écrire dans `calculer_chemins`.
 * Ne mettez jamais une commande interactive dans un tube ni avec l'option `log` :
   `photorec` perdrait son terminal.
 * Pas de `|` dans le titre ni dans le champ validation.
+* Ctrl-C n'interrompt pas un `read` simplement piégé : bash exécute le
+  gestionnaire puis retourne attendre. Le script traite donc les deux
+  situations séparément (`EN_SAISIE`), sans quoi une question paraîtrait
+  figée après un `^C`.
 * Dans le code, tout texte affiché dans une **colonne de largeur imposée**
   (`%-10s`…) reste en ASCII : sous une locale `C`, `printf` compte les octets et
   un accent décalerait la colonne. Les libellés accentués sont toujours rejetés

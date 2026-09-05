@@ -264,6 +264,115 @@ LISTES=(
 
 
 # =====================================================================
+# 2 bis. MODE DÉMONSTRATION  (./forensic.sh --demo)
+#
+# Le même moteur, mais sur un bac à sable fabriqué dans /tmp et avec des
+# commandes que tout le monde a : ls, wc, sha256sum. Aucune image disque,
+# aucun outil forensique, rien à installer. C'est le meilleur endroit
+# pour comprendre [[valeur]], {{liste}} et l'emboîtement avant de
+# toucher à de vrais scellés.
+#
+# Lisez ce bloc en parallèle du vrai tableau, plus haut : il est
+# volontairement écrit de la même façon.
+# =====================================================================
+definir_commandes_demo() {
+
+COMMANDES=(
+
+# 1. Une étape toute simple. Pas de validation : elle s'exécute seule.
+"Ce qu'il y a dans le bac à sable|false|ls -R '$DEMO_RACINE'"
+
+# 2. [[service]] : une valeur demandée UNE fois puis réutilisée.
+#    Comme la liste « service » existe plus bas, la question devient un
+#    menu numéroté. Essayez aussi « a » (autre valeur) et « p » (passer).
+"Contenu d'un service|true|ls -l '$DEMO_RACINE/[[service]]'"
+
+# 3. La même [[valeur]] : elle n'est plus redemandée.
+"Taille de ce service|true|du -sh '$DEMO_RACINE/[[service]]'"
+
+# 4. {{agent}} : l'étape est REJOUÉE une fois par agent du service
+#    choisi. Regardez le nombre d'itérations annoncé avant de valider,
+#    et essayez « u » pour les dérouler une par une, « l » pour les voir.
+#    {{agent}} vaut le chemin, {{agent_libelle}} le nom seul.
+"Nombre de fichiers par agent|true|echo -n '{{agent_libelle}} : '; ls -1 '{{agent}}' | wc -l"
+
+# 5. Deux listes emboîtées, mais une seule est écrite : la liste
+#    « note » a besoin de {{agent}}, donc la boucle sur les agents se
+#    déclenche toute seule. C'est la « commande récursive ».
+#    {{note_libelle}} donne le nom lisible de la même valeur.
+"Empreinte de chaque note de chaque agent|true,log|sha256sum '{{note}}'"
+
+# 6. Une étape qui échoue, pour voir ce que fait le script.
+#    L'option « continu » lui dit de ne pas poser de question.
+"Une étape qui échoue exprès|true,continu|ls '$DEMO_RACINE/ce-fichier-n-existe-pas'"
+
+# 7. Une commande sur plusieurs instructions : au-delà de deux ou trois,
+#    écrivez plutôt une fonction en section 3.
+"Compte-rendu|false,log|printf 'services : %s\n' \$(ls '$DEMO_RACINE' | wc -l); printf 'notes    : %s\n' \$(find '$DEMO_RACINE' -name '*.txt' | wc -l)"
+
+)
+
+LISTES=(
+
+# Une liste = un nom, et une commande qui écrit une valeur par ligne.
+"service|ls -1 '$DEMO_RACINE'"
+
+# Celle-ci dépend de [[service]] : elle sera régénérée si vous
+# ressaisissez la valeur avec « r ».
+"agent|lister_agents '$DEMO_RACINE/[[service]]'"
+
+# Celle-ci dépend de {{agent}} : c'est ce qui crée l'emboîtement.
+# Chaque ligne est « chemin<TAB>libellé » : la commande reçoit le
+# chemin, vous lisez le libellé.
+"note|lister_notes '{{agent}}'"
+
+)
+}
+
+# Fabrique le bac à sable. Idempotent : relancer --demo ne casse rien.
+preparer_demo() {
+    local a n
+    mkdir -p "$DEMO_RACINE" || return 1
+    for a in comptabilite/alice comptabilite/bruno "logistique/celia dupont" logistique/omar; do
+        mkdir -p "$DEMO_RACINE/$a"
+        for n in memo rapport; do
+            printf 'note %s de %s\nligne 2\n' "$n" "${a##*/}" > "$DEMO_RACINE/$a/$n.txt"
+        done
+    done
+    # Un nom avec une apostrophe : c'est exactement ce qui casse les
+    # scripts écrits trop vite, et ce que le script doit encaisser.
+    mkdir -p "$DEMO_RACINE/logistique/o'brien"
+    printf 'note avec une apostrophe dans le chemin\n' > "$DEMO_RACINE/logistique/o'brien/memo.txt"
+    return 0
+}
+
+# lister_agents <dossier> : les sous-dossiers, « chemin<TAB>nom ».
+# Écrire une fonction plutôt qu'une ligne de find + sed illisible : c'est
+# le conseil de la section 3, appliqué ici.
+lister_agents() {
+    local d="$1" a
+    for a in "$d"/*/; do
+        (( INTERROMPU )) && return 130
+        [[ -d "$a" ]] || continue
+        a="${a%/}"
+        printf '%s\t%s\n' "$a" "${a##*/}"
+    done
+    return 0
+}
+
+# lister_notes <dossier> : les .txt d'un agent, « chemin<TAB>libellé ».
+lister_notes() {
+    local d="$1" f
+    for f in "$d"/*.txt; do
+        (( INTERROMPU )) && return 130
+        [[ -e "$f" ]] || continue
+        printf '%s\t%s\n' "$f" "${f##*/}"
+    done
+    return 0
+}
+
+
+# =====================================================================
 # 3. FONCTIONS MÉTIER — les traitements longs, appelés depuis la section 2
 #
 # Une fonction définie ici s'appelle comme une commande dans COMMANDES
@@ -490,6 +599,36 @@ init_affichage() {
     (( LARGEUR > 100 )) && LARGEUR=100
 }
 
+# Sous une locale POSIX, printf et ${#var} comptent les OCTETS : « é »
+# en vaut deux et toute colonne alignée se décale. On mesure donc la
+# largeur réelle, ce qui permet d'aligner des titres accentués — et donc
+# d'avoir une arborescence propre plutôt que des colonnes en escalier.
+_SONDE="é"
+UTF8_OK=0
+(( ${#_SONDE} == 1 )) && UTF8_OK=1
+unset _SONDE
+
+largeur_texte() {
+    if (( UTF8_OK )); then
+        printf '%s' "${#1}"
+    else
+        # On retire les octets de continuation UTF-8 (0x80–0xBF) : ce qui
+        # reste, c'est un octet par caractère.
+        local t="${1//[$'\x80'-$'\xbf']/}"
+        printf '%s' "${#t}"
+    fi
+}
+
+# pad_droite <texte> <largeur> : le texte, complété par des espaces.
+# Un texte plus long que la colonne n'est pas coupé — mieux vaut une
+# ligne qui dépasse qu'un nom de fichier tronqué au mauvais endroit.
+pad_droite() {
+    local t="$1" l="$2" n
+    n=$(( l - $(largeur_texte "$t") ))
+    (( n < 0 )) && n=0
+    printf '%s%s' "$t" "$(repeter ' ' "$n")"
+}
+
 # repeter <motif> <n>
 repeter() {
     local i s=""
@@ -545,6 +684,13 @@ aide() {
  forensic.sh — enchaîne des commandes forensiques, validées une à une
 ---------------------------------------------------------------------
 
+ POUR COMPRENDRE, SANS RISQUE
+     ./forensic.sh --demo              bac à sable dans /tmp : aucune image
+                                       disque, aucun outil forensique, les
+                                       mêmes mécanismes. Les étapes de la
+                                       démonstration sont en section 2 bis
+                                       du script, commentées une à une.
+
  UTILISATION
      ./forensic.sh                     suit le champ validation des étapes
      ./forensic.sh -v                  demande confirmation à CHAQUE étape
@@ -575,16 +721,39 @@ aide() {
      Les options --image --pc --salle --os --base --tz --operateur
      l'emportent sur le fichier, qui l'emporte sur la section 1.
 
+ LECTURE DE L'ÉCRAN
+     Le plan est affiché au démarrage, le récapitulatif à la sortie ;
+     les deux emploient les mêmes marques, et les itérations d'une étape
+     répétée apparaissent en dessous d'elle, comme des sous-tâches :
+
+         ○  à faire        ◐  en cours       ●  réussie
+         ✗  échec          ⊘  passée         ⊗  interrompue
+         ◌  simulée (-n)
+
+         ●  6  Inventaire par utilisateur              3/3  4s
+             ├─ ●  home=Users/alice                          1s
+             ├─ ●  home=Users/bruno                          2s
+             └─ ✗  home=Users/celia                     code 1
+
  À CHAQUE ÉTAPE
      Entrée  exécuter        p  passer cette étape
      e       éditer la ligne r  ressaisir les [[valeurs]] de l'étape
-     s       voir la commande en clair sur plusieurs lignes
      q       arrêter le script
      Sur une étape répétée s'ajoutent :
      u       exécuter une itération à la fois (validation de chacune)
-     l       lister les itérations prévues
-     Ctrl-C pendant une commande l'interrompt sans tuer le script :
-     il vous demande si vous continuez avec l'étape suivante.
+     l       lister les itérations prévues avec leur commande
+     Quand le script demande une [[valeur]] :
+     1 2 3   choisir dans la liste proposée
+     a       saisir une autre valeur
+     p       passer cette étape               q  quitter le script
+     (après « a », p et q redeviennent des valeurs ordinaires)
+
+     Ctrl-C  pendant une COMMANDE : interrompt cette commande, et le
+             script vous demande si vous continuez avec la suivante ;
+             pendant une QUESTION : arrête le script proprement, avec
+             le récapitulatif et le rapport.
+     Ctrl-D  à une question : plus personne au clavier, le script
+             s'arrête plutôt que d'inventer une réponse.
 
  AJOUTER UNE ÉTAPE
      Une ligne dans le tableau COMMANDES, au format :
@@ -644,6 +813,7 @@ FIN_AIDE
 PRESETS=()          # --var  nom=valeur
 PRESETS_LISTE=()    # --liste nom=v1,v2
 CONF=""
+DEMO="false"
 LISTER_VARS="false"
 LISTER_ETAPES="false"
 SIMULATION="false"
@@ -664,6 +834,7 @@ while (( $# > 0 )); do
         -n|--simulation|--dry-run)
                           SIMULATION="true";      shift ;;
         --etapes|--plan)  LISTER_ETAPES="true";   shift ;;
+        --demo)           DEMO="true";            shift ;;
         --vars)           LISTER_VARS="true";     shift ;;
         --reprendre)      REPRENDRE="true";       shift ;;
 
@@ -731,8 +902,22 @@ if (( ${#OPT[@]} > 0 )); then
     done
 fi
 
-calculer_chemins
-definir_commandes
+# Mode démonstration : on remplace le poste analysé par un bac à sable
+# fabriqué dans /tmp, et le tableau de commandes par celui de la
+# section 2 bis. Tout le reste du script est identique — c'est bien le
+# but : ce que vous apprenez ici vaut pour une vraie analyse.
+if [[ "$DEMO" == "true" ]]; then
+    DEMO_RACINE="${TMPDIR:-/tmp}/forensic-demo/scelles"
+    PC="DEMO"; SALLE="bac-a-sable"; OS="demo"
+    BASE="${TMPDIR:-/tmp}/forensic-demo/sortie"
+    REQUIS=(ls find wc du sha256sum)
+    calculer_chemins
+    preparer_demo || { printf 'ERREUR : bac à sable impossible à créer.\n' >&2; exit 1; }
+    definir_commandes_demo
+else
+    calculer_chemins
+    definir_commandes
+fi
 
 
 # --- Saisies ---------------------------------------------------------
@@ -746,60 +931,164 @@ else
     INTERACTIF="non"
 fi
 
-# Sortie propre commune aux saisies interrompues (Ctrl-C, Ctrl-D).
-# Inventer une valeur ici serait dangereux : on préfère s'arrêter.
-abandon() {
+# fin_entree : plus personne au clavier (Ctrl-D, ou une entrée redirigée
+# qui s'épuise). Toute question suivante serait sans réponse : inventer
+# une valeur ici enverrait une commande amputée sur les scellés.
+fin_entree() {
     printf '\n'
-    erreur "saisie interrompue — arrêt."
+    erreur "fin de l'entrée clavier (Ctrl-D) — arrêt."
+    journal "ARRÊT : fin de l'entrée clavier"
     exit 130
 }
 
 # lire <invite> <nom_variable>
-# Renvoie 1 si la saisie a échoué : à l'appelant de décider.
+# Renvoie toujours 0 : une réponse vide vaut « la proposition par défaut ».
+# Les deux façons de ne pas répondre sont traitées ailleurs, et pas de la
+# même manière : Ctrl-D coupe l'entrée (fin_entree), Ctrl-C arrête le
+# script proprement (voir gerer_int, plus bas).
 lire() {
-    local invite="$1" cible="$2"
+    local invite="$1" cible="$2" rc
+
     if [[ "$SANS_QUESTION" == "true" ]]; then
         printf -v "$cible" '%s' ""       # comme si on avait tapé Entrée
         printf '%s%s[-y]%s\n' "$invite" "$ESTOMPE" "$C0"
         return 0
     fi
-    read -r -p "$invite" "$cible" < "$ENTREE"
+
+    EN_SAISIE=1
+    # shellcheck disable=SC2229   # $cible est un NOM de variable, pas sa valeur
+    read -r -p "$invite" "$cible" < "$ENTREE"; rc=$?
+    EN_SAISIE=0
+    (( rc != 0 )) && fin_entree
+    return 0
 }
 
 # lire_edit <valeur_initiale> <nom_variable> : ligne pré-remplie, modifiable
 lire_edit() {
+    EN_SAISIE=1
     read -r -e -i "$1" -p "  ${CYAN}\$${C0} " "$2" < "$ENTREE" || true
+    EN_SAISIE=0
 }
 
 # demander_oui_non <invite> : vrai si l'utilisateur accepte (défaut oui)
 demander_oui_non() {
     local r=""
-    lire "$1" r || abandon
+    lire "$1" r
     case "${r,,}" in n|non|q) return 1 ;; *) return 0 ;; esac
 }
-
 
 # --- Récapitulatif ---------------------------------------------------
 # Une ligne par étape traitée : "code|détail|titre". Rempli au fil de
 # l'eau, affiché à la sortie du script — y compris sur un arrêt anticipé
 # (q, Ctrl-C), d'où le trap EXIT.
-RECAP=()
+RECAP=()                    # "etat|detail|titre" — une entrée par étape
+declare -A ENFANTS=()       # numéro d'étape -> itérations, séparées par \x01
 NB_OK=0; NB_KO=0; NB_PASSEES=0
 
-symbole() {
+# L'état d'une étape se lit à la forme du cercle, pas à sa couleur :
+#   ○ à faire   ◐ en cours   ● réussie
+#   ✗ échec     ⊘ passée     ⊗ interrompue     ◌ simulée
+# Un seul caractère de large chacun, et aucun emoji : les emoji occupent
+# deux cellules — parfois une et demie selon le terminal — et toute
+# colonne alignée s'effondre.
+glyphe() {
     case "$1" in
-        ok)    printf '%s✅%s' "$VERT"   "$C0" ;;
-        ko)    printf '%s❌%s' "$ROUGE"  "$C0" ;;
-        skip)  printf '%s⏭️ %s' "$ESTOMPE" "$C0" ;;
-        int)   printf '%s⚠️ %s' "$JAUNE"  "$C0" ;;
-        sim)   printf '%s👁️ %s' "$BLEU"   "$C0" ;;
-        *)     printf '  ' ;;
+        todo)  printf '%s○%s' "$ESTOMPE" "$C0" ;;
+        cours) printf '%s◐%s' "$CYAN"    "$C0" ;;
+        ok)    printf '%s●%s' "$VERT"    "$C0" ;;
+        ko)    printf '%s✗%s' "$ROUGE"   "$C0" ;;
+        skip)  printf '%s⊘%s' "$ESTOMPE" "$C0" ;;
+        int)   printf '%s⊗%s' "$JAUNE"   "$C0" ;;
+        sim)   printf '%s◌%s' "$BLEU"    "$C0" ;;
+        *)     printf ' ' ;;
     esac
 }
 
+# Le même, en texte, pour le rapport écrit sur disque.
+glyphe_texte() {
+    case "$1" in
+        todo) printf 'a faire' ;;  cours) printf 'en cours' ;;
+        ok)   printf 'ok'      ;;  ko)    printf 'ECHEC'    ;;
+        skip) printf 'passee'  ;;  int)   printf 'interrompue' ;;
+        sim)  printf 'simulee' ;;  *)     printf '?' ;;
+    esac
+}
+
+# LARGEUR_TITRE : la colonne où tiennent les titres. Le détail (durée,
+# code d'erreur) est ensuite aligné à droite de cette colonne.
+colonne_titre() {
+    local l=$(( LARGEUR - 22 ))
+    (( l < 24 )) && l=24
+    (( l > 52 )) && l=52
+    printf '%s' "$l"
+}
+
+# ligne_tache <état> <numéro|""> <titre> <détail>
+#     ●  4  Inventaire par utilisateur          3/3  2s
+ligne_tache() {
+    local etat="$1" num="$2" titre="$3" detail="$4"
+    # Sans détail, pas de bourrage : une ligne ne doit pas traîner
+    # d'espaces jusqu'au bord de l'écran.
+    [[ -n "$detail" ]] || { printf '  %s %s%2s%s  %s\n' \
+        "$(glyphe "$etat")" "$ESTOMPE" "$num" "$C0" "$titre"; return 0; }
+    if [[ -n "$num" ]]; then
+        printf '  %s %s%2s%s  %s  %s%s%s\n' \
+               "$(glyphe "$etat")" "$ESTOMPE" "$num" "$C0" \
+               "$(pad_droite "$titre" "$(colonne_titre)")" \
+               "$ESTOMPE" "$detail" "$C0"
+    else
+        printf '  %s      %s  %s%s%s\n' \
+               "$(glyphe "$etat")" \
+               "$(pad_droite "$titre" "$(colonne_titre)")" \
+               "$ESTOMPE" "$detail" "$C0"
+    fi
+}
+
+# --- Plan de départ ---------------------------------------------------
+# Toutes les étapes, en attente. On sait d'un coup d'œil ce qui va se
+# passer, dans quel ordre, et lesquelles vont poser une question.
+plan_initial() {
+    local avec_cmd="${1:-non}"
+    local i=0 e reste marques
+    printf '\n'
+    regle "$GRAS"
+    printf ' %sPlan%s   %s%d étape%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$TOTAL" "$(pluriel "$TOTAL")" "$C0"
+    regle "$GRAS"
+    for e in "${COMMANDES[@]}"; do
+        i=$(( i + 1 ))
+        reste="${e#*|}"
+        analyser_validation "${reste%%|*}"
+
+        # On ne signale que ce qui sort de l'ordinaire : « auto » (l'étape
+        # part sans rien demander) plutôt que « confirmation », qui est le
+        # cas courant et n'apprendrait rien.
+        marques=""
+        _m() { marques+="${marques:+ · }$1"; }
+        [[ "${reste#*|}" == *"{{"* ]] && _m "↻ répétée"
+        [[ "$F_VALIDER" == "false" && "$TOUT_VALIDER" != "true" ]] && _m "auto"
+        (( F_LOG ))     && _m "log"
+        (( F_STOP ))    && _m "stop"
+        (( F_CONTINU )) && _m "continu"
+        unset -f _m
+
+        if etape_retenue "$i"; then
+            ligne_tache todo "$i" "${e%%|*}" "$marques"
+        else
+            ligne_tache skip "$i" "${e%%|*}" "hors filtre"
+        fi
+        [[ "$avec_cmd" == "oui" ]] && afficher_commande "${reste#*|}" "        "
+    done
+    regle
+    return 0
+}
+
+# --- Récapitulatif ---------------------------------------------------
+# Rempli au fil de l'eau, affiché à la sortie du script — y compris sur
+# un arrêt anticipé (q, Ctrl-C), d'où le trap EXIT. Les étapes répétées
+# montrent leurs itérations en dessous, comme les sous-tâches d'une tâche.
 recap() {
     (( ${#RECAP[@]} == 0 )) && return
-    local l c d t
+    local l e d t num=0
 
     printf '\n'
     regle "$GRAS"
@@ -808,10 +1097,11 @@ recap() {
     regle "$GRAS"
 
     for l in "${RECAP[@]}"; do
-        c="${l%%|*}"; d="${l#*|}"; t="${d#*|}"; d="${d%%|*}"
-        # Le détail est en ASCII, donc son alignement ne dépend pas de la
-        # locale ; le titre, accentué, est rejeté en fin de ligne.
-        printf '  %s %s%-10s%s %s\n' "$(symbole "$c")" "$ESTOMPE" "$d" "$C0" "$t"
+        num="${l%%|*}";  l="${l#*|}"
+        e="${l%%|*}";    l="${l#*|}"
+        d="${l%%|*}";    t="${l#*|}"
+        ligne_tache "$e" "$num" "$t" "$d"
+        recap_enfants "$num"
     done
 
     regle
@@ -819,33 +1109,75 @@ recap() {
            "$VERT"    "$NB_OK"      "$(pluriel "$NB_OK")"      "$C0" \
            "$ROUGE"   "$NB_KO"      "$C0" \
            "$ESTOMPE" "$NB_PASSEES" "$(pluriel "$NB_PASSEES")" "$C0" \
-           "$(duree $SECONDS)"
+           "$(duree "$SECONDS")"
     printf '  %sjournal  %s%s\n' "$ESTOMPE" "$LOG" "$C0"
 
     ecrire_rapport
 }
 
+# recap_enfants <numéro d'étape> : les itérations, en arborescence.
+# Au-delà de dix, on ne montre que ce qui a mal tourné : une étape jouée
+# trois cents fois n'a pas sa place en entier dans un récapitulatif.
+recap_enfants() {
+    local cle="$1" brut=""
+    brut="${ENFANTS[$cle]:-}"
+    [[ -n "$brut" ]] || return 0
+
+    local -a lignes=()
+    mapfile -t lignes < <(printf '%s' "${brut//$'\x01'/$'\n'}")
+
+    local n=${#lignes[@]} i etat det etiq branche montre=0 caches=0
+    (( n <= 10 )) && montre=1
+
+    for i in "${!lignes[@]}"; do
+        [[ -n "${lignes[$i]}" ]] || continue
+        etat="${lignes[$i]%%|*}"; det="${lignes[$i]#*|}"
+        etiq="${det#*|}"; det="${det%%|*}"
+        if (( ! montre )) && [[ "$etat" == "ok" ]]; then
+            caches=$(( caches + 1 )); continue
+        fi
+        if (( i == n - 1 )); then branche="└─"; else branche="├─"; fi
+        printf '      %s%s%s %s %s  %s%s%s\n' \
+               "$ESTOMPE" "$branche" "$C0" "$(glyphe "$etat")" \
+               "$(pad_droite "$etiq" $(( $(colonne_titre) - 3 )))" \
+               "$ESTOMPE" "$det" "$C0"
+    done
+    (( caches > 0 )) && printf '      %s   … et %d itération%s réussie%s%s\n' \
+                               "$ESTOMPE" "$caches" "$(pluriel "$caches")" "$(pluriel "$caches")" "$C0"
+    return 0
+}
+
 # Le rapport est la trace qu'on garde : il doit survivre à la fermeture
-# du terminal, et rester lisible sans couleur.
+# du terminal, et rester lisible sans couleur ni caractère exotique.
 ecrire_rapport() {
     [[ -n "${DIR_LOGS:-}" && -d "${DIR_LOGS:-}" ]] || return 0
-    local f="$DIR_LOGS/${PREFIX}_rapport.txt" l c d t
+    local f="$DIR_LOGS/${PREFIX}_rapport.txt" l e d t num brut ligne
 
     {
         printf 'Rapport forensic.sh\n'
         printf '  poste      %s / %s / %s\n' "$PC" "$SALLE" "$OS"
         printf '  image      %s\n' "$IMAGE"
-        printf '  opérateur  %s\n' "$OPERATEUR"
+        printf '  analyste   %s\n' "$OPERATEUR"
         printf '  machine    %s\n' "$(hostname 2>/dev/null || printf inconnue)"
-        printf '  début      %s\n' "$DEBUT_HORODATE"
+        printf '  debut      %s\n' "$DEBUT_HORODATE"
         printf '  fin        %s\n' "$(date '+%F %T %z')"
-        printf '  durée      %s\n' "$(duree $SECONDS)"
+        printf '  duree      %s\n' "$(duree "$SECONDS")"
         printf '\n'
         for l in "${RECAP[@]}"; do
-            c="${l%%|*}"; d="${l#*|}"; t="${d#*|}"; d="${d%%|*}"
-            printf '  %-5s %-10s %s\n' "$c" "$d" "$t"
+            num="${l%%|*}";  l="${l#*|}"
+            e="${l%%|*}";    l="${l#*|}"
+            d="${l%%|*}";    t="${l#*|}"
+            printf '  %2s  %-12s %-10s %s\n' "$num" "$(glyphe_texte "$e")" "$d" "$t"
+            brut="${ENFANTS[$num]:-}"
+            if [[ -n "$brut" ]]; then
+                while IFS= read -r ligne; do
+                    [[ -n "$ligne" ]] || continue
+                    e="${ligne%%|*}"; d="${ligne#*|}"; t="${d#*|}"; d="${d%%|*}"
+                    printf '        %-12s %-10s %s\n' "$(glyphe_texte "$e")" "$d" "$t"
+                done <<< "${brut//$'\x01'/$'\n'}"
+            fi
         done
-        printf '\n  %d réussies, %d en échec, %d passées\n' "$NB_OK" "$NB_KO" "$NB_PASSEES"
+        printf '\n  %d reussies, %d en echec, %d passees\n' "$NB_OK" "$NB_KO" "$NB_PASSEES"
     } > "$f" 2>/dev/null && printf '  %srapport  %s%s\n' "$ESTOMPE" "$f" "$C0"
 }
 
@@ -853,11 +1185,34 @@ LOG="/dev/null"
 DEBUT_HORODATE="$(date '+%F %T %z')"
 trap recap EXIT
 
-# Ctrl-C ne doit pas tuer le script. Bash met le gestionnaire en attente
-# tant qu'une commande tourne au premier plan : le signal atteint d'abord
-# la commande, puis on reprend la main ici.
+# Ctrl-C : deux situations, deux réponses.
+#
+#   pendant une commande  -> on interrompt cette commande-là, pas le
+#     script. Bash met le gestionnaire en attente tant qu'une commande
+#     tourne au premier plan : le signal atteint d'abord la commande,
+#     puis on reprend la main ici et INTERROMPU vaut 1.
+#
+#   pendant une question  -> on arrête le script, proprement, avec le
+#     récapitulatif. Sans ce cas particulier, la surprise est totale :
+#     bash n'interrompt PAS un « read » sur un signal simplement piégé,
+#     il exécute le gestionnaire et retourne attendre. L'écran affiche
+#     « ^C » et plus rien ne se passe — le script paraît figé alors qu'il
+#     attend toujours la réponse.
+#
+# EN_SAISIE dit laquelle des deux situations est en cours.
 INTERROMPU=0
-trap 'INTERROMPU=1' INT
+EN_SAISIE=0
+gerer_int() {
+    if (( EN_SAISIE )); then
+        EN_SAISIE=0
+        printf '\n'
+        attention "interruption au clavier — arrêt."
+        journal "ARRÊT : Ctrl-C pendant une question"
+        exit 130
+    fi
+    INTERROMPU=1
+}
+trap gerer_int INT
 
 # journal <texte...> : une ligne horodatée dans le journal
 journal() {
@@ -886,7 +1241,6 @@ declare -A GENERATEUR=()      # nom de liste -> commande qui la produit
 declare -A CACHE_LISTE=()     # commande déjà exécutée -> ses lignes
 declare -A LISTE_FIGEE=()     # nom -> valeurs imposées par --liste
 declare -A BINDINGS=()        # liaisons de la boucle en cours (échappées)
-declare -A AFFICHE=()         # les mêmes, brutes, pour l'affichage
 
 # echapper_apostrophes <valeur>
 # Les valeurs de liste viennent d'un programme, pas de vous : un nom de
@@ -941,10 +1295,10 @@ liste_de() {
 VALEURS=(); LIBELLES=()
 generer_liste() {
     local nom="$1" gen brut sortie rc ligne val lib
-    VALEURS=(); LIBELLES=()
 
     # 1. Valeurs imposées par --liste : rien à exécuter.
     if [[ -n "${LISTE_FIGEE[$nom]:-}" ]]; then
+        VALEURS=(); LIBELLES=()
         while IFS= read -r ligne; do
             [[ -n "$ligne" ]] && { VALEURS+=("$ligne"); LIBELLES+=(""); }
         done <<< "${LISTE_FIGEE[$nom]}"
@@ -967,8 +1321,19 @@ generer_liste() {
         [[ "$sortie" == $'\001vide' ]] && sortie=""
     else
         journal "LISTE $nom : $gen"
-        sortie="$(eval "$gen" 2>> "$LOG")"
-        rc=$?
+        # Le message d'attente est affiché ici et pas dans la boucle
+        # principale : la résolution ci-dessus peut ouvrir un menu, et
+        # le message se serait intercalé au milieu. Il ne s'affiche que
+        # sur un vrai terminal, seul endroit où le \r efface la ligne.
+        if [[ -t 1 ]]; then
+            printf '  %s… lecture de la liste « %s »%s' "$ESTOMPE" "$nom" "$C0"
+            sortie="$(eval "$gen" 2>> "$LOG")"
+            rc=$?
+            printf '\r%s\r' "$(repeter ' ' $(( ${#nom} + 30 )))"
+        else
+            sortie="$(eval "$gen" 2>> "$LOG")"
+            rc=$?
+        fi
         if (( rc != 0 && ${#sortie} == 0 )); then
             erreur "la liste « $nom » a échoué (code $rc) — voir $LOG"
             return 1
@@ -977,12 +1342,26 @@ generer_liste() {
     fi
 
     # 4. Une ligne = une valeur, éventuellement "valeur<TAB>libellé".
+    #
+    #    La remise à zéro est ICI, et surtout pas au début de la
+    #    fonction : l'étape 2 ci-dessus peut relancer generer_liste pour
+    #    une AUTRE liste (celle-ci a besoin d'un [[nom]] qui vient
+    #    lui-même d'un menu). Vidé trop tôt, VALEURS se retrouverait à
+    #    contenir les valeurs des deux listes bout à bout.
+    VALEURS=(); LIBELLES=()
     while IFS= read -r ligne; do
         [[ -z "$ligne" ]] && continue
         if [[ "$ligne" == *$'\t'* ]]; then
             val="${ligne%%$'\t'*}"; lib="${ligne#*$'\t'}"
         else
             val="$ligne"; lib=""
+        fi
+        # Une valeur qui contient [[ ou {{ serait redétectée comme un
+        # placeholder après substitution, et la boucle repartirait sur
+        # elle-même. Cas rarissime, mais silencieux : on le dit.
+        if [[ "$val" == *'[['* || "$val" == *'{{'* ]]; then
+            attention "valeur ignorée dans « $nom » (elle contient [[ ou {{) : $val"
+            continue
         fi
         VALEURS+=("$val"); LIBELLES+=("$lib")
     done <<< "$sortie"
@@ -1003,14 +1382,26 @@ valeur_valide() {
     return 0
 }
 
+# ou_sert <nom> : « étapes 2, 3, 6 », pour que l'on sache ce qu'on remplit
+ou_sert() {
+    local i
+    for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do
+        [[ "${PH_SIMPLES[$i]}" == "$1" ]] && { printf '%s' "${USAGE_SIMPLES[$i]}"; return 0; }
+    done
+    return 0
+}
+
 # demander_valeur <nom> -> VALEUR
+#   0  une valeur a été obtenue
+#   1  l'utilisateur demande à passer l'étape
+#
 # Menu numéroté si une liste du même nom existe, saisie libre sinon.
 # Un menu vaut mieux qu'une question ouverte : l'offset d'une partition
 # ne se devine pas, et le recopier à la main est la première source
 # d'erreur de toute la chaîne.
 VALEUR=""
 demander_valeur() {
-    local nom="$1" i n choix aff
+    local nom="$1" i n choix ou libre=0
     local -a v=() l=()
 
     if [[ -n "${GENERATEUR[$nom]:-}" || -n "${LISTE_FIGEE[$nom]:-}" ]]; then
@@ -1018,32 +1409,49 @@ demander_valeur() {
             v=("${VALEURS[@]}"); l=("${LIBELLES[@]}")
         fi
     fi
+    INTERROMPU=0        # une liste interrompue ne doit pas polluer la suite
 
+    ou="$(ou_sert "$nom")"
     n=${#v[@]}
+
     if (( n > 0 )); then
-        printf '    %s┌%s %s[[%s]]%s — %d proposition%s\n' \
-               "$ESTOMPE" "$C0" "$CYAN" "$nom" "$C0" "$n" "$(pluriel "$n")"
+        printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$BLEU" "$C0" "$GRAS$CYAN" "$nom" "$C0" \
+               "$ESTOMPE" "${ou:+  — sert aux étapes $ou}"
+        printf '    %s│%s\n' "$BLEU" "$C0"
         for i in "${!v[@]}"; do
-            aff="${l[$i]}"
-            printf '    %s│%s %s%2d%s  %s%-14s%s %s%s%s\n' \
-                   "$ESTOMPE" "$C0" "$GRAS" $(( i + 1 )) "$C0" \
-                   "$VERT" "${v[$i]}" "$C0" "$ESTOMPE" "$aff" "$C0"
+            if [[ -n "${l[$i]}" ]]; then
+                printf '    %s│%s  %s%2d%s  %s%-14s%s %s%s%s\n' \
+                       "$BLEU" "$C0" "$GRAS" $(( i + 1 )) "$C0" \
+                       "$VERT" "${v[$i]}" "$C0" "$ESTOMPE" "${l[$i]}" "$C0"
+            else
+                printf '    %s│%s  %s%2d%s  %s%s%s\n' \
+                       "$BLEU" "$C0" "$GRAS" $(( i + 1 )) "$C0" "$VERT" "${v[$i]}" "$C0"
+            fi
         done
-        printf '    %s│%s %s a%s  saisir une autre valeur\n' "$ESTOMPE" "$C0" "$GRAS" "$C0"
+        printf '    %s│%s\n' "$BLEU" "$C0"
+        printf '    %s│%s  %s a%s  %ssaisir une autre valeur%s\n'  "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+        printf '    %s│%s  %s p%s  %spasser cette étape%s\n'        "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+        printf '    %s│%s  %s q%s  %squitter le script%s\n'         "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
 
         while true; do
             choix=""
-            lire "    $ESTOMPE└$C0 choix [1] : " choix || abandon
+            lire "    $BLEU└─$C0 votre choix ${ESTOMPE}[1]${C0} ${GRAS}›${C0} " choix
             [[ -z "$choix" ]] && choix=1
-            if [[ "${choix,,}" == "a" ]]; then
-                break                              # bascule en saisie libre
-            elif [[ "$choix" =~ ^[0-9]+$ ]] && (( choix >= 1 && choix <= n )); then
-                VALEUR="${v[$(( choix - 1 ))]}"
-                printf '    %s→ %s%s\n' "$VERT" "$VALEUR" "$C0"
-                return 0
-            else
-                printf '    %schoix hors liste%s\n' "$JAUNE" "$C0"
-            fi
+            case "${choix,,}" in
+                a) libre=1; break ;;                         # bascule en saisie libre
+                p) printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
+                q) printf '\n'; info "arrêt demandé."; journal "ARRÊT demandé à la question [[$nom]]"; exit 0 ;;
+                *)
+                    if [[ "$choix" =~ ^[0-9]+$ ]] && (( choix >= 1 && choix <= n )); then
+                        # La valeur vient d'un programme, pas de votre clavier :
+                        # une apostrophe dans un nom de fichier casserait la
+                        # commande, on la neutralise comme pour les {{listes}}.
+                        VALEUR="$(echapper_apostrophes "${v[$(( choix - 1 ))]}")"
+                        printf '    %s→ %s%s\n\n' "$VERT" "${v[$(( choix - 1 ))]}" "$C0"
+                        return 0
+                    fi
+                    printf '    %s« %s » n'"'"'est pas dans la liste%s\n' "$JAUNE" "$choix" "$C0" ;;
+            esac
         done
     fi
 
@@ -1055,15 +1463,67 @@ demander_valeur() {
         exit 1
     fi
 
+    if (( n == 0 )); then
+        printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$BLEU" "$C0" "$GRAS$CYAN" "$nom" "$C0" \
+               "$ESTOMPE" "${ou:+  — sert aux étapes $ou}"
+        printf '    %s│%s  %sla valeur sera réutilisée dans toutes les étapes qui la demandent%s\n' \
+               "$BLEU" "$C0" "$ESTOMPE" "$C0"
+        printf '    %s│%s  %s p%s  %spasser cette étape%s   %s q%s  %squitter%s\n' \
+               "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+    fi
+
+    # Après un « a » explicite, p et q ne sont plus des raccourcis : vous
+    # avez demandé à taper une valeur, c'est donc une valeur — sans quoi
+    # une partition nommée « p » serait impossible à saisir.
     VALEUR=""
     while true; do
-        lire "    ${CYAN}[[$nom]]${C0} : " VALEUR || abandon
+        lire "    $BLEU└─$C0 valeur ${GRAS}›${C0} " VALEUR
+        if (( ! libre )); then
+            case "${VALEUR,,}" in
+                p) printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
+                q) printf '\n'; info "arrêt demandé."; journal "ARRÊT demandé à la question [[$nom]]"; exit 0 ;;
+            esac
+        fi
         valeur_valide "$VALEUR" && break
     done
+    printf '\n'
+    return 0
+}
+
+# oublier_valeurs <commande brute>
+# Efface les [[valeurs]] que CETTE étape utilise — y compris celles qui
+# ne sont pas dans la commande mais dans les listes qu'elle appelle — et
+# vide le cache des listes, qui en dépendaient. Effacer toutes les
+# réponses obligerait à ressaisir ce qui était juste.
+oublier_valeurs() {
+    local cmd="$1" nom vus=" " i=0 courant
+    local -a afaire=("$cmd")
+
+    while (( i < ${#afaire[@]} )); do
+        courant="${afaire[$i]}"; i=$(( i + 1 ))
+        while [[ "$courant" =~ $RE_SIMPLE ]]; do
+            nom="${BASH_REMATCH[1]}"
+            unset "REPONSES[$nom]"
+            courant="${courant//\[\[$nom\]\]/}"
+        done
+        while [[ "$courant" =~ $RE_LISTE ]]; do
+            nom="${BASH_REMATCH[1]}"
+            courant="${courant//\{\{$nom\}\}/}"
+            nom="$(liste_de "$nom")"
+            if [[ "$vus" != *" $nom "* && -n "${GENERATEUR[$nom]:-}" ]]; then
+                vus+="$nom "
+                afaire+=("${GENERATEUR[$nom]}")
+            fi
+        done
+    done
+
+    CACHE_LISTE=()
     return 0
 }
 
 # resoudre_simples <commande> : remplace les [[valeurs]], résultat dans $CMD.
+#   0  commande complète
+#   1  l'utilisateur a demandé à passer l'étape
 # Le résultat passe par une variable et non par $(...), car un sous-shell
 # perdrait les valeurs mémorisées dans REPONSES.
 # Recopiez $CMD tout de suite : un appel imbriqué l'écrase.
@@ -1075,7 +1535,7 @@ resoudre_simples() {
         if [[ -n "${REPONSES[$nom]:-}" ]]; then
             val="${REPONSES[$nom]}"          # déjà connu, on réutilise
         else
-            demander_valeur "$nom"
+            demander_valeur "$nom" || return 1
             val="$VALEUR"
             REPONSES["$nom"]="$val"          # mémorisé pour la suite
         fi
@@ -1084,7 +1544,6 @@ resoudre_simples() {
     CMD="$cmd"
     return 0
 }
-
 
 # liste_a_parcourir <nom> : par quelle liste faut-il commencer ?
 # Si la liste "fichier" a besoin de {{home}}, écrire {{fichier}} seul
@@ -1118,7 +1577,7 @@ liste_a_parcourir() {
 EXP_CMDS=(); EXP_LABELS=(); EXP_TRONQUE=0
 expanser() {
     EXP_CMDS=(); EXP_LABELS=(); EXP_TRONQUE=0
-    BINDINGS=(); AFFICHE=()
+    BINDINGS=()
     _expanser "$1" "" 0
 }
 
@@ -1154,19 +1613,16 @@ _expanser() {
         (( EXP_TRONQUE )) && return 0
         val="${v[$i]}"; lib="${l[$i]}"
 
-        # Deux copies : l'échappée part dans la commande, la brute sert
-        # aux étiquettes, où un '\'' serait illisible.
+        # C'est la valeur ÉCHAPPÉE qui part dans la commande ; l'étiquette,
+        # elle, garde la valeur brute, où un '\'' serait illisible.
         BINDINGS["$cible"]="$(echapper_apostrophes "$val")"
-        AFFICHE["$cible"]="$val"
         BINDINGS["${cible}_libelle"]="$(echapper_apostrophes "${lib:-$val}")"
-        AFFICHE["${cible}_libelle"]="${lib:-$val}"
 
         etiq="$cible=${lib:-$val}"
         _expanser "$cmd" "${label:+$label · }$etiq" $(( prof + 1 ))
         rc=$?
 
-        unset "BINDINGS[$cible]" "AFFICHE[$cible]"
-        unset "BINDINGS[${cible}_libelle]" "AFFICHE[${cible}_libelle]"
+        unset "BINDINGS[$cible]" "BINDINGS[${cible}_libelle]"
 
         (( rc != 0 )) && return "$rc"
     done
@@ -1228,6 +1684,217 @@ scanner_placeholders() {
 }
 
 
+# --- Filtre d'étapes --------------------------------------------------
+# --seulement 2,5-7 et --depuis 4 : refaire une étape ratée sans
+# rejouer les cinq heures qui précèdent.
+[[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--depuis attend un numéro d'étape"; exit 1; }
+
+# Contrôle immédiat de --seulement : signaler « 2-x » après cinq minutes
+# d'exécution serait la pire façon de l'apprendre.
+if [[ -n "$FILTRE_ETAPES" ]]; then
+    ANCIEN_IFS="$IFS"; IFS=,
+    for morceau in $FILTRE_ETAPES; do
+        [[ "$morceau" =~ ^[0-9]+(-[0-9]+)?$ ]] || {
+            IFS="$ANCIEN_IFS"
+            erreur "--seulement : « $morceau » n'est ni un numéro ni un intervalle"
+            exit 1
+        }
+    done
+    IFS="$ANCIEN_IFS"
+    (( DEPUIS > 0 )) && attention "--seulement et --depuis se cumulent : une étape doit satisfaire les deux"
+fi
+
+etape_retenue() {
+    local n="$1" morceau debut fin
+    (( DEPUIS > 0 && n < DEPUIS )) && return 1
+    [[ -z "$FILTRE_ETAPES" ]] && return 0
+    local IFS=,
+    for morceau in $FILTRE_ETAPES; do
+        if [[ "$morceau" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            debut="${BASH_REMATCH[1]}"; fin="${BASH_REMATCH[2]}"
+            (( n >= debut && n <= fin )) && return 0
+        elif [[ "$morceau" =~ ^[0-9]+$ ]]; then
+            (( n == morceau )) && return 0
+        else
+            erreur "--seulement : « $morceau » n'est ni un numéro ni un intervalle"
+            exit 1
+        fi
+    done
+    return 1
+}
+
+
+# --- Affichage d'une étape -------------------------------------------
+# etat = cours (en train de se faire), skip (sautée d'office)
+titre_etape() {
+    local num="$1" total="$2" titre="$3" etat="${4:-cours}"
+    printf '\n'
+    regle
+    printf '  %s %s%s%d/%d%s  %s  %s%s%s\n' \
+           "$(glyphe "$etat")" \
+           "$GRAS" "$CYAN" "$num" "$total" "$C0" \
+           "$(barre "$(( num - 1 ))" "$total")" \
+           "$GRAS" "$titre" "$C0"
+    regle
+}
+
+# afficher_commande <commande> [indentation]
+# Repliée aux espaces quand elle dépasse la largeur du terminal : une
+# commande de trois cents caractères tassée sur un écran de quatre-vingts
+# colonnes est illisible, et c'est précisément celle qu'il faut relire
+# avant de la valider.
+afficher_commande() {
+    local cmd="$1" ind="${2:-  }"
+    local dispo=$(( LARGEUR - ${#ind} - 2 ))
+    (( dispo < 24 )) && dispo=24
+
+    if (( ${#cmd} <= dispo )); then
+        printf '%s%s$%s %s\n' "$ind" "$CYAN" "$C0" "$cmd"
+        return 0
+    fi
+
+    local premiere=1 ligne
+    while IFS= read -r ligne; do
+        if (( premiere )); then
+            printf '%s%s$%s %s\n' "$ind" "$CYAN" "$C0" "$ligne"
+            premiere=0
+        else
+            printf '%s    %s\n' "$ind" "$ligne"
+        fi
+    done < <(printf '%s\n' "$cmd" | fold -s -w "$dispo")
+}
+
+# resume_iterations : combien d'itérations, et lesquelles
+resume_iterations() {
+    local n=${#EXP_CMDS[@]} i max=6
+    printf '  %s↻%s  %sétape répétée%s — %s%d itération%s%s\n' \
+           "$MAGENTA" "$C0" "$MAGENTA" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
+    for (( i = 0; i < n && i < max; i++ )); do
+        printf '     %s%2d%s  %s%s%s\n' "$ESTOMPE" $(( i + 1 )) "$C0" "$ESTOMPE" "${EXP_LABELS[$i]}" "$C0"
+    done
+    (( n > max )) && printf '     %s..  et %d autre%s — « l » pour tout voir%s\n' \
+                            "$ESTOMPE" $(( n - max )) "$(pluriel $(( n - max )))" "$C0"
+    (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itérations atteinte : la liste est tronquée (MAX_ITERATIONS, section 1)"
+    return 0
+}
+
+lister_iterations() {
+    local i
+    printf '\n'
+    for i in "${!EXP_CMDS[@]}"; do
+        printf '     %s%3d%s  %s%s%s\n' "$GRAS" $(( i + 1 )) "$C0" "$MAGENTA" "${EXP_LABELS[$i]}" "$C0"
+        afficher_commande "${EXP_CMDS[$i]}" "          "
+    done
+    printf '\n'
+    return 0
+}
+
+# menu <clé=texte> ... : la ligne d'options, sous une forme constante.
+# La première clé est celle que donne la touche Entrée.
+menu() {
+    local e ligne="" k t
+    for e in "$@"; do
+        k="${e%%=*}"; t="${e#*=}"
+        ligne+="${ligne:+$ESTOMPE · $C0}${GRAS}${k}${C0} ${ESTOMPE}${t}${C0}"
+    done
+    printf '  %s\n' "$ligne"
+    return 0
+}
+
+invite() { printf '  %s›%s ' "$GRAS" "$C0"; }
+
+
+# --- Exécution d'un groupe d'itérations ------------------------------
+# Une étape simple est un groupe d'une itération : un seul chemin de
+# code, donc un seul endroit où se tromper.
+G_OK=0; G_KO=0; G_SKIP=0; G_INT=0; G_ARRET=0; G_DUREE=0; G_RC=0
+ITERS=()        # "état|détail|étiquette" par itération, pour l'arborescence
+executer_groupe() {
+    local une_par_une="$1" repetee="$2"
+    local n=${#EXP_CMDS[@]} i rc choix ignorer=0 debut=$SECONDS
+
+    G_OK=0; G_KO=0; G_SKIP=0; G_INT=0; G_ARRET=0; G_RC=0
+    ITERS=()
+
+    for i in "${!EXP_CMDS[@]}"; do
+        if (( repetee )); then
+            printf '\n  %s──%s %s%d/%d%s %s──%s %s%s%s\n' \
+                   "$ESTOMPE" "$C0" "$GRAS" $(( i + 1 )) "$n" "$C0" \
+                   "$ESTOMPE" "$C0" "$MAGENTA" "${EXP_LABELS[$i]}" "$C0"
+            afficher_commande "${EXP_CMDS[$i]}" "     "
+        fi
+
+        if (( une_par_une )); then
+            choix=""
+            menu "Entrée=exécuter" "p=passer" "t=tout enchaîner" "q=arrêter la boucle"
+            lire "$(invite)" choix
+            case "${choix,,}" in
+                p) printf '     %s⊘  passée%s\n' "$ESTOMPE" "$C0"
+                   G_SKIP=$(( G_SKIP + 1 )); ITERS+=("skip|passee|${EXP_LABELS[$i]}"); continue ;;
+                q) printf '     %sboucle arrêtée%s\n' "$JAUNE" "$C0"; G_ARRET=1; break ;;
+                t) une_par_une=0 ;;
+            esac
+        fi
+
+        executer_une "${EXP_CMDS[$i]}" "$F_LOG"
+        rc=$?
+
+        if (( INTERROMPU )); then
+            INTERROMPU=0
+            printf '  %s⊗  interrompu au bout de %s%s\n' "$JAUNE" "$(duree "$DUREE_S")" "$C0"
+            G_INT=$(( G_INT + 1 )); ITERS+=("int|$(duree "$DUREE_S")|${EXP_LABELS[$i]}")
+            if (( repetee )); then
+                demander_oui_non "  Continuer la boucle ? ${ESTOMPE}[O/n]${C0} " || { G_ARRET=1; break; }
+                continue
+            fi
+            break
+        fi
+
+        if (( rc == 0 )); then
+            if [[ "$SIMULATION" == "true" ]]; then
+                printf '  %s◌  simulée%s\n' "$BLEU" "$C0"
+                ITERS+=("sim|simulee|${EXP_LABELS[$i]}")
+            else
+                printf '  %s●  terminée en %s%s\n' "$VERT" "$(duree "$DUREE_S")" "$C0"
+                ITERS+=("ok|$(duree "$DUREE_S")|${EXP_LABELS[$i]}")
+            fi
+            G_OK=$(( G_OK + 1 ))
+            continue
+        fi
+
+        printf '  %s✗  échec — code %d, %s%s\n' "$ROUGE" "$rc" "$(duree "$DUREE_S")" "$C0"
+        G_KO=$(( G_KO + 1 )); G_RC=$rc
+        ITERS+=("ko|code $rc|${EXP_LABELS[$i]}")
+
+        if (( F_CONTINU )); then
+            printf '  %s(étape marquée « continu » : on poursuit)%s\n' "$ESTOMPE" "$C0"
+            continue
+        fi
+        if (( F_STOP )); then
+            erreur "étape marquée « stop » : arrêt du script."
+            G_ARRET=2; break
+        fi
+        (( ignorer )) && continue
+
+        if (( repetee )); then
+            choix=""
+            menu "Entrée=continuer" "t=continuer sans redemander" "n=arrêter la boucle" "q=quitter"
+            lire "$(invite)" choix
+            case "${choix,,}" in
+                t)   ignorer=1 ;;
+                n)   G_ARRET=1; break ;;
+                q)   G_ARRET=2; break ;;
+            esac
+        else
+            demander_oui_non "  Continuer quand même ? ${ESTOMPE}[O/n]${C0} " || G_ARRET=2
+        fi
+    done
+
+    G_DUREE=$(( SECONDS - debut ))
+    return 0
+}
+
+
 # --- Vérifications de départ -----------------------------------------
 # Mieux vaut échouer ici que découvrir le problème à la cinquième étape.
 
@@ -1275,6 +1942,7 @@ for entree in "${COMMANDES[@]}"; do
     fi
 done
 
+TOTAL=${#COMMANDES[@]}
 charger_listes
 scanner_placeholders
 
@@ -1344,38 +2012,28 @@ fi
 
 # --etapes : le plan, sans rien exécuter.
 if [[ "$LISTER_ETAPES" == "true" ]]; then
-    printf '\n'
-    regle "$GRAS"
-    printf ' %sPlan — %d étapes%s\n' "$GRAS" "${#COMMANDES[@]}" "$C0"
-    regle "$GRAS"
-    i=0
-    for entree in "${COMMANDES[@]}"; do
-        i=$(( i + 1 ))
-        reste="${entree#*|}"
-        analyser_validation "${reste%%|*}"
-        # Les marques sont en ASCII : leur colonne reste alignée quelle
-        # que soit la locale, ce qui ne serait pas vrai d'un titre accentué.
-        marques=""
-        [[ "$F_VALIDER" == "true" ]] && marques+="valider "
-        (( F_LOG ))     && marques+="log "
-        (( F_STOP ))    && marques+="stop "
-        (( F_CONTINU )) && marques+="continu "
-        [[ "${reste#*|}" == *"{{"* ]] && marques+="repetee "
-        printf '  %s%2d%s  %s%-18s%s %s\n' "$GRAS" "$i" "$C0" "$ESTOMPE" "$marques" "$C0" "${entree%%|*}"
-        printf '      %s%s%s\n' "$ESTOMPE" "${reste#*|}" "$C0"
-    done
+    plan_initial oui
     printf '\n'
     exit 0
 fi
 
 # Contrôles qui n'ont de sens que si l'on va vraiment exécuter.
-[[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"; exit 1; }
-[[ -r "$IMAGE" ]] || { erreur "image illisible (droits ?) : $IMAGE"; exit 1; }
+if [[ "$DEMO" != "true" ]]; then
+    [[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"; exit 1; }
+    [[ -r "$IMAGE" ]] || { erreur "image illisible (droits ?) : $IMAGE"; exit 1; }
+fi
 
 # Un fuseau mal orthographié ne se voit qu'à la relecture de la timeline,
 # des heures plus tard : autant le dire tout de suite.
 if [[ -d /usr/share/zoneinfo && ! -e "/usr/share/zoneinfo/$TZ_MACTIME" ]]; then
     attention "fuseau inconnu du système : $TZ_MACTIME (mactime risque de refuser)"
+fi
+
+# Pas de terminal (script lancé depuis cron, ou entrée redirigée) alors
+# que des étapes attendent une confirmation : les réponses seront lues sur
+# l'entrée standard, et le script s'arrêtera dès qu'elle sera épuisée.
+if [[ "$INTERACTIF" == "non" && "$SANS_QUESTION" != "true" ]]; then
+    attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
 fi
 
 MANQUANTS=""
@@ -1437,52 +2095,16 @@ marquer_faite() {
 }
 
 
-# --- Filtre d'étapes --------------------------------------------------
-# --seulement 2,5-7 et --depuis 4 : refaire une étape ratée sans
-# rejouer les cinq heures qui précèdent.
-[[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--depuis attend un numéro d'étape"; exit 1; }
-
-# Contrôle immédiat de --seulement : signaler « 2-x » après cinq minutes
-# d'exécution serait la pire façon de l'apprendre.
-if [[ -n "$FILTRE_ETAPES" ]]; then
-    ANCIEN_IFS="$IFS"; IFS=,
-    for morceau in $FILTRE_ETAPES; do
-        [[ "$morceau" =~ ^[0-9]+(-[0-9]+)?$ ]] || {
-            IFS="$ANCIEN_IFS"
-            erreur "--seulement : « $morceau » n'est ni un numéro ni un intervalle"
-            exit 1
-        }
-    done
-    IFS="$ANCIEN_IFS"
-    (( DEPUIS > 0 )) && attention "--seulement et --depuis se cumulent : une étape doit satisfaire les deux"
-fi
-
-etape_retenue() {
-    local n="$1" morceau debut fin
-    (( DEPUIS > 0 && n < DEPUIS )) && return 1
-    [[ -z "$FILTRE_ETAPES" ]] && return 0
-    local IFS=,
-    for morceau in $FILTRE_ETAPES; do
-        if [[ "$morceau" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-            debut="${BASH_REMATCH[1]}"; fin="${BASH_REMATCH[2]}"
-            (( n >= debut && n <= fin )) && return 0
-        elif [[ "$morceau" =~ ^[0-9]+$ ]]; then
-            (( n == morceau )) && return 0
-        else
-            erreur "--seulement : « $morceau » n'est ni un numéro ni un intervalle"
-            exit 1
-        fi
-    done
-    return 1
-}
-
-
 # --- Bandeau de démarrage --------------------------------------------
 printf '\n'
 regle "$GRAS"
 printf ' %sforensic.sh%s  %s%s · %s · %s%s\n' "$GRAS" "$C0" "$CYAN" "$PC" "$SALLE" "$OS" "$C0"
 regle "$GRAS"
-entete "image"     "$IMAGE"
+if [[ "$DEMO" == "true" ]]; then
+    entete "demo"      "$DEMO_RACINE  (bac à sable)"
+else
+    entete "image"     "$IMAGE"
+fi
 entete "sortie"    "$DEST"
 entete "fuseau"    "$TZ_MACTIME"
 entete "analyste"  "$OPERATEUR"
@@ -1496,6 +2118,18 @@ entete "journal"   "$LOG"
 (( DEPUIS > 0 ))                    && printf '  %s%-10s%s %s\n' "$ESTOMPE" "depuis" "$C0" "$DEPUIS"
 
 journal "=== démarrage — $PC/$SALLE/$OS — image $IMAGE — opérateur $OPERATEUR"
+
+if [[ "$DEMO" == "true" ]]; then
+    printf '\n'
+    printf '  %sMode démonstration.%s Rien de ce qui suit ne touche à vos données :\n' "$GRAS$MAGENTA" "$C0"
+    printf '  %stout se passe dans %s.%s\n\n' "$ESTOMPE" "$DEMO_RACINE" "$C0"
+    printf '  %sÀ essayer, dans l'"'"'ordre :%s\n' "$GRAS" "$C0"
+    printf '  %s· étape 2 : répondez au menu, puis regardez l'"'"'étape 3 ne plus rien demander%s\n' "$ESTOMPE" "$C0"
+    printf '  %s· étape 4 : « l » pour lister les itérations, « u » pour les dérouler une par une%s\n' "$ESTOMPE" "$C0"
+    printf '  %s· étape 5 : deux listes emboîtées, alors qu'"'"'une seule est écrite%s\n' "$ESTOMPE" "$C0"
+    printf '  %s· n'"'"'importe où : « e » pour éditer, « r » pour ressaisir, Ctrl-C pour arrêter%s\n' "$ESTOMPE" "$C0"
+    printf '  %sLe tableau de ces étapes est en section 2 bis du script, commenté ligne à ligne.%s\n' "$ESTOMPE" "$C0"
+fi
 
 
 # --- Exécution d'une commande ----------------------------------------
@@ -1526,140 +2160,16 @@ executer_une() {
     fi
 
     DUREE_S=$(( SECONDS - debut ))
-    journal "code $rc en $(duree $DUREE_S)"
+    journal "code $rc en $(duree "$DUREE_S")"
     return "$rc"
 }
 
 
-# --- Affichage d'une étape -------------------------------------------
-titre_etape() {
-    local num="$1" total="$2" titre="$3"
-    printf '\n'
-    regle
-    printf ' %s  %s[%d/%d]%s %s%s%s\n' \
-           "$(barre "$(( num - 1 ))" "$total")" \
-           "$ESTOMPE" "$num" "$total" "$C0" "$GRAS" "$titre" "$C0"
-    regle
-}
-
-afficher_commande() {
-    printf '  %s$%s %s\n' "$CYAN" "$C0" "$1"
-}
-
-# Sur un terminal étroit, une commande de 300 caractères devient une
-# bouillie ; « s » la redonne coupée aux espaces.
-afficher_commande_lisible() {
-    printf '%s\n' "$1" | fold -s -w $(( LARGEUR - 6 )) | sed "s/^/      /"
-}
-
-# resume_iterations : combien d'itérations, et lesquelles
-resume_iterations() {
-    local n=${#EXP_CMDS[@]} i max=5
-    printf '  %s↻%s %s%d itération%s%s\n' \
-           "$MAGENTA" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
-    for (( i = 0; i < n && i < max; i++ )); do
-        printf '    %s·%s %s\n' "$ESTOMPE" "$C0" "${EXP_LABELS[$i]}"
-    done
-    (( n > max )) && printf '    %s… et %d autres (l pour tout voir)%s\n' "$ESTOMPE" $(( n - max )) "$C0"
-    (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itérations atteinte : la liste est tronquée (MAX_ITERATIONS en section 1)"
-}
-
-lister_iterations() {
-    local i
-    for i in "${!EXP_CMDS[@]}"; do
-        printf '    %s%3d%s %s\n' "$GRAS" $(( i + 1 )) "$C0" "${EXP_LABELS[$i]}"
-        printf '        %s%s%s\n' "$ESTOMPE" "${EXP_CMDS[$i]}" "$C0"
-    done
-}
-
-
-# --- Exécution d'un groupe d'itérations ------------------------------
-# Une étape simple est un groupe d'une itération : un seul chemin de
-# code, donc un seul endroit où se tromper.
-G_OK=0; G_KO=0; G_SKIP=0; G_INT=0; G_ARRET=0; G_DUREE=0; G_RC=0
-executer_groupe() {
-    local une_par_une="$1"
-    local n=${#EXP_CMDS[@]} i rc choix ignorer=0 debut=$SECONDS
-    local multiple=0
-    (( n > 1 )) && multiple=1
-
-    G_OK=0; G_KO=0; G_SKIP=0; G_INT=0; G_ARRET=0; G_RC=0
-
-    for i in "${!EXP_CMDS[@]}"; do
-        if (( multiple )); then
-            printf '\n  %s├─ [%d/%d]%s %s%s%s\n' \
-                   "$ESTOMPE" $(( i + 1 )) "$n" "$C0" "$MAGENTA" "${EXP_LABELS[$i]}" "$C0"
-            printf '  %s│%s  ' "$ESTOMPE" "$C0"
-            afficher_commande "${EXP_CMDS[$i]}"
-        fi
-
-        if (( une_par_une )); then
-            choix=""
-            printf '  %sEntrée exécuter · p passer · t tout enchaîner · q arrêter la boucle%s\n' "$ESTOMPE" "$C0"
-            lire "  ${GRAS}>${C0} " choix || abandon
-            case "${choix,,}" in
-                p) printf '  %s⏭️  passée%s\n' "$ESTOMPE" "$C0"; G_SKIP=$(( G_SKIP + 1 )); continue ;;
-                q) printf '  %sboucle arrêtée%s\n' "$JAUNE" "$C0"; break ;;
-                t) une_par_une=0 ;;
-            esac
-        fi
-
-        executer_une "${EXP_CMDS[$i]}" "$F_LOG"
-        rc=$?
-
-        if (( INTERROMPU )); then
-            printf '  %s⚠️  interrompu au bout de %s%s\n' "$JAUNE" "$(duree $DUREE_S)" "$C0"
-            G_INT=$(( G_INT + 1 ))
-            if (( multiple )); then
-                demander_oui_non "  Continuer la boucle ? [O/n] : " || { G_ARRET=1; break; }
-                continue
-            fi
-            break
-        fi
-
-        if (( rc == 0 )); then
-            if [[ "$SIMULATION" == "true" ]]; then
-                printf '  %s👁️  simulée%s\n' "$BLEU" "$C0"
-            else
-                printf '  %s✅ %s%s\n' "$VERT" "$(duree $DUREE_S)" "$C0"
-            fi
-            G_OK=$(( G_OK + 1 ))
-            continue
-        fi
-
-        printf '  %s❌ code %d, %s%s\n' "$ROUGE" "$rc" "$(duree $DUREE_S)" "$C0"
-        G_KO=$(( G_KO + 1 )); G_RC=$rc
-
-        (( F_CONTINU )) && continue
-        if (( F_STOP )); then
-            erreur "étape marquée « stop » : arrêt du script."
-            G_ARRET=2; break
-        fi
-        (( ignorer )) && continue
-
-        if (( multiple )); then
-            choix=""
-            printf '  %sEntrée continuer · t continuer sans redemander · n arrêter la boucle · q quitter%s\n' "$ESTOMPE" "$C0"
-            lire "  ${GRAS}>${C0} " choix || abandon
-            case "${choix,,}" in
-                t)   ignorer=1 ;;
-                n)   G_ARRET=1; break ;;
-                q)   G_ARRET=2; break ;;
-            esac
-        else
-            demander_oui_non "  Continuer quand même ? [O/n] : " || G_ARRET=2
-        fi
-    done
-
-    G_DUREE=$(( SECONDS - debut ))
-    return 0
-}
-
-
 # --- Boucle principale -----------------------------------------------
-TOTAL=${#COMMANDES[@]}
 NUM=0
 NB_FILTREES=0
+
+plan_initial
 
 for entree in "${COMMANDES[@]}"; do
     NUM=$(( NUM + 1 ))
@@ -1679,14 +2189,20 @@ for entree in "${COMMANDES[@]}"; do
     if deja_faite "$CLE"; then
         titre_etape "$NUM" "$TOTAL" "$TITRE"
         info "déjà réussie précédemment — sautée (--reprendre)"
-        RECAP+=("skip|reprise|$TITRE")
+        RECAP+=("$NUM|skip|reprise|$TITRE")
         NB_PASSEES=$(( NB_PASSEES + 1 ))
         continue
     fi
 
     titre_etape "$NUM" "$TOTAL" "$TITRE"
 
-    resoudre_simples "$BRUTE"     # demande les [[valeurs]] manquantes
+    INTERROMPU=0
+    if ! resoudre_simples "$BRUTE"; then     # l'utilisateur a répondu « p »
+        RECAP+=("$NUM|skip|passee|$TITRE")
+        NB_PASSEES=$(( NB_PASSEES + 1 ))
+        journal "PASSÉE (valeur non fournie) : $TITRE"
+        continue
+    fi
     CMDBASE="$CMD"                # recopié tout de suite : expanser écrase CMD
     BESOIN_EXP=1
 
@@ -1695,30 +2211,35 @@ for entree in "${COMMANDES[@]}"; do
     while true; do
 
         if (( BESOIN_EXP )); then
-            # Le message d'attente s'efface avec un \r : hors terminal
-            # (sortie redirigée) il resterait collé à la ligne suivante,
-            # donc on ne l'affiche que si l'on parle bien à un écran.
-            if [[ "$CMDBASE" == *"{{"* && -t 1 ]]; then
-                printf '  %s... lecture des listes%s' "$ESTOMPE" "$C0"
-                expanser "$CMDBASE"; RCEXP=$?
-                printf '\r%s\r' "$(repeter ' ' 26)"
-            else
-                expanser "$CMDBASE"; RCEXP=$?
-            fi
+            expanser "$CMDBASE"; RCEXP=$?
             BESOIN_EXP=0
 
+            if (( INTERROMPU )); then
+                INTERROMPU=0
+                attention "lecture des listes interrompue — étape abandonnée"
+                RECAP+=("$NUM|int|listes|$TITRE")
+                NB_PASSEES=$(( NB_PASSEES + 1 ))
+                break
+            fi
+
             if (( RCEXP != 0 )) || (( ${#EXP_CMDS[@]} == 0 )); then
-                erreur "les listes de cette étape n'ont rien donné : étape impossible."
-                RECAP+=("ko|liste vide|$TITRE")
+                erreur "les listes de cette étape n'ont rien donné : rien à exécuter."
+                info "vérifiez la commande de liste avec --vars, ou figez-la avec --liste"
+                RECAP+=("$NUM|ko|liste vide|$TITRE")
                 NB_KO=$(( NB_KO + 1 ))
-                if [[ "$INTERACTIF" == "oui" && "$SANS_QUESTION" != "true" ]]; then
-                    printf '  %sEntrée passer à la suite · r ressaisir les valeurs · q quitter%s\n' "$ESTOMPE" "$C0"
+                if [[ "$SANS_QUESTION" != "true" ]]; then
+                    menu "Entrée=passer à la suite" "r=ressaisir les valeurs" "q=quitter"
                     CHOIX=""
-                    lire "  ${GRAS}>${C0} " CHOIX || abandon
+                    lire "$(invite)" CHOIX
                     case "${CHOIX,,}" in
-                        r) for k in ${PH_SIMPLES[@]+"${PH_SIMPLES[@]}"}; do unset "REPONSES[$k]"; done
-                           CACHE_LISTE=(); resoudre_simples "$BRUTE"; CMDBASE="$CMD"; BESOIN_EXP=1; continue ;;
-                        q) printf 'Arrêt demandé.\n'; exit 1 ;;
+                        r) oublier_valeurs "$BRUTE"
+                           if resoudre_simples "$BRUTE"; then
+                               CMDBASE="$CMD"; BESOIN_EXP=1
+                               # l'échec précédent ne compte plus : on réessaie
+                               unset 'RECAP[-1]'; NB_KO=$(( NB_KO - 1 ))
+                               continue
+                           fi ;;
+                        q) printf '\n'; info "arrêt demandé."; exit 1 ;;
                     esac
                 fi
                 break
@@ -1735,64 +2256,70 @@ for entree in "${COMMANDES[@]}"; do
         else
             afficher_commande "${EXP_CMDS[0]}"
         fi
+        (( F_LOG ))     && info "la sortie de cette étape est recopiée dans le journal"
+        (( F_STOP ))    && info "un échec ici arrête le script"
+        (( F_CONTINU )) && info "un échec ici est ignoré, sans question"
 
         # Un CHOIX vide vaut « exécuter » : c'est ce qui rend les étapes
         # validation=false automatiques, sans rien demander.
         CHOIX=""
         if [[ "$F_VALIDER" == "true" || "$TOUT_VALIDER" == "true" ]]; then
             if (( REPETEE )); then
-                printf '  %sEntrée tout exécuter · u une par une · l lister · p passer · e éditer · r ressaisir · q quitter%s\n' "$ESTOMPE" "$C0"
+                menu "Entrée=tout exécuter" "u=une par une" "l=lister" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
             else
-                printf '  %sEntrée exécuter · p passer · e éditer · r ressaisir · s voir en clair · q quitter%s\n' "$ESTOMPE" "$C0"
+                menu "Entrée=exécuter" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
             fi
-            lire "  ${GRAS}>${C0} " CHOIX || abandon
+            lire "$(invite)" CHOIX
         fi
 
         case "${CHOIX,,}" in
             ""|o|y|u|t)
                 UNE_PAR_UNE=0
                 [[ "${CHOIX,,}" == "u" ]] && UNE_PAR_UNE=1
-                executer_groupe "$UNE_PAR_UNE"
+                executer_groupe "$UNE_PAR_UNE" "$REPETEE"
+                if (( REPETEE )) && (( ${#ITERS[@]} > 0 )); then
+                    ENFANTS["$NUM"]="$(printf '%s\x01' "${ITERS[@]}")"
+                fi
 
                 if (( REPETEE )); then
                     # Bilan agrégé : une ligne de récapitulatif par étape,
                     # même si elle a tourné trois cents fois.
-                    DETAIL="$G_OK/$N ok"
-                    (( G_SKIP )) && DETAIL+=" ${G_SKIP}skip"
                     if [[ "$SIMULATION" == "true" ]]; then
-                        RECAP+=("sim|$N iter|$TITRE")
+                        RECAP+=("$NUM|sim|$N iter|$TITRE")
                     elif (( G_KO == 0 && G_INT == 0 && G_SKIP == 0 )); then
-                        RECAP+=("ok|$G_OK/$N $(duree $G_DUREE)|$TITRE")
+                        RECAP+=("$NUM|ok|$G_OK/$N$( (( EXP_TRONQUE )) && printf ' tronq') $(duree "$G_DUREE")|$TITRE")
                         NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
                     elif (( G_KO > 0 )); then
-                        RECAP+=("ko|$G_KO KO /$N|$TITRE"); NB_KO=$(( NB_KO + 1 ))
+                        RECAP+=("$NUM|ko|$G_KO KO /$N|$TITRE"); NB_KO=$(( NB_KO + 1 ))
                     else
-                        RECAP+=("int|$DETAIL|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 ))
+                        RECAP+=("$NUM|int|$G_OK/$N ok|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 ))
+                        (( G_INT )) && RECAP[-1]="$NUM|int|$G_OK/$N, $G_INT int|$TITRE"
                     fi
-                    printf '\n  %s└─%s %s%d réussie%s%s · %s%d échec%s%s · %s%d passée%s%s · %s\n' \
+                    printf '\n  %s└─%s  %s%d réussie%s%s · %s%d échec%s%s · %s%d interrompue%s%s · %s%d passée%s%s · %s%s%s\n' \
                            "$ESTOMPE" "$C0" \
                            "$VERT"    "$G_OK"   "$(pluriel "$G_OK")"   "$C0" \
                            "$ROUGE"   "$G_KO"   "$(pluriel "$G_KO")"   "$C0" \
+                           "$JAUNE"   "$G_INT"  "$(pluriel "$G_INT")"  "$C0" \
                            "$ESTOMPE" "$G_SKIP" "$(pluriel "$G_SKIP")" "$C0" \
-                           "$(duree $G_DUREE)"
+                           "$ESTOMPE" "$(duree "$G_DUREE")" "$C0"
                 else
                     if (( G_INT )); then
-                        RECAP+=("int|$(duree $G_DUREE)|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 ))
+                        RECAP+=("$NUM|int|$(duree "$G_DUREE")|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 ))
                         if (( ! G_ARRET )); then
-                            demander_oui_non "  Passer à l'étape suivante ? [O/n] : " \
-                                || { printf 'Arrêt.\n'; exit 130; }
+                            demander_oui_non "  Passer à l'étape suivante ? ${ESTOMPE}[O/n]${C0} " \
+                                || { printf '\n'; info "arrêt demandé."; exit 130; }
                         fi
                     elif (( G_KO )); then
-                        RECAP+=("ko|code $G_RC|$TITRE"); NB_KO=$(( NB_KO + 1 ))
+                        RECAP+=("$NUM|ko|code $G_RC|$TITRE"); NB_KO=$(( NB_KO + 1 ))
                     elif [[ "$SIMULATION" == "true" ]]; then
-                        RECAP+=("sim|simulee|$TITRE")
+                        RECAP+=("$NUM|sim|simulee|$TITRE")
                     else
-                        RECAP+=("ok|$(duree $G_DUREE)|$TITRE")
+                        RECAP+=("$NUM|ok|$(duree "$G_DUREE")|$TITRE")
                         NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
                     fi
                 fi
 
-                (( G_ARRET == 2 )) && { printf '\nArrêt.\n'; exit 1; }
+                (( G_ARRET == 2 )) && { printf '\n'; info "arrêt."; exit 1; }
                 break
                 ;;
 
@@ -1800,13 +2327,9 @@ for entree in "${COMMANDES[@]}"; do
                 lister_iterations
                 ;;
 
-            s)
-                afficher_commande_lisible "${EXP_CMDS[0]}"
-                ;;
-
             p)
-                printf '  %s⏭️  passée%s\n' "$ESTOMPE" "$C0"
-                RECAP+=("skip|passee|$TITRE")
+                printf '  %s⊘  passée%s\n' "$ESTOMPE" "$C0"
+                RECAP+=("$NUM|skip|passee|$TITRE")
                 NB_PASSEES=$(( NB_PASSEES + 1 ))
                 journal "PASSÉE : $TITRE"
                 break
@@ -1817,36 +2340,43 @@ for entree in "${COMMANDES[@]}"; do
                 # On repasse par la résolution au cas où l'édition ajoute
                 # un [[nom]] ou un {{nom}}.
                 info "édition — la modification ne vaut que pour cette exécution"
-                lire_edit "$CMDBASE" CMDBASE
-                resoudre_simples "$CMDBASE"
-                CMDBASE="$CMD"
-                BESOIN_EXP=1
+                NOUVELLE=""
+                lire_edit "$CMDBASE" NOUVELLE
+                if [[ -z "${NOUVELLE// /}" ]]; then
+                    attention "commande vide : édition annulée"
+                else
+                    if resoudre_simples "$NOUVELLE"; then
+                        CMDBASE="$CMD"
+                        BESOIN_EXP=1
+                    else
+                        attention "édition annulée"
+                    fi
+                fi
                 ;;
 
             r)
                 # Un chiffre oublié dans l'offset ? On repart des questions,
                 # mais seulement pour les valeurs de CETTE étape : effacer
                 # tout obligerait à ressaisir ce qui était juste.
-                CMDTMP="$BRUTE"
-                while [[ "$CMDTMP" =~ $RE_SIMPLE ]]; do
-                    NOMTMP="${BASH_REMATCH[1]}"
-                    unset "REPONSES[$NOMTMP]"
-                    CMDTMP="${CMDTMP//\[\[$NOMTMP\]\]/}"
-                done
-                CACHE_LISTE=()          # les listes en dépendaient
-                resoudre_simples "$BRUTE"
-                CMDBASE="$CMD"
-                BESOIN_EXP=1
-                info "valeurs ressaisies"
+                oublier_valeurs "$BRUTE"
+                if resoudre_simples "$BRUTE"; then
+                    CMDBASE="$CMD"
+                    BESOIN_EXP=1
+                    info "valeurs ressaisies"
+                else
+                    RECAP+=("$NUM|skip|passee|$TITRE")
+                    NB_PASSEES=$(( NB_PASSEES + 1 ))
+                    break
+                fi
                 ;;
 
             q)
-                printf 'Arrêt demandé.\n'
+                printf '\n'; info "arrêt demandé."
                 exit 0
                 ;;
 
             *)
-                printf '  %schoix inconnu%s\n' "$JAUNE" "$C0"
+                printf '  %s« %s » n'"'"'est pas une réponse attendue%s\n' "$JAUNE" "$CHOIX" "$C0"
                 ;;
         esac
     done
