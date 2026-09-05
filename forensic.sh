@@ -422,7 +422,12 @@ invite() { printf '  %s›%s ' "$GRAS" "$C0"; }
 # L'aide : option en cyan, touches en gras, rien d'autre.
 h_titre() { printf '\n%s%s%s\n' "$GRAS" "$1" "$C0"; }
 h_opt()   { printf '  %s%-26s%s %s\n' "$C_PROG" "$1" "$C0" "$2"; }          # -x, --xx VALEUR   explication
-h_cle()   { printf '  %s ' "$(pad_droite "$1" 16)"; shift; local e s=""; for e in "$@"; do s+="${s:+ · }${e%%=*:+$GRAS${e%%=*}$C0 }${e#*=}"; done; printf '%s\n' "$s"; }
+h_cle() {   # <libellé> clé=texte ... — une clé vide n'affiche que le texte
+    printf '  %s ' "$(pad_droite "$1" 16)"; shift
+    local e k s=""
+    for e in "$@"; do k="${e%%=*}"; s+="${s:+ · }${k:+$GRAS$k$C0 }${e#*=}"; done
+    printf '%s\n' "$s"
+}
 aide() {
     printf '%sforensic.sh%s — enchaîne des commandes, validées une à une.\n' "$GRAS" "$C0"
     printf 'Usage : %s./forensic.sh%s [options]\n' "$C_PROG" "$C0"
@@ -749,8 +754,9 @@ valeur_valide() {
     return 0
 }
 
-etapes_mot() {   # « aux étapes 2, 3 » / « à l'étape 2 » / « seulement et par la liste v »
+etapes_mot() {   # « aux étapes 2, 3 » / « à l'étape 2 » / « seulement par la liste v »
     if [[ "$1" == et\ * ]]; then printf 'seulement'; elif [[ "$1" == *,* ]]; then printf 'aux étapes'; else printf "à l'étape"; fi; }
+sans_et()    { printf '%s' "${1#et }"; }
 ou_sert() {   # <nom> : « 2, 3 et par la liste home »
     local i
     for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do
@@ -828,7 +834,7 @@ demander_valeur() {
     INTERROMPU=0
     ou="$(ou_sert "$nom")"; n=${#v[@]}
 
-    printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$C_BOITE" "$C0" "$C_PROG" "$nom" "$C0" "$ESTOMPE" "${ou:+  — utilisé $(etapes_mot "$ou") $ou}"
+    printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$C_BOITE" "$C0" "$C_PROG" "$nom" "$C0" "$ESTOMPE" "${ou:+  — utilisé $(etapes_mot "$ou") $(sans_et "$ou")}"
     if (( n > 0 )); then
         printf '    %s│%s\n' "$C_BOITE" "$C0"
         for i in "${!v[@]}"; do
