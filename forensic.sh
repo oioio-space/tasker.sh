@@ -218,6 +218,13 @@ init_affichage() {
     else
         C0=""; GRAS=""; ESTOMPE=""; ROUGE=""; VERT=""; JAUNE=""; BLEU=""; MAGENTA=""; CYAN=""
     fi
+    # Palette : une couleur par rôle, jamais de fond (lisible sur thème clair et sombre).
+    C_PROG="$GRAS$CYAN"      # le programme lancé
+    C_CMD="$GRAS"            # ses arguments
+    C_OK="$VERT"; C_KO="$GRAS$ROUGE"; C_WARN="$JAUNE"; C_SIM="$BLEU"
+    C_BOUCLE="$MAGENTA"      # étiquettes d'itération  agent=alice
+    C_CLE="$GRAS"            # touches des menus
+    C_BOITE="$BLEU"          # cadre des questions
     [[ -t 1 ]] && LARGEUR=$(tput cols 2>/dev/null || printf 80)
     [[ "$LARGEUR" =~ ^[0-9]+$ ]] || LARGEUR=80
     (( LARGEUR < 40 )) && LARGEUR=40
@@ -262,7 +269,7 @@ duree() {   # <secondes>
 glyphe() {
     case "$1" in
         todo)  printf '%s○%s' "$ESTOMPE" "$C0" ;;  cours) printf '%s◐%s' "$CYAN"  "$C0" ;;
-        ok)    printf '%s●%s' "$VERT"    "$C0" ;;  ko)    printf '%s✗%s' "$ROUGE" "$C0" ;;
+        ok)    printf '%s●%s' "$C_OK"    "$C0" ;;  ko)    printf '%s✗%s' "$C_KO"  "$C0" ;;
         skip)  printf '%s⊘%s' "$ESTOMPE" "$C0" ;;  int)   printf '%s⊗%s' "$JAUNE" "$C0" ;;
         sim)   printf '%s◌%s' "$BLEU"    "$C0" ;;  *)     printf ' ' ;;
     esac
@@ -277,11 +284,13 @@ glyphe_texte() {
 colonne_titre() { local l=$(( LARGEUR - 22 )); (( l < 24 )) && l=24; (( l > 52 )) && l=52; printf '%s' "$l"; }
 
 ligne_tache() {   # <état> <numéro> <titre> <détail>
+    local ct=""
+    case "$1" in ko) ct="$C_KO" ;; int) ct="$C_WARN" ;; skip) ct="$ESTOMPE" ;; sim) ct="$C_SIM" ;; esac
     if [[ -z "$4" ]]; then
-        printf '  %s %s%2s%s  %s\n' "$(glyphe "$1")" "$ESTOMPE" "$2" "$C0" "$3"
+        printf '  %s %s%2s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$2" "$C0" "$ct" "$3" "$C0"
     else
-        printf '  %s %s%2s%s  %s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$2" "$C0" \
-               "$(pad_droite "$3" "$(colonne_titre)")" "$ESTOMPE" "$4" "$C0"
+        printf '  %s %s%2s%s  %s%s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$2" "$C0" \
+               "$ct" "$(pad_droite "$3" "$(colonne_titre)")" "$C0" "$ESTOMPE" "$4" "$C0"
     fi
 }
 
@@ -294,14 +303,16 @@ titre_etape() {   # <numéro> <total> <titre>
 
 # Repliée aux espaces si elle dépasse l'écran : c'est la ligne à relire.
 afficher_commande() {   # <commande> [indentation]
-    local cmd="$1" ind="${2:-  }" dispo premiere=1 ligne
+    local cmd="$1" ind="${2:-  }" dispo premiere=1 ligne prog reste
     dispo=$(( LARGEUR - ${#ind} - 2 )); (( dispo < 24 )) && dispo=24
-    if (( $(largeur_texte "$cmd") <= dispo )); then
-        printf '%s%s$%s %s\n' "$ind" "$CYAN" "$C0" "$cmd"; return 0
-    fi
     while IFS= read -r ligne; do
-        if (( premiere )); then printf '%s%s$%s %s\n' "$ind" "$CYAN" "$C0" "$ligne"; premiere=0
-        else printf '%s    %s\n' "$ind" "$ligne"; fi
+        if (( premiere )); then
+            prog="${ligne%% *}"; reste="${ligne#"$prog"}"
+            printf '%s%s$%s %s%s%s%s%s%s\n' "$ind" "$ESTOMPE" "$C0" "$C_PROG" "$prog" "$C0" "$C_CMD" "$reste" "$C0"
+            premiere=0
+        else
+            printf '%s    %s%s%s\n' "$ind" "$C_CMD" "$ligne" "$C0"
+        fi
     done < <(printf '%s\n' "$cmd" | fold -s -w "$dispo")
 }
 
@@ -309,7 +320,7 @@ menu() {   # clé=texte ... — la première clé est celle de la touche Entrée
     local e ligne=""
     [[ "$SANS_QUESTION" == "true" ]] && return 0
     for e in "$@"; do
-        ligne+="${ligne:+$ESTOMPE · $C0}${GRAS}${e%%=*}${C0} ${ESTOMPE}${e#*=}${C0}"
+        ligne+="${ligne:+$ESTOMPE · $C0}${C_CLE}${e%%=*}${C0} ${ESTOMPE}${e#*=}${C0}"
     done
     printf '  %s\n' "$ligne"
 }
@@ -591,19 +602,19 @@ demander_valeur() {
     INTERROMPU=0
     ou="$(ou_sert "$nom")"; n=${#v[@]}
 
-    printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$BLEU" "$C0" "$GRAS$CYAN" "$nom" "$C0" "$ESTOMPE" "${ou:+  — utilisé $(etapes_mot "$ou") $ou}"
+    printf '\n    %s┌─%s %s[[%s]]%s%s%s\n' "$C_BOITE" "$C0" "$C_PROG" "$nom" "$C0" "$ESTOMPE" "${ou:+  — utilisé $(etapes_mot "$ou") $ou}"
     if (( n > 0 )); then
-        printf '    %s│%s\n' "$BLEU" "$C0"
+        printf '    %s│%s\n' "$C_BOITE" "$C0"
         for i in "${!v[@]}"; do
-            printf '    %s│%s  %s%2d%s  %s%s%s' "$BLEU" "$C0" "$GRAS" $(( i + 1 )) "$C0" "$VERT" "${v[$i]}" "$C0"
+            printf '    %s│%s  %s%2d%s  %s%s%s' "$C_BOITE" "$C0" "$C_CLE" $(( i + 1 )) "$C0" "$GRAS$C_OK" "${v[$i]}" "$C0"
             [[ -n "${l[$i]}" ]] && printf '%s  %s%s' "$(pad_droite '' $(( 14 - $(largeur_texte "${v[$i]}") )))" "$ESTOMPE${l[$i]}" "$C0"
             printf '\n'
         done
-        printf '    %s│%s\n' "$BLEU" "$C0"
+        printf '    %s│%s\n' "$C_BOITE" "$C0"
         if [[ "$SANS_QUESTION" != "true" ]]; then
-            printf '    %s│%s  %s a%s  %ssaisir une autre valeur%s\n' "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
-            printf '    %s│%s  %s p%s  %spasser cette étape%s\n'       "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
-            printf '    %s│%s  %s q%s  %squitter le script%s\n'        "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+            printf '    %s│%s  %s a%s  %ssaisir une autre valeur%s\n' "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+            printf '    %s│%s  %s p%s  %spasser cette étape%s\n'       "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+            printf '    %s│%s  %s q%s  %squitter le script%s\n'        "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
         fi
         while true; do
             choix=""; lire "    $BLEU└─$C0 votre choix ${ESTOMPE}[1]${C0} ${GRAS}›${C0} " choix
@@ -616,13 +627,13 @@ demander_valeur() {
             if [[ "$choix" =~ ^[0-9]+$ ]] && (( choix >= 1 && choix <= n )); then
                 # Valeur produite par un programme : on neutralise les apostrophes.
                 VALEUR="$(echapper_apostrophes "${v[$(( choix - 1 ))]}")"
-                printf '    %s→ %s%s\n\n' "$VERT" "${v[$(( choix - 1 ))]}" "$C0"; return 0
+                printf '    %s→ %s%s\n\n' "$C_OK" "${v[$(( choix - 1 ))]}" "$C0"; return 0
             fi
             printf '    %s« %s » n'"'"'est pas dans la liste%s\n' "$JAUNE" "$choix" "$C0"
         done
     else
-        printf '    %s│%s  %sla valeur sera réutilisée partout où [[%s]] apparaît%s\n' "$BLEU" "$C0" "$ESTOMPE" "$nom" "$C0"
-        printf '    %s│%s  %s p%s  %spasser cette étape%s   %s q%s  %squitter%s\n' "$BLEU" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
+        printf '    %s│%s  %sla valeur sera réutilisée partout où [[%s]] apparaît%s\n' "$C_BOITE" "$C0" "$ESTOMPE" "$nom" "$C0"
+        printf '    %s│%s  %s p%s  %spasser cette étape%s   %s q%s  %squitter%s\n' "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
     fi
 
     if [[ "$SANS_QUESTION" == "true" ]]; then
@@ -794,7 +805,7 @@ executer_groupe() {
     for i in "${!EXP_CMDS[@]}"; do
         if (( repetee )); then
             printf '\n  %s──%s %s%d/%d%s %s──%s %s%s%s\n' "$ESTOMPE" "$C0" "$GRAS" $(( i + 1 )) "$n" "$C0" \
-                   "$ESTOMPE" "$C0" "$MAGENTA" "${EXP_LABELS[$i]}" "$C0"
+                   "$ESTOMPE" "$C0" "$C_BOUCLE" "${EXP_LABELS[$i]}" "$C0"
             afficher_commande "${EXP_CMDS[$i]}" "     "
         fi
         if (( une_par_une )); then
@@ -811,7 +822,7 @@ executer_groupe() {
 
         if (( INTERROMPU )); then
             INTERROMPU=0
-            printf '  %s⊗  interrompu au bout de %s%s\n' "$JAUNE" "$(duree "$DUREE_S")" "$C0"
+            printf '  %s⊗  interrompu%s %sau bout de %s%s\n' "$C_WARN" "$C0" "$ESTOMPE" "$(duree "$DUREE_S")" "$C0"
             G_INT=$(( G_INT + 1 )); ITERS+=("int|$(duree "$DUREE_S")|${EXP_LABELS[$i]}")
             (( repetee )) || break
             demander_oui_non "  Continuer la boucle ? ${ESTOMPE}[O/n]${C0} " && continue
@@ -819,14 +830,14 @@ executer_groupe() {
         fi
         if (( rc == 0 )); then
             if [[ "$SIMULATION" == "true" ]]; then
-                printf '  %s◌  simulée%s\n' "$BLEU" "$C0"; ITERS+=("sim|simulee|${EXP_LABELS[$i]}")
+                printf '  %s◌  simulée%s\n' "$C_SIM" "$C0"; ITERS+=("sim|simulee|${EXP_LABELS[$i]}")
             else
-                printf '  %s●  terminée en %s%s\n' "$VERT" "$(duree "$DUREE_S")" "$C0"; ITERS+=("ok|$(duree "$DUREE_S")|${EXP_LABELS[$i]}")
+                printf '  %s●  terminée%s %sen %s%s\n' "$C_OK" "$C0" "$ESTOMPE" "$(duree "$DUREE_S")" "$C0"; ITERS+=("ok|$(duree "$DUREE_S")|${EXP_LABELS[$i]}")
             fi
             G_OK=$(( G_OK + 1 )); continue
         fi
 
-        printf '  %s✗  échec — code %d, %s%s\n' "$ROUGE" "$rc" "$(duree "$DUREE_S")" "$C0"
+        printf '  %s✗  échec%s %s— code %d, %s%s\n' "$C_KO" "$C0" "$ESTOMPE" "$rc" "$(duree "$DUREE_S")" "$C0"
         G_KO=$(( G_KO + 1 )); G_RC=$rc; ITERS+=("ko|code $rc|${EXP_LABELS[$i]}")
         (( F_CONTINU )) && { info "(étape marquée « continu » : on poursuit)"; continue; }
         (( F_STOP ))    && { erreur "étape marquée « stop » : arrêt du script."; G_ARRET=2; break; }
@@ -845,8 +856,8 @@ executer_groupe() {
 
 resume_iterations() {
     local n=${#EXP_CMDS[@]} i max=6
-    printf '  %s↻%s  %sétape répétée%s — %s%d itération%s%s\n' "$MAGENTA" "$C0" "$MAGENTA" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
-    for (( i = 0; i < n && i < max; i++ )); do printf '     %s%2d  %s%s\n' "$ESTOMPE" $(( i + 1 )) "${EXP_LABELS[$i]}" "$C0"; done
+    printf '  %s↻  étape répétée%s — %s%d itération%s%s\n' "$C_BOUCLE" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
+    for (( i = 0; i < n && i < max; i++ )); do printf '     %s%2d%s  %s%s%s\n' "$ESTOMPE" $(( i + 1 )) "$C0" "$C_BOUCLE" "${EXP_LABELS[$i]}" "$C0"; done
     (( n > max )) && printf '     %s..  et %d autre%s — « l » pour tout voir%s\n' "$ESTOMPE" $(( n - max )) "$(pluriel "$(( n - max ))")" "$C0"
     (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itérations atteinte, liste tronquée (MAX_ITERATIONS, section 1)"
     return 0
@@ -854,7 +865,7 @@ resume_iterations() {
 lister_iterations() {
     local i; printf '\n'
     for i in "${!EXP_CMDS[@]}"; do
-        printf '     %s%3d%s  %s%s%s\n' "$GRAS" $(( i + 1 )) "$C0" "$MAGENTA" "${EXP_LABELS[$i]}" "$C0"
+        printf '     %s%3d%s  %s%s%s\n' "$GRAS" $(( i + 1 )) "$C0" "$C_BOUCLE" "${EXP_LABELS[$i]}" "$C0"
         afficher_commande "${EXP_CMDS[$i]}" "          "
     done
     printf '\n'
@@ -901,7 +912,7 @@ recap() {
     done
     regle
     printf '  %s%d réussie%s%s · %s%d en échec%s · %s%d passée%s%s · total %s\n' \
-           "$VERT" "$NB_OK" "$(pluriel "$NB_OK")" "$C0" "$ROUGE" "$NB_KO" "$C0" \
+           "$C_OK" "$NB_OK" "$(pluriel "$NB_OK")" "$C0" "$( (( NB_KO )) && printf '%s' "$C_KO" )" "$NB_KO" "$C0" \
            "$ESTOMPE" "$NB_PASSEES" "$(pluriel "$NB_PASSEES")" "$C0" "$(duree "$SECONDS")"
     printf '  %sjournal  %s%s\n' "$ESTOMPE" "$LOG" "$C0"
     ecrire_rapport
@@ -1127,9 +1138,9 @@ for entree in "${COMMANDES[@]}"; do
                         RECAP+=("$NUM|ok|$G_OK/$N$( (( EXP_TRONQUE )) && printf ' tronq') $(duree "$G_DUREE")|$TITRE"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
                     elif (( G_KO > 0 )); then RECAP+=("$NUM|ko|$G_KO KO /$N|$TITRE"); NB_KO=$(( NB_KO + 1 ))
                     else RECAP+=("$NUM|int|$G_OK/$N ok|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); fi
-                    BILAN="$VERT$G_OK réussie$(pluriel "$G_OK")$C0"
-                    (( G_KO ))   && BILAN+=" · $ROUGE$G_KO échec$(pluriel "$G_KO")$C0"
-                    (( G_INT ))  && BILAN+=" · $JAUNE$G_INT interrompue$(pluriel "$G_INT")$C0"
+                    BILAN="$C_OK$G_OK réussie$(pluriel "$G_OK")$C0"
+                    (( G_KO ))   && BILAN+=" · $C_KO$G_KO échec$(pluriel "$G_KO")$C0"
+                    (( G_INT ))  && BILAN+=" · $C_WARN$G_INT interrompue$(pluriel "$G_INT")$C0"
                     (( G_SKIP )) && BILAN+=" · $ESTOMPE$G_SKIP passée$(pluriel "$G_SKIP")$C0"
                     printf '\n  %s└─%s  %s · %s%s%s\n' "$ESTOMPE" "$C0" "$BILAN" "$ESTOMPE" "$(duree "$G_DUREE")" "$C0"
                 elif (( G_INT )); then
