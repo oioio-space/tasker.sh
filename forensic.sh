@@ -435,7 +435,7 @@ while (( $# > 0 )); do
         --etapes|--plan) LISTER_ETAPES="true"; shift ;;
         --vars)         LISTER_VARS="true";   shift ;;
         --reprendre)    REPRENDRE="true";     shift ;;
-        --demo)         CONF="$(dirname "${BASH_SOURCE[0]}")/exemples/demo.conf"; shift ;;
+        --demo)         CONF="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/exemples/demo.conf"; shift ;;
         --sans-couleur) COULEUR="non";        shift ;;
         --var)          exige_valeur "$1" "${2:-}"; PRESETS+=("$2");       shift 2 ;;
         --var=*)        PRESETS+=("${1#*=}");                              shift ;;
@@ -483,6 +483,7 @@ if [[ -n "$FILTRE_ETAPES" ]]; then
     IFS=, read -r -a _morceaux <<< "$FILTRE_ETAPES"
     for m in "${_morceaux[@]}"; do
         [[ "$m" =~ ^[0-9]+(-[0-9]+)?$ ]] || { erreur "--seulement : « $m » n'est ni un numéro ni un intervalle"; exit 1; }
+        [[ "$m" != *-* ]] || (( ${m%-*} <= ${m#*-} )) || { erreur "--seulement : intervalle inversé « $m »"; exit 1; }
     done
 fi
 
@@ -495,7 +496,20 @@ for v in SUJET PREFIX DIR_LOGS; do
 done
 [[ "$PREFIX" != */* ]] || { erreur "PREFIX ne peut pas contenir de / : $PREFIX"; exit 1; }
 
-definir_commandes
+# Un fichier -c peut écrire COMMANDES et LISTES directement, sans passer
+# par definir_commandes : on les prend tels quels. Sinon on appelle la
+# fonction — d'abord dans un sous-shell, pour transformer un
+# « DIR_BODY: unbound variable » en explication.
+if declare -p COMMANDES >/dev/null 2>&1; then
+    declare -p LISTES >/dev/null 2>&1 || LISTES=()
+else
+    if ! _err="$( (definir_commandes) 2>&1 )"; then
+        erreur "impossible de construire COMMANDES : ${_err##*: }"
+        info "une variable utilisée en section 2 ou 3 n'existe pas — votre fichier -c redéfinit calculer_variables sans definir_commandes ?"
+        exit 1
+    fi
+    definir_commandes
+fi
 TOTAL=${#COMMANDES[@]}
 
 
@@ -518,6 +532,18 @@ TTY_ETAT=""
 restaurer_terminal() {
     [[ -n "$TTY_ETAT" ]] && stty "$TTY_ETAT" < /dev/tty 2>/dev/null
     return 0
+}
+
+# Les commandes s'exécutent DANS ce shell (c'est ce qui permet d'appeler
+# vos fonctions). Une commande qui fait « set -e », change IFS ou retire
+# un trap casserait donc la suite : après chaque commande, on remet ce
+# dont la mécanique dépend.
+retablir_shell() {
+    set +e -u -o pipefail
+    IFS=$' \t\n'
+    trap gerer_int INT
+    trap au_revoir EXIT
+    restaurer_terminal
 }
 
 # Ctrl-C pendant une commande : on interrompt la commande, INTERROMPU=1.
@@ -647,7 +673,7 @@ generer_liste() {
         journal "LISTE $nom : $gen"
         [[ -t 1 ]] && printf '  %s… lecture de la liste « %s »%s' "$ESTOMPE" "$nom" "$C0"
         sortie="$(eval "$gen" 2>> "$LOG")"; rc=$?
-        restaurer_terminal
+        retablir_shell
         [[ -t 1 ]] && printf '\r%s\r' "$(repeter ' ' $(( ${#nom} + 30 )))"
         if (( rc != 0 && ${#sortie} == 0 )); then erreur "la liste « $nom » a échoué (code $rc) — voir $LOG"; return 1; fi
         CACHE_LISTE["$gen"]="${sortie:-$'\001'}"
@@ -879,7 +905,7 @@ executer_une() {
     else
         eval "$1"; rc=$?
     fi
-    restaurer_terminal
+    retablir_shell
     DUREE_S=$(( SECONDS - debut )); journal "code $rc en $(duree "$DUREE_S")"
     return "$rc"
 }
@@ -1035,7 +1061,9 @@ ecrire_rapport() {
     local f="$DIR_LOGS/${PREFIX}_rapport.txt" l num e d t ligne
     {
         printf 'Rapport %s\n  sujet      %s\n' "$NOM_SCRIPT" "$SUJET"
-        for l in ${DETAILS[@]+"${DETAILS[@]}"}; do printf '  %-10s %s\n' "${l%%=*}" "${l#*=}"; done
+        for l in ${DETAILS[@]+"${DETAILS[@]}"}; do
+            if [[ "$l" == *=* ]]; then printf '  %-10s %s\n' "${l%%=*}" "${l#*=}"; else printf '  %s\n' "$l"; fi
+        done
         printf '  par        %s%s sur %s\n' "$OPERATEUR" "$( (( EUID == 0 )) && printf ' (root)')" "$(hostname 2>/dev/null || printf '?')"
         printf '  debut      %s\n  fin        %s\n  duree      %s\n\n' "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$(duree "$SECONDS")"
         for l in "${RECAP[@]}"; do
@@ -1149,7 +1177,9 @@ marquer_faite() { [[ "$SIMULATION" == "true" ]] || printf '%s\n' "$1" >> "$ETAT"
 printf '\n'; regle "$GRAS"
 printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$CYAN" "$SUJET" "$C0"
 regle "$GRAS"
-for l in ${DETAILS[@]+"${DETAILS[@]}"}; do entete "${l%%=*}" "${l#*=}"; done
+for l in ${DETAILS[@]+"${DETAILS[@]}"}; do
+    if [[ "$l" == *=* ]]; then entete "${l%%=*}" "${l#*=}"; else info "$l"; fi
+done
 entete "sortie"   "${DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
 entete "par"      "$OPERATEUR$( (( EUID == 0 )) && printf ' (root)')"
 entete "journal"  "$LOG"
@@ -1188,6 +1218,7 @@ for entree in "${COMMANDES[@]}"; do
 
     while true; do
         if (( BESOIN_EXP )); then
+            ETAPE_PASSEE=0          # un « p » donné pendant une édition annulée ne compte plus
             expanser "$CMDBASE"; RCEXP=$?; BESOIN_EXP=0
             if (( ETAPE_PASSEE )); then
                 RECAP+=("$NUM|skip|passee|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); journal "PASSÉE : $TITRE"; break
@@ -1215,8 +1246,8 @@ for entree in "${COMMANDES[@]}"; do
             fi
         fi
 
-        N=${#EXP_CMDS[@]}; REPETEE=0
-        [[ $N -gt 1 || -n "${EXP_LABELS[0]}" ]] && REPETEE=1
+        NB_ITER=${#EXP_CMDS[@]}; REPETEE=0
+        [[ $NB_ITER -gt 1 || -n "${EXP_LABELS[0]}" ]] && REPETEE=1
         if (( REPETEE )); then resume_iterations; else afficher_commande "${EXP_CMDS[0]}"; fi
         (( F_LOG ))     && info "la sortie est recopiée dans le journal"
         (( F_STOP ))    && info "un échec ici arrête le script"
@@ -1236,11 +1267,11 @@ for entree in "${COMMANDES[@]}"; do
                 (( REPETEE && ${#ITERS[@]} > 0 )) && ENFANTS["$NUM"]="$(printf '%s\x01' "${ITERS[@]}")"
 
                 if (( REPETEE )); then
-                    if [[ "$SIMULATION" == "true" ]]; then RECAP+=("$NUM|sim|$N iter|$TITRE")
+                    if [[ "$SIMULATION" == "true" ]]; then RECAP+=("$NUM|sim|$NB_ITER iter|$TITRE")
                     elif (( G_KO == 0 && G_INT == 0 && G_SKIP == 0 )); then
-                        RECAP+=("$NUM|ok|$G_OK/$N$( (( EXP_TRONQUE )) && printf ' tronq') $(duree "$G_DUREE")|$TITRE"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
-                    elif (( G_KO > 0 )); then RECAP+=("$NUM|ko|$G_KO KO /$N|$TITRE"); NB_KO=$(( NB_KO + 1 ))
-                    else RECAP+=("$NUM|int|$G_OK/$N ok|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); fi
+                        RECAP+=("$NUM|ok|$G_OK/$NB_ITER$( (( EXP_TRONQUE )) && printf ' tronq') $(duree "$G_DUREE")|$TITRE"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
+                    elif (( G_KO > 0 )); then RECAP+=("$NUM|ko|$G_KO KO /$NB_ITER|$TITRE"); NB_KO=$(( NB_KO + 1 ))
+                    else RECAP+=("$NUM|int|$G_OK/$NB_ITER ok|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); fi
                     BILAN="$C_OK$G_OK réussie$(pluriel "$G_OK")$C0"
                     (( G_KO ))   && BILAN+=" · $C_KO$G_KO échec$(pluriel "$G_KO")$C0"
                     (( G_INT ))  && BILAN+=" · $C_WARN$G_INT interrompue$(pluriel "$G_INT")$C0"
