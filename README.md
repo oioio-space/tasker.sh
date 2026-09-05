@@ -46,7 +46,7 @@ exemples exécutables.
 ```bash
 chmod +x forensic.sh
 ./forensic.sh -h              # l'aide complète
-./forensic.sh --etapes        # le plan, sans rien exécuter
+./forensic.sh --plan        # le plan, sans rien exécuter
 ./forensic.sh --vars          # les valeurs qui vont être demandées
 ./forensic.sh -n              # simulation
 ./forensic.sh                 # pour de vrai
@@ -215,7 +215,7 @@ Un garde-fou (`MAX_ITERATIONS`, section 1) évite de lancer trois mille commande
 par inadvertance, et le nombre d'itérations est toujours annoncé **avant**
 validation.
 
-Pour figer une liste sans l'interroger : `--liste home=41-144-1,52-144-1`.
+Pour figer une liste sans l'interroger : `--list home=41-144-1,52-144-1`.
 
 ---
 
@@ -285,14 +285,14 @@ Après un `a`, `p` et `q` redeviennent des valeurs ordinaires.
 ## Reprendre, filtrer, rejouer
 
 ```bash
-./forensic.sh --reprendre         # saute les étapes déjà réussies
-./forensic.sh --seulement 2,5-7   # ne joue que celles-là
-./forensic.sh --depuis 4          # repart de l'étape 4
-./forensic.sh -v                  # confirme chaque étape, même les false
+./forensic.sh --resume         # saute les étapes déjà réussies
+./forensic.sh --only 2,5-7   # ne joue que celles-là
+./forensic.sh --from 4          # repart de l'étape 4
+./forensic.sh -a                  # confirme chaque étape, même les false
 ./forensic.sh -y                  # ne demande jamais rien
 ```
 
-`--reprendre` s'appuie sur l'empreinte du titre **et** de la commande : modifiez
+`--resume` s'appuie sur l'empreinte du titre **et** de la commande : modifiez
 la commande, l'étape sera rejouée.
 
 Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
@@ -309,7 +309,7 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 └── logs/
     ├── <prefixe>_script.log     chaque commande, son code, sa durée
     ├── <prefixe>_rapport.txt    le récapitulatif, poste et analyste inclus
-    └── <prefixe>_etat.txt       les étapes réussies (pour --reprendre)
+    └── <prefixe>_etat.txt       les étapes réussies (pour --resume)
 ```
 
 Toute variable nommée `DIR_quelquechose` est vue comme un dossier de travail :

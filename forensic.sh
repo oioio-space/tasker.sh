@@ -22,7 +22,7 @@ OS="windows"                   # windows ou linux
 BASE="/cases"                  # racine où tout est écrit
 OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # SUDO_USER : la vraie personne sous sudo
 TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ (un nom de zone, jamais UTC+1)
-TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -v)
+TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -a)
 MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
 REQUIS=(mmls fls ils icat mactime testdisk photorec)   # absents = avertissement
 
@@ -404,48 +404,37 @@ aide() {
     cat <<'FIN_AIDE'
 forensic.sh — enchaîne des commandes, validées une à une.
 
-  ./forensic.sh                  lance les étapes
-  ./forensic.sh --demo           essai dans un bac à sable, sans image disque
-  ./forensic.sh -c poste.conf    variables lues dans un fichier
-  ./forensic.sh --etapes         montre le plan sans rien lancer
-  ./forensic.sh -n               simulation : tout est affiché, rien n'est exécuté
+Usage : ./forensic.sh [options]
 
-À chaque étape      Entrée exécuter · p passer · e éditer · r ressaisir · q quitter
-Étape répétée       u une par une · l lister les itérations
-Question posée      1 2 3 choisir · a autre valeur · p passer · q quitter
-Ctrl-C              pendant une commande : l'interrompt, le script continue
-                    pendant une question : arrête le script proprement
+  -c, --config FICHIER     variables lues dans un fichier
+  -s, --set NOM=valeur     fixer une variable de la section 1
+  -D, --var nom=valeur     répondre d'avance à une question [[nom]]
+      --list nom=a,b       figer une liste {{nom}}
+      --vars               montrer les questions et listes attendues
 
-sudo                une étape peut en contenir : le mot de passe est demandé
-                    sur le terminal, au moment où la commande part. Avec -y,
-                    personne ne répondrait : faites « sudo -v » avant.
-                    Sous sudo, le rapport note qui a lancé (SUDO_USER) et
-                    les fichiers écrits appartiennent à root.
+  -l, --plan               montrer le plan, sans rien lancer
+  -n, --dry-run            tout afficher, ne rien exécuter
+  -o, --only 2,5-7         ne jouer que ces étapes
+  -f, --from 4             partir de l'étape 4
+  -r, --resume             sauter les étapes déjà réussies
 
-Dans le script      1. variables    ce qui change d'une exécution à l'autre
-                    2. commandes    "Titre|true|commande"   true = demander avant
-                    3. listes       "nom|commande"          une valeur par ligne
-                    4. chemins      où écrire, quoi vérifier au départ
-                    5. fonctions    vos traitements
-    [[nom]]   une valeur demandée une fois, réutilisée dans toutes les étapes.
-              S'il existe une liste du même nom, la question devient un menu.
-    {{nom}}   l'étape est rejouée pour chaque valeur de la liste « nom ».
-              Une liste peut en utiliser une autre : les boucles s'emboîtent.
-              Ainsi la liste « bashrc » cherche .bashrc dans {{home}} :
-              écrire '{{bashrc}}' seul parcourt le .bashrc de chaque
-              utilisateur, et saute ceux qui n'en ont pas.
+  -a, --ask                confirmer chaque étape, même les « false »
+  -y, --yes                ne rien demander (sudo ? faites « sudo -v » avant)
+      --demo               essai dans un bac à sable, sans rien installer
+      --color auto|always|never    --no-color
+  -h, --help
 
-Options             -v tout confirmer         -y ne rien demander
-                    --seulement 2,5-7         --depuis 4        --reprendre
-                    --var nom=valeur          --liste nom=a,b   --vars
-                    --set NOM=valeur  (toute variable de la section 1)
-                    --sans-couleur            --couleur oui|non|auto
+Pendant l'exécution
+  Entrée exécuter · p passer · e éditer · r ressaisir · q quitter
+  étape répétée    u une par une · l lister les itérations
+  question posée   1 2 3 choisir · a autre valeur · p passer · q quitter
+  Ctrl-C           interrompt la commande ; à une question, arrête le script
+  ○ à faire  ◐ en cours  ● réussie  ✗ échec  ⊘ passée  ⊗ interrompue  ◌ simulée
 
-Marques             ○ à faire  ◐ en cours  ● réussie  ✗ échec
-                    ⊘ passée   ⊗ interrompue  ◌ simulée
-
-Sorties             <base>/<salle>/<os>/<pc>/logs/  journal, rapport, état (--reprendre)
-Code de sortie      0 si tout est passé, 1 s'il reste un échec.
+Dans le script  1 variables · 2 commandes · 3 listes · 4 chemins · 5 fonctions
+  "Titre|true|commande"   true = demander avant, false = lancer direct
+  [[nom]]  une valeur demandée une fois     {{nom}}  l'étape rejouée par valeur
+  Exemples et détails : TUTORIEL.md          Code de sortie : 1 s'il reste un échec
 FIN_AIDE
 }
 
@@ -458,35 +447,53 @@ SANS_QUESTION="false"; REPRENDRE="false"; FILTRE_ETAPES=""; DEPUIS=0
 
 exige_valeur() { [[ -n "${2:-}" ]] || { printf '%s attend une valeur.\n' "$1" >&2; exit 1; }; }
 
+# Options courtes à la manière de getopt : -yn vaut -y -n, -o3 vaut -o 3,
+# -cFICHIER vaut -c FICHIER.
+ARGS=()
+for a in "$@"; do
+    if [[ "$a" =~ ^-[a-zA-Z].+$ ]]; then
+        reste="${a#-}"
+        while [[ -n "$reste" ]]; do
+            l="${reste:0:1}"; reste="${reste:1}"
+            case "$l" in
+                c|s|D|o|f) ARGS+=("-$l"); [[ -n "$reste" ]] && ARGS+=("$reste"); reste="" ;;
+                *)         ARGS+=("-$l") ;;
+            esac
+        done
+    else ARGS+=("$a"); fi
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
 while (( $# > 0 )); do
     case "$1" in
-        -v|--valider)   TOUT_VALIDER="true";  shift ;;
-        -y|--oui)       SANS_QUESTION="true"; shift ;;
-        -n|--simulation|--dry-run) SIMULATION="true"; shift ;;
-        --etapes|--plan) LISTER_ETAPES="true"; shift ;;
-        --vars)         LISTER_VARS="true";   shift ;;
-        --reprendre)    REPRENDRE="true";     shift ;;
-        --demo)         CONF="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/exemples/demo.conf"; shift ;;
-        --sans-couleur) COULEUR="non";        shift ;;
-        --var)          exige_valeur "$1" "${2:-}"; PRESETS+=("$2");       shift 2 ;;
-        --var=*)        PRESETS+=("${1#*=}");                              shift ;;
-        --liste)        exige_valeur "$1" "${2:-}"; PRESETS_LISTE+=("$2"); shift 2 ;;
-        --liste=*)      PRESETS_LISTE+=("${1#*=}");                        shift ;;
-        --seulement)    exige_valeur "$1" "${2:-}"; FILTRE_ETAPES="$2";    shift 2 ;;
-        --seulement=*)  FILTRE_ETAPES="${1#*=}";                           shift ;;
-        --depuis)       exige_valeur "$1" "${2:-}"; DEPUIS="$2";           shift 2 ;;
-        --depuis=*)     DEPUIS="${1#*=}";                                  shift ;;
-        -c|--conf)      exige_valeur "$1" "${2:-}"; CONF="$2";             shift 2 ;;
-        --conf=*)       CONF="${1#*=}";                                    shift ;;
-        --couleur)      exige_valeur "$1" "${2:-}"; COULEUR="$2";          shift 2 ;;
-        --couleur=*)    COULEUR="${1#*=}";                                 shift ;;
-        --set)          exige_valeur "$1" "${2:-}"; SETS+=("$2");           shift 2 ;;
-        --set=*)        SETS+=("${1#*=}");                                 shift ;;
-        -h|--help|--aide) aide; exit 0 ;;
-        *) printf 'Argument inconnu : %s   (-h pour aide)\n' "$1" >&2; exit 1 ;;
+        -a|--ask)          TOUT_VALIDER="true";  shift ;;
+        -y|--yes)          SANS_QUESTION="true"; shift ;;
+        -n|--dry-run)      SIMULATION="true";    shift ;;
+        -l|--plan)         LISTER_ETAPES="true"; shift ;;
+        -r|--resume)       REPRENDRE="true";     shift ;;
+        --vars)            LISTER_VARS="true";   shift ;;
+        --demo)            CONF="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/exemples/demo.conf"; shift ;;
+        --no-color)        COULEUR="non";        shift ;;
+        -D|--var)          exige_valeur "$1" "${2:-}"; PRESETS+=("$2");       shift 2 ;;
+        --var=*)           PRESETS+=("${1#*=}");                              shift ;;
+        --list)            exige_valeur "$1" "${2:-}"; PRESETS_LISTE+=("$2"); shift 2 ;;
+        --list=*)          PRESETS_LISTE+=("${1#*=}");                        shift ;;
+        -s|--set)          exige_valeur "$1" "${2:-}"; SETS+=("$2");          shift 2 ;;
+        --set=*)           SETS+=("${1#*=}");                                 shift ;;
+        -o|--only)         exige_valeur "$1" "${2:-}"; FILTRE_ETAPES="$2";    shift 2 ;;
+        --only=*)          FILTRE_ETAPES="${1#*=}";                           shift ;;
+        -f|--from)         exige_valeur "$1" "${2:-}"; DEPUIS="$2";           shift 2 ;;
+        --from=*)          DEPUIS="${1#*=}";                                  shift ;;
+        -c|--config)       exige_valeur "$1" "${2:-}"; CONF="$2";             shift 2 ;;
+        --config=*)        CONF="${1#*=}";                                    shift ;;
+        --color)           exige_valeur "$1" "${2:-}"; COULEUR="$2";          shift 2 ;;
+        --color=*)         COULEUR="${1#*=}";                                 shift ;;
+        -h|--help)         aide; exit 0 ;;
+        *) printf 'Option inconnue : %s   (-h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
     esac
 done
-case "$COULEUR" in oui|non|auto) ;; *) printf -- '--couleur attend oui, non ou auto.\n' >&2; exit 1 ;; esac
+case "$COULEUR" in always|yes|oui) COULEUR="oui" ;; never|no|non) COULEUR="non" ;; auto) ;;
+    *) printf -- '--color attend auto, always ou never.\n' >&2; exit 1 ;; esac
 init_affichage
 
 # Le fichier -c est du shell : il peut fixer les variables, mais aussi
@@ -502,19 +509,20 @@ fi
 for e in ${SETS[@]+"${SETS[@]}"}; do
     k="${e%%=*}"
     [[ "$e" == *=* && "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { erreur "--set attend NOM=valeur : $e"; exit 1; }
-    declare -p "$k" >/dev/null 2>&1 || { erreur "--set : aucune variable « $k » en section 1"; exit 1; }
+    decl="$(declare -p "$k" 2>/dev/null)" || { erreur "--set : aucune variable « $k » en section 1"; exit 1; }
+    [[ "$decl" != "declare -a"* && "$decl" != "declare -A"* ]] || { erreur "--set : « $k » est un tableau, modifiez-le dans le fichier -c"; exit 1; }
     printf -v "$k" '%s' "${e#*=}" 2>/dev/null \
         || { erreur "--set : « $k » ne peut pas être modifiée (lecture seule ?)"; exit 1; }
 done
 case "${TOUT_VALIDER,,}" in true|oui|1) TOUT_VALIDER="true" ;; *) TOUT_VALIDER="false" ;; esac
 [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] && (( MAX_ITERATIONS >= 1 )) \
     || { erreur "MAX_ITERATIONS doit être un entier positif : $MAX_ITERATIONS"; exit 1; }
-[[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--depuis attend un numéro d'étape"; exit 1; }
+[[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--from attend un numéro d'étape"; exit 1; }
 if [[ -n "$FILTRE_ETAPES" ]]; then
     IFS=, read -r -a _morceaux <<< "$FILTRE_ETAPES"
     for m in "${_morceaux[@]}"; do
-        [[ "$m" =~ ^[0-9]+(-[0-9]+)?$ ]] || { erreur "--seulement : « $m » n'est ni un numéro ni un intervalle"; exit 1; }
-        [[ "$m" != *-* ]] || (( ${m%-*} <= ${m#*-} )) || { erreur "--seulement : intervalle inversé « $m »"; exit 1; }
+        [[ "$m" =~ ^[0-9]+(-[0-9]+)?$ ]] || { erreur "--only : « $m » n'est ni un numéro ni un intervalle"; exit 1; }
+        [[ "$m" != *-* ]] || (( ${m%-*} <= ${m#*-} )) || { erreur "--only : intervalle inversé « $m »"; exit 1; }
     done
 fi
 
@@ -637,7 +645,7 @@ RE_LISTE='\{\{([a-zA-Z0-9_]+)\}\}'
 declare -A REPONSES=()      # [[nom]] -> valeur
 declare -A GENERATEUR=()    # liste   -> commande
 declare -A CACHE_LISTE=()   # commande résolue -> lignes
-declare -A LISTE_FIGEE=()   # --liste nom=a,b
+declare -A LISTE_FIGEE=()   # --list nom=a,b
 declare -A BINDINGS=()      # {{nom}} liés dans la boucle en cours (échappés)
 PH_SIMPLES=(); USAGE_SIMPLES=(); PH_LISTES=(); USAGE_LISTES=()
 ETAPE_PASSEE=0              # mis à 1 quand l'utilisateur répond « p » à une question
@@ -1139,7 +1147,7 @@ done
 charger_listes
 scanner_placeholders
 
-etape_retenue() {   # <n> : passe --seulement et --depuis ?
+etape_retenue() {   # <n> : passe --only et --from ?
     local m
     (( DEPUIS > 0 && $1 < DEPUIS )) && return 1
     [[ -n "$FILTRE_ETAPES" ]] || return 0
@@ -1160,7 +1168,7 @@ if [[ "$LISTER_VARS" == "true" ]]; then
     for i in ${PH_LISTES[@]+"${!PH_LISTES[@]}"}; do
         printf '  %s{{%s}}%s  %s%s %s%s\n         %s\n' "$MAGENTA" "${PH_LISTES[$i]}" "$C0" "$ESTOMPE" "$(etapes_mot "${USAGE_LISTES[$i]}")" "${USAGE_LISTES[$i]}" "$C0" "${GENERATEUR[${PH_LISTES[$i]}]:-(figée)}"
     done
-    printf '\n  %s--var nom=valeur fournit une [[valeur]], --liste nom=a,b fige une {{liste}}%s\n\n' "$ESTOMPE" "$C0"
+    printf '\n  %s--var nom=valeur répond à une [[question]], --list nom=a,b fige une {{liste}}%s\n\n' "$ESTOMPE" "$C0"
     exit 0
 fi
 
@@ -1174,7 +1182,7 @@ for p in ${PRESETS[@]+"${PRESETS[@]}"}; do
 done
 for p in ${PRESETS_LISTE[@]+"${PRESETS_LISTE[@]}"}; do
     nom="${p%%=*}"; val="${p#*=}"
-    [[ "$p" == *=* && "$nom" =~ ^[a-zA-Z0-9_]+$ && -n "$val" ]] || { erreur "--liste attend nom=v1,v2 : $p"; exit 1; }
+    [[ "$p" == *=* && "$nom" =~ ^[a-zA-Z0-9_]+$ && -n "$val" ]] || { erreur "--list attend nom=v1,v2 : $p"; exit 1; }
     connu_dans "$nom" ${PH_LISTES[@]+"${PH_LISTES[@]}"} || { erreur "aucune liste « $nom » utilisée (voir --vars)"; exit 1; }
     LISTE_FIGEE["$nom"]="${val//,/$'\n'}"
 done
@@ -1228,12 +1236,12 @@ entete "sortie"   "${DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s c
 entete "par"      "$OPERATEUR$( (( EUID == 0 )) && printf ' (root)')"
 entete "journal"  "$LOG"
 [[ -n "$CONF" ]]                 && entete "config"     "$CONF"
-[[ "$SIMULATION" == "true" ]]    && entete "simulation" "rien ne sera exécuté"
+[[ "$SIMULATION" == "true" ]]    && entete "dry-run"    "rien ne sera exécuté"
 [[ "$SANS_QUESTION" == "true" ]] && entete "-y"         "aucune question ne sera posée"
-[[ "$TOUT_VALIDER" == "true" ]]  && entete "-v"         "chaque étape sera confirmée"
-[[ "$REPRENDRE" == "true" ]]     && entete "reprise"    "les étapes déjà réussies seront sautées"
-[[ -n "$FILTRE_ETAPES" ]]        && entete "filtre"     "étapes $FILTRE_ETAPES"
-(( DEPUIS > 0 ))                 && entete "depuis"     "$DEPUIS"
+[[ "$TOUT_VALIDER" == "true" ]]  && entete "-a"         "chaque étape sera confirmée"
+[[ "$REPRENDRE" == "true" ]]     && entete "resume"     "les étapes déjà réussies seront sautées"
+[[ -n "$FILTRE_ETAPES" ]]        && entete "only"       "étapes $FILTRE_ETAPES"
+(( DEPUIS > 0 ))                 && entete "from"       "étape $DEPUIS"
 [[ -n "$INTRO" ]] && printf '\n%s\n' "$INTRO"
 journal "=== démarrage — $SUJET — par $OPERATEUR"
 plan_initial
@@ -1248,11 +1256,11 @@ for entree in "${COMMANDES[@]}"; do
     etape_retenue "$NUM" || { NB_FILTREES=$(( NB_FILTREES + 1 )); continue; }
 
     # Deux étapes identiques ont deux clés : sinon l'échec de la seconde
-    # serait masqué par la réussite de la première au prochain --reprendre.
+    # serait masqué par la réussite de la première au prochain --resume.
     OCC=0; for e in "${COMMANDES[@]:0:NUM-1}"; do [[ "$e" == "$entree" ]] && OCC=$(( OCC + 1 )); done
     CLE="$(empreinte "$TITRE|$BRUTE|$OCC")"
     if deja_faite "$CLE"; then
-        titre_etape "$NUM" "$TOTAL" "$TITRE"; info "déjà réussie précédemment — sautée (--reprendre)"
+        titre_etape "$NUM" "$TOTAL" "$TITRE"; info "déjà réussie précédemment — sautée (--resume)"
         RECAP+=("$NUM|skip|reprise|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); continue
     fi
 
@@ -1276,7 +1284,7 @@ for entree in "${COMMANDES[@]}"; do
             fi
             if (( RCEXP != 0 || ${#EXP_CMDS[@]} == 0 )); then
                 erreur "les listes de cette étape n'ont rien donné : rien à exécuter."
-                info "vérifiez la commande de liste (--vars), ou figez-la avec --liste"
+                info "vérifiez la commande de liste (--vars), ou figez-la avec --list"
                 RECAP+=("$NUM|ko|liste vide|$TITRE"); NB_KO=$(( NB_KO + 1 ))
                 if [[ "$SANS_QUESTION" != "true" ]]; then
                     menu "Entrée=passer à la suite" "r=ressaisir les valeurs" "q=quitter"
@@ -1350,9 +1358,9 @@ for entree in "${COMMANDES[@]}"; do
 done
 
 if (( NB_FILTREES == TOTAL )); then
-    attention "aucune étape retenue : --seulement / --depuis les écartent toutes"
+    attention "aucune étape retenue : --only / --from les écartent toutes"
 elif (( NB_FILTREES > 0 )); then
-    info "$NB_FILTREES étape(s) écartée(s) par --seulement / --depuis"
+    info "$NB_FILTREES étape(s) écartée(s) par --only / --from"
 fi
 (( NB_KO > 0 )) && exit 1
 exit 0

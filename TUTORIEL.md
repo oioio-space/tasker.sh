@@ -309,7 +309,7 @@ Deux `{{listes}}` écrites côte à côte s'emboîtent **de gauche à droite**.
 Essayez-le tout de suite :
 
 ```bash
-./forensic.sh --demo --seulement 5
+./forensic.sh --demo --only 5
 ```
 
 ---
@@ -451,14 +451,14 @@ Deux détails qui se paient cher si on les découvre en séance :
 ## 12. Reprendre après un incident
 
 ```bash
-./forensic.sh --reprendre         # saute les étapes déjà réussies
-./forensic.sh --seulement 2,5-7   # ne joue que celles-là
-./forensic.sh --depuis 4          # repart de l'étape 4
+./forensic.sh --resume         # saute les étapes déjà réussies
+./forensic.sh --only 2,5-7   # ne joue que celles-là
+./forensic.sh --from 4          # repart de l'étape 4
 ./forensic.sh -n                  # simulation : montre tout, n'exécute rien
-./forensic.sh --etapes            # le plan, sans rien exécuter
+./forensic.sh --plan            # le plan, sans rien exécuter
 ```
 
-`--reprendre` s'appuie sur l'empreinte du **titre et de la commande** :
+`--resume` s'appuie sur l'empreinte du **titre et de la commande** :
 si vous modifiez la commande, l'étape est rejouée.
 
 Code de sortie : `0` si tout est passé, `1` s'il reste un échec — de quoi
@@ -519,7 +519,7 @@ TZ_MACTIME="Europe/Paris"
 |---|---|
 | `u: unbound variable` au lancement | un `$` non échappé dans le tableau (§3) |
 | `les listes n'ont rien donné` | la commande de liste ne renvoie rien : testez-la seule dans un terminal |
-| l'étape répétée n'a qu'une itération | la liste ne renvoie qu'une ligne, ou `--liste` la fige |
+| l'étape répétée n'a qu'une itération | la liste ne renvoie qu'une ligne, ou `--list` la fige |
 | code 141 | un `head` derrière un `tee` |
 | une valeur avec un espace casse la commande | un `{{nom}}` non entouré d'apostrophes |
 | `ERREUR de format` | un `\|` dans le titre ou dans le champ validation |
