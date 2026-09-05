@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 #
-# forensic.sh — enchaîne des commandes forensiques, validées une à une.
+# forensic.sh — enchaîne des commandes, validées une à une.
+#     ./forensic.sh -h       aide          ./forensic.sh --demo   essai sans risque
 #
-#     ./forensic.sh -h        aide
-#     ./forensic.sh --demo    essai dans un bac à sable, sans image disque
-#
-#   1. VARIABLES    ce qui change à chaque analyse
-#   2. COMMANDES    les étapes, dans l'ordre
-#   3. LISTES       d'où viennent les [[valeurs]] et les {{listes}}
-#   4. FONCTIONS    vos traitements, appelés depuis 2 et 3
-#   5. MÉCANIQUE    rien à modifier
+#   1 VARIABLES · 2 COMMANDES · 3 LISTES · 4 CHEMINS · 5 FONCTIONS · 6 MÉCANIQUE
+#   Tout ce qui se modifie est dans les cinq premières. Voir aussi TUTORIEL.md.
 #
 set -uo pipefail
 if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}" -lt 43 ]; then
@@ -18,11 +13,7 @@ fi
 
 
 # =====================================================================
-# 1. VARIABLES
-#    Ce qui change d'une exécution à l'autre. Les noms sont libres : le
-#    script ne connaît que ceux de calculer_variables, en bas de section.
-#    Peuvent aussi venir d'un fichier (-c fichier.conf) ou de la ligne de
-#    commande (--set NOM=valeur).
+# 1. VARIABLES     aussi : -c fichier.conf, ou --set NOM=valeur
 # =====================================================================
 IMAGE="/images/pc07.dd"        # image disque à analyser
 PC="PC07"                      # poste
@@ -30,13 +21,82 @@ SALLE="B204"                   # salle
 OS="windows"                   # windows ou linux
 BASE="/cases"                  # racine où tout est écrit
 OPERATEUR="${USER:-inconnu}"   # noté dans le journal et le rapport
-TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ, pour mactime (un nom de zone, jamais UTC+1)
+TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ (un nom de zone, jamais UTC+1)
 TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -v)
 MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
 REQUIS=(mmls fls ils icat mactime testdisk photorec)   # absents = avertissement
 
-# Valeurs dérivées, recalculées après -c et --set. Quatre sont attendues
-# par la mécanique, le reste vous appartient :
+
+# =====================================================================
+# 2. COMMANDES     "Titre|validation|commande"
+#
+#   validation  true = demander avant de lancer, false = lancer direct ;
+#               puis, séparées par des virgules : log (sortie au journal),
+#               continu (un échec n'arrête rien), stop (un échec arrête tout)
+#   $VAR        remplacée maintenant ; \$ pour qu'elle survive jusqu'à
+#               l'exécution :  for f in *; do echo \$f; done
+#   [[nom]]     une valeur demandée une fois, réutilisée partout
+#   {{nom}}     l'étape est rejouée pour chaque valeur de la liste « nom »,
+#               toujours entre apostrophes : '{{nom}}'
+#   Pas de | dans le titre ; ceux de la commande sont libres.
+#   Le tout est dans une fonction pour que $IMAGE etc. suivent -c et --set.
+# =====================================================================
+definir_commandes() {
+
+COMMANDES=(
+"Table des partitions|true,log|mmls '$IMAGE'"
+"Fichiers alloués et supprimés|true|fls -r -p -m / -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_fls.body'"
+"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_ils.body'"
+"Fusion des body files|false|fusionner_body '$DIR_BODY/${PREFIX}_full.body' '$DIR_BODY/${PREFIX}_fls.body' '$DIR_BODY/${PREFIX}_ils.body'"
+"Timeline|true|mactime -b '$DIR_BODY/${PREFIX}_full.body' -z '$TZ_MACTIME' -d -y > '$DIR_TIMELINE/${PREFIX}_timeline.csv'"
+"Inventaire par utilisateur|true|inventorier_home '$IMAGE' '[[offset]]' '{{home}}' '{{home_libelle}}' '$DIR_BODY'"
+"Liste des partitions (testdisk)|true,log|testdisk /list '$IMAGE'"
+"Carving|true|photorec /log /logname '$DIR_LOGS/${PREFIX}_photorec.log' /d '$DIR_CARVING/recup_' /cmd '$IMAGE' [[index_testdisk]],fileopt,everything,enable,freespace,search"
+
+# Un fichier de chaque profil : {{fichier}} dépend de {{home}}, la boucle
+# sur les profils se déclenche toute seule. Vérifiez le nombre d'itérations.
+#"Hachage fichier par fichier|true|hacher_fichier '$IMAGE' '[[offset]]' '{{fichier}}' '{{fichier_libelle}}' >> '$DIR_LOGS/${PREFIX}_hashes.txt'"
+
+# Le .bashrc de chaque utilisateur (voir la liste « bashrc », section 3).
+#"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
+)
+
+
+# =====================================================================
+# 3. LISTES        "nom|commande qui écrit une valeur par ligne"
+#
+#   [[nom]] dans une commande -> menu numéroté, une valeur choisie
+#   {{nom}} dans une commande -> l'étape est rejouée pour chaque valeur
+#
+#   Une ligne  valeur<TAB>libellé  envoie la valeur dans la commande et
+#   affiche le libellé, disponible en {{nom_libelle}}.
+#
+#   UNE LISTE PEUT EN APPELER UNE AUTRE, et c'est tout le mécanisme :
+#   « fichier » contient {{home}}, donc elle est régénérée pour chaque
+#   home — écrire {{fichier}} seul parcourt les fichiers de tous les
+#   profils. Une liste qui ne renvoie rien ne produit aucune itération,
+#   ce n'est pas une erreur. Exemple déroulé : TUTORIEL.md, § 7.
+# =====================================================================
+LISTES=(
+"offset|lister_partitions '$IMAGE'"
+"index_testdisk|lister_partitions_testdisk '$IMAGE'"
+"home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
+"fichier|lister_fichiers '$IMAGE' '[[offset]]' '{{home}}'"
+
+# Un fichier précis dans chaque home. Le motif est une expression
+# régulière : ^\.bashrc$ pour ce seul nom, \.(bash|zsh)rc$ pour les deux.
+#"bashrc|lister_fichiers_nommes '$IMAGE' '[[offset]]' '{{home}}' '^\.bashrc$'"
+)
+
+}
+
+
+# =====================================================================
+# 4. CHEMINS ET CONTRÔLES     ce que la mécanique attend de vous
+# =====================================================================
+
+# Recalculé après -c et --set. Quatre noms sont attendus, le reste vous
+# appartient :
 #   SUJET    titre court, en tête et au récapitulatif
 #   DETAILS  lignes du bandeau de départ, "clé=valeur" (clé sans accent)
 #   PREFIX   préfixe des fichiers écrits
@@ -65,83 +125,8 @@ verifier() {
     return 0
 }
 
-
 # =====================================================================
-# 2. COMMANDES         "Titre|validation|commande"
-#
-#   validation   true = demander avant de lancer, false = lancer direct.
-#                Options après une virgule : log (sortie au journal),
-#                continu (un échec n'arrête rien), stop (un échec arrête tout).
-#   $VARIABLE    remplacée maintenant. Un $ qui doit survivre jusqu'à
-#                l'exécution s'écrit \$ :  for f in *; do echo \$f; done
-#   [[nom]]      demandé une fois, réutilisé partout. Menu si une liste
-#                du même nom existe en section 3.
-#   {{nom}}      l'étape est rejouée pour chaque valeur de la liste.
-#                Toujours entre apostrophes : '{{nom}}'. Le libellé est
-#                dans {{nom_libelle}}.
-#   Le | du titre est interdit ; ceux de la commande sont libres.
-#   Le tableau est dans une fonction pour que $IMAGE etc. suivent -c.
-# =====================================================================
-definir_commandes() {
-
-COMMANDES=(
-"Table des partitions|true,log|mmls '$IMAGE'"
-"Fichiers alloués et supprimés|true|fls -r -p -m / -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_fls.body'"
-"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_ils.body'"
-"Fusion des body files|false|fusionner_body '$DIR_BODY/${PREFIX}_full.body' '$DIR_BODY/${PREFIX}_fls.body' '$DIR_BODY/${PREFIX}_ils.body'"
-"Timeline|true|mactime -b '$DIR_BODY/${PREFIX}_full.body' -z '$TZ_MACTIME' -d -y > '$DIR_TIMELINE/${PREFIX}_timeline.csv'"
-"Inventaire par utilisateur|true|inventorier_home '$IMAGE' '[[offset]]' '{{home}}' '{{home_libelle}}' '$DIR_BODY'"
-"Liste des partitions (testdisk)|true,log|testdisk /list '$IMAGE'"
-"Carving|true|photorec /log /logname '$DIR_LOGS/${PREFIX}_photorec.log' /d '$DIR_CARVING/recup_' /cmd '$IMAGE' [[index_testdisk]],fileopt,everything,enable,freespace,search"
-
-# Un fichier de chaque profil : {{fichier}} dépend de {{home}}, la boucle
-# sur les profils se déclenche toute seule. Vérifiez le nombre d'itérations.
-#"Hachage fichier par fichier|true|hacher_fichier '$IMAGE' '[[offset]]' '{{fichier}}' '{{fichier_libelle}}' >> '$DIR_LOGS/${PREFIX}_hashes.txt'"
-
-# Le .bashrc de chaque utilisateur (voir la liste « bashrc », section 3).
-#"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
-)
-
-
-# =====================================================================
-# 3. LISTES            "nom|commande qui écrit une valeur par ligne"
-#
-#   Une liste sert à deux choses, selon la façon dont on l'appelle :
-#     [[nom]] dans une commande -> menu numéroté, une seule valeur choisie
-#     {{nom}} dans une commande -> l'étape est rejouée pour chaque valeur
-#
-#   Une ligne peut être  valeur<TAB>libellé  : la valeur part dans la
-#   commande, le libellé s'affiche. C'est ainsi que « home » donne
-#   l'inode à fls et le chemin à vos yeux.
-#
-#   UNE LISTE PEUT EN APPELER UNE AUTRE. C'est tout le mécanisme :
-#   « fichier » contient {{home}}, donc elle est régénérée pour chaque
-#   home, et écrire {{fichier}} seul suffit à parcourir les fichiers de
-#   tous les profils.
-#
-#   EXEMPLE — le .bashrc de chaque utilisateur :
-#     1. « home » liste les profils                      -> 3 valeurs
-#     2. « bashrc » cherche .bashrc DANS un home         -> 0 ou 1 par home
-#     3. l'étape écrit '{{bashrc}}' et rien d'autre : la boucle sur les
-#        homes se déclenche seule, les homes sans .bashrc disparaissent.
-#     Les deux lignes sont plus bas, en commentaire, prêtes à l'emploi.
-# =====================================================================
-LISTES=(
-"offset|lister_partitions '$IMAGE'"
-"index_testdisk|lister_partitions_testdisk '$IMAGE'"
-"home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
-"fichier|lister_fichiers '$IMAGE' '[[offset]]' '{{home}}'"
-
-# Un fichier précis dans chaque home. Le motif est une expression
-# régulière : ^\.bashrc$ pour ce seul nom, \.(bash|zsh)rc$ pour les deux.
-#"bashrc|lister_fichiers_nommes '$IMAGE' '[[offset]]' '{{home}}' '^\.bashrc$'"
-)
-
-}
-
-
-# =====================================================================
-# 4. FONCTIONS
+# 5. FONCTIONS
 #    Une fonction d'étape termine par return (son code fait ● ou ✗).
 #    Une fonction de liste écrit une valeur par ligne, ses erreurs sur >&2.
 #    Dans une boucle longue :  (( INTERROMPU )) && return 130
@@ -253,7 +238,7 @@ nettoyer_nom() {
 
 
 # =====================================================================
-# 5. MÉCANIQUE
+# 6. MÉCANIQUE
 # =====================================================================
 
 # --- 5.1 Affichage ---------------------------------------------------
@@ -403,7 +388,8 @@ Ctrl-C              pendant une commande : l'interrompt, le script continue
 Dans le script      1. variables    ce qui change d'une exécution à l'autre
                     2. commandes    "Titre|true|commande"   true = demander avant
                     3. listes       "nom|commande"          une valeur par ligne
-                    4. fonctions    vos traitements
+                    4. chemins      où écrire, quoi vérifier au départ
+                    5. fonctions    vos traitements
     [[nom]]   une valeur demandée une fois, réutilisée dans toutes les étapes.
               S'il existe une liste du même nom, la question devient un menu.
     {{nom}}   l'étape est rejouée pour chaque valeur de la liste « nom ».
@@ -480,10 +466,12 @@ for e in ${SETS[@]+"${SETS[@]}"}; do
     k="${e%%=*}"
     [[ "$e" == *=* && "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { erreur "--set attend NOM=valeur : $e"; exit 1; }
     declare -p "$k" >/dev/null 2>&1 || { erreur "--set : aucune variable « $k » en section 1"; exit 1; }
-    printf -v "$k" '%s' "${e#*=}"
+    printf -v "$k" '%s' "${e#*=}" 2>/dev/null \
+        || { erreur "--set : « $k » ne peut pas être modifiée (lecture seule ?)"; exit 1; }
 done
 case "${TOUT_VALIDER,,}" in true|oui|1) TOUT_VALIDER="true" ;; *) TOUT_VALIDER="false" ;; esac
-[[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] || { erreur "MAX_ITERATIONS doit être un nombre : $MAX_ITERATIONS"; exit 1; }
+[[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] && (( MAX_ITERATIONS >= 1 )) \
+    || { erreur "MAX_ITERATIONS doit être un entier positif : $MAX_ITERATIONS"; exit 1; }
 [[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--depuis attend un numéro d'étape"; exit 1; }
 if [[ -n "$FILTRE_ETAPES" ]]; then
     IFS=, read -r -a _morceaux <<< "$FILTRE_ETAPES"
@@ -493,6 +481,14 @@ if [[ -n "$FILTRE_ETAPES" ]]; then
 fi
 
 calculer_variables
+# Sans ces trois-là, la mécanique casserait bien plus loin, sur une
+# variable non définie, à un endroit qui n'aiderait personne. Le cas se
+# produit dès qu'un fichier -c redéfinit calculer_variables.
+for v in SUJET PREFIX DIR_LOGS; do
+    [[ -n "${!v:-}" ]] || { erreur "calculer_variables doit définir $v (section 4, ou votre fichier -c)"; exit 1; }
+done
+[[ "$PREFIX" != */* ]] || { erreur "PREFIX ne peut pas contenir de / : $PREFIX"; exit 1; }
+
 definir_commandes
 TOTAL=${#COMMANDES[@]}
 
@@ -616,7 +612,10 @@ generer_liste() {
         while IFS= read -r ligne; do [[ -n "$ligne" ]] && { VALEURS+=("$ligne"); LIBELLES+=(""); }; done <<< "${LISTE_FIGEE[$nom]}"
         return 0
     fi
-    [[ -n "${GENERATEUR[$nom]:-}" ]] || { erreur "aucune liste « $nom » (voir --vars)"; return 1; }
+    [[ -n "${GENERATEUR[$nom]:-}" ]] || {
+        erreur "aucune liste « $nom » en section 3 (voir --vars)"
+        info "si {{$nom}} n'était pas censé être une liste, doublez l'accolade autrement"
+        return 1; }
 
     resoudre_simples "${GENERATEUR[$nom]}" || return 1
     gen="$(substituer_liaisons "$CMD")"
@@ -780,7 +779,8 @@ _expanser() {
         EXP_CMDS+=("$cmd"); EXP_LABELS+=("$label"); return 0
     fi
     cible="$(liste_a_parcourir "${BASH_REMATCH[1]}")" || return 1
-    [[ -n "${GENERATEUR[$cible]:-}${LISTE_FIGEE[$cible]:-}" ]] || { erreur "aucune liste « $cible » (voir --vars)"; return 1; }
+    [[ -n "${GENERATEUR[$cible]:-}${LISTE_FIGEE[$cible]:-}" ]] || {
+        erreur "aucune liste « $cible » en section 3 (voir --vars)"; return 1; }
     generer_liste "$cible"; rc=$?
     if (( rc == 2 )); then
         # Branche sans valeur : zéro itération ici, et c'est tout. Au
@@ -834,6 +834,7 @@ analyser_validation() {   # "true,log" -> F_VALIDER F_LOG F_STOP F_CONTINU ; 1 s
     local o; F_VALIDER=""; F_LOG=0; F_STOP=0; F_CONTINU=0; MSG_VALIDATION=""
     IFS=, read -r -a _opts <<< "${1,,}"
     for o in "${_opts[@]}"; do
+        o="${o//[[:space:]]/}"
         case "$o" in
             true|vrai|oui|1) F_VALIDER="true" ;;  false|faux|non|0) F_VALIDER="false" ;;
             log) F_LOG=1 ;;  stop) F_STOP=1 ;;  continu|continue) F_CONTINU=1 ;;  "") ;;
@@ -1035,7 +1036,11 @@ ecrire_rapport() {
 for e in "${COMMANDES[@]}"; do
     reste="${e#*|}"
     [[ "$e" == *"|"* && "$reste" == *"|"* ]] || { erreur "format attendu Titre|validation|commande :"; printf '  %s\n' "$e" >&2; exit 1; }
-    [[ -n "${reste#*|}" ]] || { erreur "commande vide :"; printf '  %s\n' "$e" >&2; exit 1; }
+    # Une commande réduite à des espaces passerait eval sans rien faire et
+    # serait comptée réussie : c'est le pire des cas, on l'attrape ici.
+    cmd_nue="${reste#*|}"; cmd_nue="${cmd_nue//[[:space:]]/}"
+    [[ -n "$cmd_nue" ]] || { erreur "commande vide :"; printf '  %s\n' "$e" >&2; exit 1; }
+    [[ -n "${e%%|*}" ]] || { erreur "titre vide :"; printf '  %s\n' "$e" >&2; exit 1; }
     analyser_validation "${reste%%|*}" || { erreur "validation « ${reste%%|*} » : $MSG_VALIDATION"; printf '  %s\n' "$e" >&2; exit 1; }
 done
 charger_listes
@@ -1234,6 +1239,10 @@ for entree in "${COMMANDES[@]}"; do
     done
 done
 
-(( NB_FILTREES > 0 )) && info "$NB_FILTREES étape(s) écartée(s) par --seulement / --depuis"
+if (( NB_FILTREES == TOTAL )); then
+    attention "aucune étape retenue : --seulement / --depuis les écartent toutes"
+elif (( NB_FILTREES > 0 )); then
+    info "$NB_FILTREES étape(s) écartée(s) par --seulement / --depuis"
+fi
 (( NB_KO > 0 )) && exit 1
 exit 0

@@ -317,7 +317,7 @@ Essayez-le tout de suite :
 ## 8. Écrire une fonction plutôt qu'une ligne à rallonge
 
 Au-delà de deux ou trois instructions, la ligne devient illisible et les
-échappements ingérables. Écrivez une fonction en **section 4** :
+échappements ingérables. Écrivez une fonction en **section 5** :
 
 ```bash
 lister_agents() {

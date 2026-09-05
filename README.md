@@ -221,7 +221,7 @@ Pour figer une liste sans l'interroger : `--liste home=41-144-1,52-144-1`.
 
 ## Écrire une fonction plutôt qu'une ligne à rallonge
 
-Au-delà de deux ou trois instructions, écrivez une fonction en **section 4** et
+Au-delà de deux ou trois instructions, écrivez une fonction en **section 5** et
 appelez-la depuis le tableau. Plus d'échappements à gérer, et la ligne reste
 lisible à l'affichage.
 
@@ -320,11 +320,15 @@ que de l'écrire dans `calculer_chemins`.
 
 | section | contenu | on y touche |
 |---|---|---|
-| 1 | variables : image, poste, fuseau… | à chaque analyse |
+| 1 | variables : ce qui change d'une exécution à l'autre | à chaque fois |
 | 2 | `COMMANDES` : les étapes | souvent |
 | 3 | `LISTES` : d'où viennent `[[valeurs]]` et `{{listes}}` | avec les commandes |
-| 4 | fonctions : vos traitements | parfois |
-| 5 | mécanique | jamais |
+| 4 | `calculer_variables` et `verifier` : chemins, titre, contrôles | à l'installation |
+| 5 | fonctions : vos traitements | parfois |
+| 6 | mécanique | jamais |
+
+Les sections 1 à 3 tiennent dans le premier écran : le tableau `COMMANDES`
+commence à la ligne 46.
 
 Un fichier `-c` peut redéfinir `definir_commandes` et ajouter des fonctions :
 `exemples/demo.conf` le fait, ce qui permet d'avoir un jeu d'étapes par type
