@@ -272,9 +272,17 @@ init_affichage() {
     (( LARGEUR > 100 )) && LARGEUR=100
 }
 
-# Sous une locale POSIX, ${#x} compte les octets : « é » en vaut deux et
-# les colonnes se décalent. On mesure la largeur réelle.
-_SONDE="é"; UTF8_OK=0; (( ${#_SONDE} == 1 )) && UTF8_OK=1; unset _SONDE
+# Sous une locale POSIX, ${#x} compte les octets : « é » en vaut deux, les
+# colonnes se décalent et un repli peut couper un caractère en deux. On
+# essaie d'abord de passer bash lui-même en UTF-8 — LC_ALL n'est pas
+# exporté, vos commandes gardent leur locale — et sinon on mesure à la main.
+_SONDE="é"; UTF8_OK=0
+for _loc in "" C.UTF-8 C.utf8 en_US.UTF-8 fr_FR.UTF-8; do
+    [[ -n "$_loc" ]] && LC_ALL="$_loc"
+    (( ${#_SONDE} == 1 )) && { UTF8_OK=1; break; }
+done
+(( UTF8_OK )) || unset LC_ALL
+unset _SONDE _loc
 largeur_texte() {
     if (( UTF8_OK )); then printf '%s' "${#1}"
     else local t="${1//[$'\x80'-$'\xbf']/}"; printf '%s' "${#t}"; fi
@@ -343,18 +351,41 @@ titre_etape() {   # <numéro> <total> <titre>
 }
 
 # Repliée aux espaces si elle dépasse l'écran : c'est la ligne à relire.
+# replier <texte> <largeur> -> LIGNES : coupé aux espaces, par caractères.
+# fold ferait l'affaire, mais sous une locale POSIX il compte les octets et
+# coupe un « é » en deux.
+LIGNES=()
+replier() {
+    local larg="$2" ligne="" mot
+    local -a mots=()
+    LIGNES=()
+    read -r -a mots <<< "$1"
+    for mot in ${mots[@]+"${mots[@]}"}; do
+        if [[ -z "$ligne" ]]; then ligne="$mot"
+        elif (( $(largeur_texte "$ligne $mot") <= larg )); then ligne+=" $mot"
+        else LIGNES+=("$ligne"); ligne="$mot"; fi
+        # un mot seul plus large que l'écran : coupé net si l'on sait le
+        # faire par caractères, sinon laissé déborder plutôt qu'abîmé
+        while (( UTF8_OK && ${#ligne} > larg )); do
+            LIGNES+=("${ligne:0:larg}"); ligne="${ligne:larg}"
+        done
+    done
+    [[ -n "$ligne" ]] && LIGNES+=("$ligne")
+    return 0
+}
+
 afficher_commande() {   # <commande> [indentation]
-    local cmd="$1" ind="${2:-  }" dispo premiere=1 ligne prog reste
+    local ind="${2:-  }" dispo i prog reste
     dispo=$(( LARGEUR - ${#ind} - 2 )); (( dispo < 24 )) && dispo=24
-    while IFS= read -r ligne; do
-        if (( premiere )); then
-            prog="${ligne%% *}"; reste="${ligne#"$prog"}"
+    replier "$1" "$dispo"
+    for i in "${!LIGNES[@]}"; do
+        if (( i == 0 )); then
+            prog="${LIGNES[0]%% *}"; reste="${LIGNES[0]#"$prog"}"
             printf '%s%s$%s %s%s%s%s%s%s\n' "$ind" "$ESTOMPE" "$C0" "$C_PROG" "$prog" "$C0" "$C_CMD" "$reste" "$C0"
-            premiere=0
         else
-            printf '%s    %s%s%s\n' "$ind" "$C_CMD" "$ligne" "$C0"
+            printf '%s    %s%s%s\n' "$ind" "$C_CMD" "${LIGNES[$i]}" "$C0"
         fi
-    done < <(printf '%s\n' "$cmd" | fold -s -w "$dispo")
+    done
 }
 
 menu() {   # clé=texte ... — la première clé est celle de la touche Entrée
@@ -529,8 +560,16 @@ journal() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
 # commande, ainsi qu'en sortant.
 TTY_ETAT=""
 [[ -r /dev/tty ]] && TTY_ETAT="$(stty -g < /dev/tty 2>/dev/null)"
+# Régler le terminal depuis un job en arrière-plan (./forensic.sh -y &)
+# vaudrait un SIGTTOU : le script serait stoppé net. On ne le fait que si
+# l'on est au premier plan.
+en_avant_plan() {
+    local t p
+    t="$(ps -o tpgid= -p $$ 2>/dev/null)"; p="$(ps -o pgid= -p $$ 2>/dev/null)"
+    [[ -n "${t// /}" && "${t// /}" == "${p// /}" ]]
+}
 restaurer_terminal() {
-    [[ -n "$TTY_ETAT" ]] && stty "$TTY_ETAT" < /dev/tty 2>/dev/null
+    [[ -n "$TTY_ETAT" ]] && en_avant_plan && stty "$TTY_ETAT" < /dev/tty 2>/dev/null
     return 0
 }
 
@@ -584,7 +623,10 @@ demander_oui_non() {   # vrai sauf n / q
     local r=""; lire "$1" r
     case "${r,,}" in n|non|q) return 1 ;; *) return 0 ;; esac
 }
-quitter() { printf '\n'; info "arrêt demandé."; journal "ARRÊT demandé"; exit "${1:-0}"; }
+quitter() {   # [code] — sans argument : 1 s'il y a déjà eu un échec
+    printf '\n'; info "arrêt demandé."; journal "ARRÊT demandé"
+    exit "${1:-$(( NB_KO > 0 ))}"
+}
 
 
 # --- 5.5 Valeurs, listes, emboîtement --------------------------------
@@ -629,6 +671,7 @@ liste_de() {   # {{home_libelle}} désigne la liste « home »
 
 valeur_valide() {
     [[ -n "$1" ]] || { printf '    %svaleur vide refusée%s\n' "$JAUNE" "$C0"; return 1; }
+    [[ "$1" != *$'\n'* ]] || { printf '    %sune valeur tient sur une ligne%s\n' "$JAUNE" "$C0"; return 1; }
     [[ "$1" != *'[['* && "$1" != *'{{'* ]] || { printf '    %s[[ et {{ sont interdits dans une valeur%s\n' "$JAUNE" "$C0"; return 1; }
     return 0
 }
@@ -682,6 +725,7 @@ generer_liste() {
     # Remise à zéro ICI : la résolution ci-dessus a pu rappeler generer_liste.
     VALEURS=(); LIBELLES=()
     while IFS= read -r ligne; do
+        ligne="${ligne%$'\r'}"           # fins de ligne Windows
         [[ -n "$ligne" ]] || continue
         val="${ligne%%$'\t'*}"; lib=""; [[ "$ligne" == *$'\t'* ]] && lib="${ligne#*$'\t'}"
         if [[ "$val" == *'[['* || "$val" == *'{{'* ]]; then attention "valeur ignorée dans « $nom » : $val"; continue; fi
@@ -727,7 +771,7 @@ demander_valeur() {
             case "${choix,,}" in
                 a) libre=1; break ;;
                 p) ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
-                q) quitter 0 ;;
+                q) quitter ;;
             esac
             if [[ "$choix" =~ ^[0-9]+$ ]] && (( choix >= 1 && choix <= n )); then
                 # Valeur produite par un programme : on neutralise les apostrophes.
@@ -751,7 +795,7 @@ demander_valeur() {
         if (( ! libre )); then
             case "${VALEUR,,}" in
                 p) ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
-                q) quitter 0 ;;
+                q) quitter ;;
             esac
         fi
         valeur_valide "$VALEUR" && break
@@ -1203,7 +1247,10 @@ for entree in "${COMMANDES[@]}"; do
     analyser_validation "${RESTE%%|*}"
     etape_retenue "$NUM" || { NB_FILTREES=$(( NB_FILTREES + 1 )); continue; }
 
-    CLE="$(empreinte "$TITRE|$BRUTE")"
+    # Deux étapes identiques ont deux clés : sinon l'échec de la seconde
+    # serait masqué par la réussite de la première au prochain --reprendre.
+    OCC=0; for e in "${COMMANDES[@]:0:NUM-1}"; do [[ "$e" == "$entree" ]] && OCC=$(( OCC + 1 )); done
+    CLE="$(empreinte "$TITRE|$BRUTE|$OCC")"
     if deja_faite "$CLE"; then
         titre_etape "$NUM" "$TOTAL" "$TITRE"; info "déjà réussie précédemment — sautée (--reprendre)"
         RECAP+=("$NUM|skip|reprise|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); continue
@@ -1296,7 +1343,7 @@ for entree in "${COMMANDES[@]}"; do
                 oublier_valeurs "$BRUTE"
                 if resoudre_simples "$BRUTE"; then CMDBASE="$CMD"; BESOIN_EXP=1; info "valeurs ressaisies"
                 else RECAP+=("$NUM|skip|passee|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); break; fi ;;
-            q) quitter 0 ;;
+            q) quitter ;;
             *) printf '  %s« %s » n'"'"'est pas une réponse attendue%s\n' "$JAUNE" "$CHOIX" "$C0" ;;
         esac
     done
