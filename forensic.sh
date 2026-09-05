@@ -19,8 +19,10 @@ fi
 
 # =====================================================================
 # 1. VARIABLES
-#    Peuvent aussi venir d'un fichier (-c poste.conf) ou de la ligne de
-#    commande (--image, --pc, --salle, --os, --base, --tz).
+#    Ce qui change d'une exécution à l'autre. Les noms sont libres : le
+#    script ne connaît que ceux de calculer_variables, en bas de section.
+#    Peuvent aussi venir d'un fichier (-c fichier.conf) ou de la ligne de
+#    commande (--set NOM=valeur).
 # =====================================================================
 IMAGE="/images/pc07.dd"        # image disque à analyser
 PC="PC07"                      # poste
@@ -28,19 +30,39 @@ SALLE="B204"                   # salle
 OS="windows"                   # windows ou linux
 BASE="/cases"                  # racine où tout est écrit
 OPERATEUR="${USER:-inconnu}"   # noté dans le journal et le rapport
-TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ, pour mactime (jamais UTC+1 : un nom de zone)
+TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ, pour mactime (un nom de zone, jamais UTC+1)
 TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -v)
 MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
 REQUIS=(mmls fls ils icat mactime testdisk photorec)   # absents = avertissement
 
-# Chemins dérivés. Toute variable DIR_xxx est un dossier créé au besoin.
-calculer_chemins() {
-    DEST="$BASE/$SALLE/$OS/$PC"
+# Valeurs dérivées, recalculées après -c et --set. Quatre sont attendues
+# par la mécanique, le reste vous appartient :
+#   SUJET    titre court, en tête et au récapitulatif
+#   DETAILS  lignes du bandeau de départ, "clé=valeur" (clé sans accent)
+#   PREFIX   préfixe des fichiers écrits
+#   DIR_xxx  dossiers de travail, vérifiés et créés au besoin.
+#            DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
+calculer_variables() {
+    SUJET="$PC · $SALLE · $OS"
+    DETAILS=("image=$IMAGE" "fuseau=$TZ_MACTIME")
+
     PREFIX="${PC}_${SALLE}_${OS}"
+    DEST="$BASE/$SALLE/$OS/$PC"
     DIR_BODY="$DEST/body"
     DIR_TIMELINE="$DEST/timeline"
     DIR_CARVING="$DEST/carving"
     DIR_LOGS="$DEST/logs"
+}
+
+# Contrôles avant de commencer : renvoyez 1 pour arrêter. Les dossiers et
+# les binaires de REQUIS sont déjà vérifiés par ailleurs.
+verifier() {
+    [[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"
+        info "réglez IMAGE en section 1, ou : --set IMAGE=/chemin.dd · -c poste.conf · --demo pour essayer sans image"
+        return 1; }
+    [[ -r "$IMAGE" ]] || { erreur "image illisible : $IMAGE"; return 1; }
+    [[ -d /usr/share/zoneinfo && ! -e "/usr/share/zoneinfo/$TZ_MACTIME" ]] && attention "fuseau inconnu du système : $TZ_MACTIME"
+    return 0
 }
 
 
@@ -75,21 +97,44 @@ COMMANDES=(
 # Un fichier de chaque profil : {{fichier}} dépend de {{home}}, la boucle
 # sur les profils se déclenche toute seule. Vérifiez le nombre d'itérations.
 #"Hachage fichier par fichier|true|hacher_fichier '$IMAGE' '[[offset]]' '{{fichier}}' '{{fichier_libelle}}' >> '$DIR_LOGS/${PREFIX}_hashes.txt'"
+
+# Le .bashrc de chaque utilisateur (voir la liste « bashrc », section 3).
+#"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
 )
 
 
 # =====================================================================
 # 3. LISTES            "nom|commande qui écrit une valeur par ligne"
 #
-#   Une ligne peut être  valeur<TAB>libellé  : la valeur va dans la
-#   commande, le libellé à l'écran. Une liste peut utiliser [[nom]] et
-#   {{autre_liste}} : c'est ce qui emboîte les boucles.
+#   Une liste sert à deux choses, selon la façon dont on l'appelle :
+#     [[nom]] dans une commande -> menu numéroté, une seule valeur choisie
+#     {{nom}} dans une commande -> l'étape est rejouée pour chaque valeur
+#
+#   Une ligne peut être  valeur<TAB>libellé  : la valeur part dans la
+#   commande, le libellé s'affiche. C'est ainsi que « home » donne
+#   l'inode à fls et le chemin à vos yeux.
+#
+#   UNE LISTE PEUT EN APPELER UNE AUTRE. C'est tout le mécanisme :
+#   « fichier » contient {{home}}, donc elle est régénérée pour chaque
+#   home, et écrire {{fichier}} seul suffit à parcourir les fichiers de
+#   tous les profils.
+#
+#   EXEMPLE — le .bashrc de chaque utilisateur :
+#     1. « home » liste les profils                      -> 3 valeurs
+#     2. « bashrc » cherche .bashrc DANS un home         -> 0 ou 1 par home
+#     3. l'étape écrit '{{bashrc}}' et rien d'autre : la boucle sur les
+#        homes se déclenche seule, les homes sans .bashrc disparaissent.
+#     Les deux lignes sont plus bas, en commentaire, prêtes à l'emploi.
 # =====================================================================
 LISTES=(
 "offset|lister_partitions '$IMAGE'"
 "index_testdisk|lister_partitions_testdisk '$IMAGE'"
 "home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
 "fichier|lister_fichiers '$IMAGE' '[[offset]]' '{{home}}'"
+
+# Un fichier précis dans chaque home. Le motif est une expression
+# régulière : ^\.bashrc$ pour ce seul nom, \.(bash|zsh)rc$ pour les deux.
+#"bashrc|lister_fichiers_nommes '$IMAGE' '[[offset]]' '{{home}}' '^\.bashrc$'"
 )
 
 }
@@ -158,6 +203,16 @@ lister_fichiers() {
     return 0
 }
 
+# lister_fichiers_nommes <image> <offset> <inode> <motif>
+# Les fichiers d'un dossier dont le NOM correspond au motif — le reste du
+# chemin est ignoré. Une liste vide n'est pas une erreur : un home sans
+# .bashrc produit simplement zéro itération.
+lister_fichiers_nommes() {
+    lister_fichiers "$1" "$2" "$3" | awk -F'\t' -v m="$4" '
+        { n = $2; sub(/^.*\//, "", n); if (n ~ m) print }'
+    return 0
+}
+
 # fusionner_body <sortie> <entrées...> : ignore les fichiers absents ou vides.
 fusionner_body() {
     local sortie="$1" f n; shift
@@ -204,6 +259,7 @@ nettoyer_nom() {
 # --- 5.1 Affichage ---------------------------------------------------
 COULEUR="auto"
 LARGEUR=80
+NOM_SCRIPT="${0##*/}"
 
 init_affichage() {
     local actif="non"
@@ -344,7 +400,7 @@ Question posée      1 2 3 choisir · a autre valeur · p passer · q quitter
 Ctrl-C              pendant une commande : l'interrompt, le script continue
                     pendant une question : arrête le script proprement
 
-Dans le script      1. variables    image, poste, fuseau…
+Dans le script      1. variables    ce qui change d'une exécution à l'autre
                     2. commandes    "Titre|true|commande"   true = demander avant
                     3. listes       "nom|commande"          une valeur par ligne
                     4. fonctions    vos traitements
@@ -352,11 +408,15 @@ Dans le script      1. variables    image, poste, fuseau…
               S'il existe une liste du même nom, la question devient un menu.
     {{nom}}   l'étape est rejouée pour chaque valeur de la liste « nom ».
               Une liste peut en utiliser une autre : les boucles s'emboîtent.
+              Ainsi la liste « bashrc » cherche .bashrc dans {{home}} :
+              écrire '{{bashrc}}' seul parcourt le .bashrc de chaque
+              utilisateur, et saute ceux qui n'en ont pas.
 
 Options             -v tout confirmer         -y ne rien demander
                     --seulement 2,5-7         --depuis 4        --reprendre
                     --var nom=valeur          --liste nom=a,b   --vars
-                    --image --pc --salle --os --base --tz        --sans-couleur
+                    --set NOM=valeur  (toute variable de la section 1)
+                    --sans-couleur            --couleur oui|non|auto
 
 Marques             ○ à faire  ◐ en cours  ● réussie  ✗ échec
                     ⊘ passée   ⊗ interrompue  ◌ simulée
@@ -368,11 +428,10 @@ FIN_AIDE
 
 
 # --- 5.3 Arguments et configuration ----------------------------------
-PRESETS=(); PRESETS_LISTE=()
+PRESETS=(); PRESETS_LISTE=(); SETS=()
 CONF=""; INTRO=""
 LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"
 SANS_QUESTION="false"; REPRENDRE="false"; FILTRE_ETAPES=""; DEPUIS=0
-declare -A OPT=()
 
 exige_valeur() { [[ -n "${2:-}" ]] || { printf '%s attend une valeur.\n' "$1" >&2; exit 1; }; }
 
@@ -398,14 +457,8 @@ while (( $# > 0 )); do
         --conf=*)       CONF="${1#*=}";                                    shift ;;
         --couleur)      exige_valeur "$1" "${2:-}"; COULEUR="$2";          shift 2 ;;
         --couleur=*)    COULEUR="${1#*=}";                                 shift ;;
-        --image|--pc|--salle|--os|--base|--tz|--operateur)
-                        exige_valeur "$1" "${2:-}"
-                        case "$1" in --tz) OPT[TZ_MACTIME]="$2" ;; *) OPT["${1#--}"]="$2" ;; esac
-                        shift 2 ;;
-        --image=*|--pc=*|--salle=*|--os=*|--base=*|--tz=*|--operateur=*)
-                        k="${1#--}"; k="${k%%=*}"
-                        [[ "$k" == "tz" ]] && k="TZ_MACTIME"
-                        OPT["$k"]="${1#*=}"; shift ;;
+        --set)          exige_valeur "$1" "${2:-}"; SETS+=("$2");           shift 2 ;;
+        --set=*)        SETS+=("${1#*=}");                                 shift ;;
         -h|--help|--aide) aide; exit 0 ;;
         *) printf 'Argument inconnu : %s   (-h pour aide)\n' "$1" >&2; exit 1 ;;
     esac
@@ -421,13 +474,14 @@ if [[ -n "$CONF" ]]; then
     # shellcheck disable=SC1090
     source "$CONF" || { erreur "échec du chargement de $CONF"; exit 1; }
 fi
-if (( ${#OPT[@]} > 0 )); then
-    for k in "${!OPT[@]}"; do
-        case "$k" in image) IMAGE="${OPT[$k]}" ;; pc) PC="${OPT[$k]}" ;; salle) SALLE="${OPT[$k]}" ;;
-                     os) OS="${OPT[$k]}" ;; base) BASE="${OPT[$k]}" ;; operateur) OPERATEUR="${OPT[$k]}" ;;
-                     TZ_MACTIME) TZ_MACTIME="${OPT[$k]}" ;; esac
-    done
-fi
+# --set NOM=valeur : n'importe quelle variable de la section 1. On exige
+# qu'elle existe déjà, sinon une faute de frappe passerait inaperçue.
+for e in ${SETS[@]+"${SETS[@]}"}; do
+    k="${e%%=*}"
+    [[ "$e" == *=* && "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { erreur "--set attend NOM=valeur : $e"; exit 1; }
+    declare -p "$k" >/dev/null 2>&1 || { erreur "--set : aucune variable « $k » en section 1"; exit 1; }
+    printf -v "$k" '%s' "${e#*=}"
+done
 case "${TOUT_VALIDER,,}" in true|oui|1) TOUT_VALIDER="true" ;; *) TOUT_VALIDER="false" ;; esac
 [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] || { erreur "MAX_ITERATIONS doit être un nombre : $MAX_ITERATIONS"; exit 1; }
 [[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--depuis attend un numéro d'étape"; exit 1; }
@@ -438,7 +492,7 @@ if [[ -n "$FILTRE_ETAPES" ]]; then
     done
 fi
 
-calculer_chemins
+calculer_variables
 definir_commandes
 TOTAL=${#COMMANDES[@]}
 
@@ -550,6 +604,9 @@ ou_sert() {   # <nom> : « 2, 3 et par la liste home »
 
 # generer_liste <nom> -> VALEURS, LIBELLES. Recopiez-les aussitôt : un
 # appel imbriqué (une liste qui en appelle une autre) les écrase.
+# Renvoie 0 (des valeurs), 2 (aucune valeur) ou 1 (erreur). Vide et erreur
+# sont distincts : un home sans .bashrc ne doit pas annuler toute l'étape,
+# il doit seulement ne produire aucune itération.
 VALEURS=(); LIBELLES=()
 generer_liste() {
     local nom="$1" gen sortie rc ligne val lib
@@ -586,7 +643,7 @@ generer_liste() {
         if [[ "$val" == *'[['* || "$val" == *'{{'* ]]; then attention "valeur ignorée dans « $nom » : $val"; continue; fi
         VALEURS+=("$val"); LIBELLES+=("$lib")
     done <<< "$sortie"
-    (( ${#VALEURS[@]} > 0 )) || { attention "la liste « $nom » est vide"; return 1; }
+    (( ${#VALEURS[@]} > 0 )) || { journal "LISTE $nom : aucune valeur"; return 2; }
     return 0
 }
 
@@ -596,8 +653,12 @@ demander_valeur() {
     local nom="$1" i n choix ou libre=0
     local -a v=() l=()
 
-    if [[ -n "${GENERATEUR[$nom]:-}${LISTE_FIGEE[$nom]:-}" ]] && generer_liste "$nom"; then
-        v=("${VALEURS[@]}"); l=("${LIBELLES[@]}")
+    if [[ -n "${GENERATEUR[$nom]:-}${LISTE_FIGEE[$nom]:-}" ]]; then
+        generer_liste "$nom"
+        case $? in
+            0) v=("${VALEURS[@]}"); l=("${LIBELLES[@]}") ;;
+            2) attention "la liste « $nom » n'a rien renvoyé — saisissez la valeur" ;;
+        esac
     fi
     INTERROMPU=0
     ou="$(ou_sert "$nom")"; n=${#v[@]}
@@ -720,7 +781,14 @@ _expanser() {
     fi
     cible="$(liste_a_parcourir "${BASH_REMATCH[1]}")" || return 1
     [[ -n "${GENERATEUR[$cible]:-}${LISTE_FIGEE[$cible]:-}" ]] || { erreur "aucune liste « $cible » (voir --vars)"; return 1; }
-    generer_liste "$cible" || return 1
+    generer_liste "$cible"; rc=$?
+    if (( rc == 2 )); then
+        # Branche sans valeur : zéro itération ici, et c'est tout. Au
+        # premier niveau on le dit, sinon l'étape entière paraîtrait muette.
+        (( prof == 0 )) && attention "la liste « $cible » n'a renvoyé aucune valeur"
+        return 0
+    fi
+    (( rc != 0 )) && return 1
     v=("${VALEURS[@]}"); l=("${LIBELLES[@]}")
 
     for i in "${!v[@]}"; do
@@ -903,7 +971,7 @@ recap() {
     (( ${#RECAP[@]} == 0 )) && return
     local l num e d t
     printf '\n'; regle "$GRAS"
-    printf ' %sRécapitulatif%s   %s%s · %s · %s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$PC" "$SALLE" "$OS" "$C0"
+    printf ' %sRécapitulatif%s   %s%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$SUJET" "$C0"
     regle "$GRAS"
     for l in "${RECAP[@]}"; do
         num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
@@ -944,8 +1012,10 @@ ecrire_rapport() {
     [[ -d "${DIR_LOGS:-}" ]] || return 0
     local f="$DIR_LOGS/${PREFIX}_rapport.txt" l num e d t ligne
     {
-        printf 'Rapport forensic.sh\n  poste      %s / %s / %s\n  image      %s\n  analyste   %s\n' "$PC" "$SALLE" "$OS" "$IMAGE" "$OPERATEUR"
-        printf '  machine    %s\n  debut      %s\n  fin        %s\n  duree      %s\n\n' "$(hostname 2>/dev/null || printf '?')" "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$(duree "$SECONDS")"
+        printf 'Rapport %s\n  sujet      %s\n' "$NOM_SCRIPT" "$SUJET"
+        for l in ${DETAILS[@]+"${DETAILS[@]}"}; do printf '  %-10s %s\n' "${l%%=*}" "${l#*=}"; done
+        printf '  par         %s sur %s\n' "$OPERATEUR" "$(hostname 2>/dev/null || printf '?')"
+        printf '  debut      %s\n  fin        %s\n  duree      %s\n\n' "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$(duree "$SECONDS")"
         for l in "${RECAP[@]}"; do
             num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
             printf '  %2s  %-12s %-10s %s\n' "$num" "$(glyphe_texte "$e")" "$d" "$t"
@@ -1013,10 +1083,7 @@ done
 
 if [[ "$LISTER_ETAPES" == "true" ]]; then plan_initial oui; printf '\n'; exit 0; fi
 
-[[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"
-    info "réglez IMAGE en section 1, ou : --image /chemin.dd · -c poste.conf · --demo pour essayer sans image"; exit 1; }
-[[ -r "$IMAGE" ]] || { erreur "image illisible : $IMAGE"; exit 1; }
-[[ -d /usr/share/zoneinfo && ! -e "/usr/share/zoneinfo/$TZ_MACTIME" ]] && attention "fuseau inconnu du système : $TZ_MACTIME"
+verifier || exit 1
 [[ "$INTERACTIF" == "non" && "$SANS_QUESTION" != "true" ]] && attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
 MANQUANTS=""; for b in "${REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
 [[ -n "$MANQUANTS" ]] && attention "binaires absents :$MANQUANTS"
@@ -1043,12 +1110,11 @@ deja_faite()   { [[ "$REPRENDRE" == "true" && -r "$ETAT" ]] && grep -qxF "$1" "$
 marquer_faite() { [[ "$SIMULATION" == "true" ]] || printf '%s\n' "$1" >> "$ETAT" 2>/dev/null || true; }
 
 printf '\n'; regle "$GRAS"
-printf ' %sforensic.sh%s  %s%s · %s · %s%s\n' "$GRAS" "$C0" "$CYAN" "$PC" "$SALLE" "$OS" "$C0"
+printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$CYAN" "$SUJET" "$C0"
 regle "$GRAS"
-entete "image"    "$IMAGE"
-entete "sortie"   "$DEST$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
-entete "fuseau"   "$TZ_MACTIME"
-entete "analyste" "$OPERATEUR"
+for l in ${DETAILS[@]+"${DETAILS[@]}"}; do entete "${l%%=*}" "${l#*=}"; done
+entete "sortie"   "${DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
+entete "par"      "$OPERATEUR"
 entete "journal"  "$LOG"
 [[ -n "$CONF" ]]                 && entete "config"     "$CONF"
 [[ "$SIMULATION" == "true" ]]    && entete "simulation" "rien ne sera exécuté"
@@ -1058,7 +1124,7 @@ entete "journal"  "$LOG"
 [[ -n "$FILTRE_ETAPES" ]]        && entete "filtre"     "étapes $FILTRE_ETAPES"
 (( DEPUIS > 0 ))                 && entete "depuis"     "$DEPUIS"
 [[ -n "$INTRO" ]] && printf '\n%s\n' "$INTRO"
-journal "=== démarrage — $PC/$SALLE/$OS — image $IMAGE — analyste $OPERATEUR"
+journal "=== démarrage — $SUJET — par $OPERATEUR"
 plan_initial
 
 

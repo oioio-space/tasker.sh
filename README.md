@@ -59,10 +59,15 @@ Deux façons de décrire un poste :
 
 ```bash
 ./forensic.sh -c exemples/pc07.conf
-./forensic.sh -c exemples/pc07.conf --image /images/autre.dd   # surcharge ponctuelle
+./forensic.sh -c exemples/pc07.conf --set IMAGE=/images/autre.dd   # surcharge ponctuelle
 ```
 
-Priorité : section 1 &lt; fichier `-c` &lt; options de la ligne de commande.
+Priorité : section 1 &lt; fichier `-c` &lt; `--set NOM=valeur`.
+
+Les noms des variables sont les vôtres : le script ne connaît que ce que
+`calculer_variables` lui donne (`SUJET`, `DETAILS`, `PREFIX`, `DIR_xxx`) et
+les contrôles que vous écrivez dans `verifier`. Rien dans la mécanique ne
+parle d'image disque, de poste ni de salle.
 
 Prérequis : **bash 4.3+** et la Sleuth Kit / TestDisk. Un binaire manquant
 n'est qu'un avertissement : on peut vouloir ne lancer qu'une partie des étapes.
@@ -332,7 +337,7 @@ d'analyse sans copier le script.
 ```
 $ ./forensic.sh
 ✗  image absente : /images/pc07.dd
-   réglez IMAGE en section 1, ou : --image /chemin.dd · -c poste.conf · --demo pour essayer sans image
+   réglez IMAGE en section 1, ou : --set IMAGE=/chemin.dd · -c poste.conf · --demo pour essayer sans image
 ```
 
 ## Limites connues

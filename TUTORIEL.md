@@ -235,6 +235,68 @@ commande pour chaque fichier de chaque profil.
 
 Vous n'avez écrit qu'une seule liste dans la commande.
 
+### Exemple complet : le `.bashrc` de chaque utilisateur
+
+C'est le cas d'usage type. On veut, pour chaque profil de l'image, le
+contenu de son `.bashrc` — sachant que tous n'en ont pas.
+
+**1. La liste des profils** (elle existe déjà) :
+
+```bash
+"home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
+```
+
+Elle renvoie une ligne par profil, `inode<TAB>chemin` :
+
+```
+51-144-1	home/alice
+52-144-1	home/bruno
+```
+
+**2. La liste des `.bashrc`**, qui cherche **dans** un profil :
+
+```bash
+"bashrc|lister_fichiers_nommes '$IMAGE' '[[offset]]' '{{home}}' '^\.bashrc$'"
+```
+
+Le `{{home}}` est la clé : cette liste n'a de sens que pour un profil
+donné, donc le script la régénérera pour chacun.
+
+**3. L'étape**, qui ne mentionne que `{{bashrc}}` :
+
+```bash
+"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
+```
+
+**Ce que fait le script :**
+
+```
+  ↻  étape répétée — 1 itération
+      1  home=home/alice · bashrc=home/alice/.bashrc
+```
+
+Il a bouclé sur les profils *tout seul*, parce que `bashrc` en dépend.
+Bruno n'a pas de `.bashrc` : sa branche produit zéro itération et
+disparaît, sans erreur. Les étiquettes montrent les deux niveaux.
+
+La fonction de filtrage tient en quatre lignes et réutilise la liste
+générale :
+
+```bash
+lister_fichiers_nommes() {
+    lister_fichiers "$1" "$2" "$3" | awk -F'\t' -v m="$4" '
+        { n = $2; sub(/^.*\//, "", n); if (n ~ m) print }'
+    return 0
+}
+```
+
+Le motif est une expression régulière : `^\.bashrc$` pour ce seul nom,
+`\.(bash|zsh)rc$` pour les deux, `^\.ssh$` pour un dossier.
+
+> **Une liste vide n'est pas une erreur.** C'est une branche qui ne
+> produit rien. Le script ne s'arrête que si l'étape entière finit sans
+> aucune itération.
+
 **Les deux façons de faire :**
 
 | ce que vous écrivez | ce qui se passe |
@@ -446,7 +508,7 @@ TZ_MACTIME="Europe/Paris"
 
 ```bash
 ./forensic.sh -c postes/pc07.conf
-./forensic.sh -c postes/pc07.conf --image /images/autre.dd   # surcharge ponctuelle
+./forensic.sh -c postes/pc07.conf --set IMAGE=/images/autre.dd   # surcharge ponctuelle
 ```
 
 ---
