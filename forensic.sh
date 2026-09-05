@@ -188,6 +188,24 @@ lister_fichiers() {
     return 0
 }
 
+# lister_dossiers <racine>
+# La fonction de liste la plus simple qui soit : une boucle for sur les
+# sous-dossiers d'un répertoire, une ligne « chemin<TAB>nom » par dossier.
+# Sur une image montée, lister_dossiers /mnt/image/home donne un profil
+# par ligne ; {{profil}} vaut alors le chemin et {{profil_libelle}} le nom.
+#   "profil|lister_dossiers '/mnt/image/home'"
+#   "Espace de chaque profil|true|du -sh '{{profil}}'"
+lister_dossiers() {
+    local d
+    for d in "$1"/*/; do                  # le / final ne garde que les dossiers
+        (( INTERROMPU )) && return 130    # Ctrl-C doit pouvoir sortir de la boucle
+        [[ -d "$d" ]] || continue         # aucun dossier : le motif reste tel quel
+        d="${d%/}"                        # retire le / final
+        printf '%s\t%s\n' "$d" "${d##*/}"  # chemin, tabulation, nom seul
+    done
+    return 0
+}
+
 # lister_fichiers_nommes <image> <offset> <inode> <motif>
 # Les fichiers d'un dossier dont le NOM correspond au motif — le reste du
 # chemin est ignoré. Une liste vide n'est pas une erreur : un home sans
@@ -332,13 +350,14 @@ glyphe_texte() {
 
 colonne_titre() { local l=$(( LARGEUR - 22 )); (( l < 24 )) && l=24; (( l > 52 )) && l=52; printf '%s' "$l"; }
 
+LARG_NUM=2   # largeur des numéros d'étape, recalculée d'après TOTAL
 ligne_tache() {   # <état> <numéro> <titre> <détail>
     local ct=""
     case "$1" in ko) ct="$C_KO" ;; int) ct="$C_WARN" ;; skip) ct="$ESTOMPE" ;; sim) ct="$C_SIM" ;; esac
     if [[ -z "$4" ]]; then
-        printf '  %s %s%2s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$2" "$C0" "$ct" "$3" "$C0"
+        printf '  %s %s%*s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$LARG_NUM" "$2" "$C0" "$ct" "$3" "$C0"
     else
-        printf '  %s %s%2s%s  %s%s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$2" "$C0" \
+        printf '  %s %s%*s%s  %s%s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$LARG_NUM" "$2" "$C0" \
                "$ct" "$(pad_droite "$3" "$(colonne_titre)")" "$C0" "$ESTOMPE" "$4" "$C0"
     fi
 }
@@ -518,11 +537,12 @@ case "${TOUT_VALIDER,,}" in true|oui|1) TOUT_VALIDER="true" ;; *) TOUT_VALIDER="
 [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] && (( MAX_ITERATIONS >= 1 )) \
     || { erreur "MAX_ITERATIONS doit être un entier positif : $MAX_ITERATIONS"; exit 1; }
 [[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--from attend un numéro d'étape"; exit 1; }
+DEPUIS=$(( 10#$DEPUIS ))
 if [[ -n "$FILTRE_ETAPES" ]]; then
     IFS=, read -r -a _morceaux <<< "$FILTRE_ETAPES"
     for m in "${_morceaux[@]}"; do
         [[ "$m" =~ ^[0-9]+(-[0-9]+)?$ ]] || { erreur "--only : « $m » n'est ni un numéro ni un intervalle"; exit 1; }
-        [[ "$m" != *-* ]] || (( ${m%-*} <= ${m#*-} )) || { erreur "--only : intervalle inversé « $m »"; exit 1; }
+        [[ "$m" != *-* ]] || (( 10#${m%-*} <= 10#${m#*-} )) || { erreur "--only : intervalle inversé « $m »"; exit 1; }
     done
 fi
 
@@ -550,6 +570,7 @@ else
     definir_commandes
 fi
 TOTAL=${#COMMANDES[@]}
+LARG_NUM=${#TOTAL}; (( LARG_NUM < 2 )) && LARG_NUM=2
 
 
 # --- 5.4 Saisies et signaux ------------------------------------------
@@ -567,7 +588,7 @@ journal() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
 # valide plus. On mémorise les réglages et on les remet après chaque
 # commande, ainsi qu'en sortant.
 TTY_ETAT=""
-[[ -r /dev/tty ]] && TTY_ETAT="$(stty -g < /dev/tty 2>/dev/null)"
+[[ -r /dev/tty ]] && TTY_ETAT="$(stty -g 2>/dev/null < /dev/tty)" 2>/dev/null
 # Régler le terminal depuis un job en arrière-plan (./forensic.sh -y &)
 # vaudrait un SIGTTOU : le script serait stoppé net. On ne le fait que si
 # l'on est au premier plan.
@@ -577,7 +598,7 @@ en_avant_plan() {
     [[ -n "${t// /}" && "${t// /}" == "${p// /}" ]]
 }
 restaurer_terminal() {
-    [[ -n "$TTY_ETAT" ]] && en_avant_plan && stty "$TTY_ETAT" < /dev/tty 2>/dev/null
+    [[ -n "$TTY_ETAT" ]] && en_avant_plan && { stty "$TTY_ETAT" < /dev/tty; } 2>/dev/null
     return 0
 }
 
@@ -723,7 +744,10 @@ generer_liste() {
     else
         journal "LISTE $nom : $gen"
         [[ -t 1 ]] && printf '  %s… lecture de la liste « %s »%s' "$ESTOMPE" "$nom" "$C0"
-        sortie="$(eval "$gen" 2>> "$LOG")"; rc=$?
+        # </dev/null : une commande de liste qui lit l'entrée standard par
+        # accident (cat sans argument) resterait bloquée sans rien dire.
+        # sudo, lui, lit /dev/tty et n'est pas gêné.
+        sortie="$(eval "$gen" 2>> "$LOG" </dev/null)"; rc=$?
         retablir_shell
         [[ -t 1 ]] && printf '\r%s\r' "$(repeter ' ' $(( ${#nom} + 30 )))"
         if (( rc != 0 && ${#sortie} == 0 )); then erreur "la liste « $nom » a échoué (code $rc) — voir $LOG"; return 1; fi
@@ -781,7 +805,8 @@ demander_valeur() {
                 p) ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
                 q) quitter ;;
             esac
-            if [[ "$choix" =~ ^[0-9]+$ ]] && (( choix >= 1 && choix <= n )); then
+            if [[ "$choix" =~ ^[0-9]+$ ]] && (( 10#$choix >= 1 && 10#$choix <= n )); then
+                choix=$(( 10#$choix ))
                 # Valeur produite par un programme : on neutralise les apostrophes.
                 VALEUR="$(echapper_apostrophes "${v[$(( choix - 1 ))]}")"
                 printf '    %s→ %s%s\n\n' "$C_OK" "${v[$(( choix - 1 ))]}" "$C0"; return 0
@@ -1101,10 +1126,10 @@ recap_enfants() {
     n=${#montrees[@]}
     for i in "${!montrees[@]}"; do
         e="${montrees[$i]%%|*}"; d="${montrees[$i]#*|}"; t="${d#*|}"; d="${d%%|*}"
-        printf '      %s%s%s %s %s  %s%s%s\n' "$ESTOMPE" "$( (( i == n - 1 && caches == 0 )) && printf '└─' || printf '├─')" "$C0" \
+        printf '%s%s%s%s %s %s  %s%s%s\n' "$(repeter ' ' $(( LARG_NUM + 4 )))" "$ESTOMPE" "$( (( i == n - 1 && caches == 0 )) && printf '└─' || printf '├─')" "$C0" \
                "$(glyphe "$e")" "$(pad_droite "$t" $(( $(colonne_titre) - 3 )))" "$ESTOMPE" "$d" "$C0"
     done
-    (( caches > 0 )) && printf '      %s└─ … et %d itération%s réussie%s%s\n' "$ESTOMPE" "$caches" "$(pluriel "$caches")" "$(pluriel "$caches")" "$C0"
+    (( caches > 0 )) && printf '%s%s└─ … et %d itération%s réussie%s%s\n' "$(repeter ' ' $(( LARG_NUM + 4 )))" "$ESTOMPE" "$caches" "$(pluriel "$caches")" "$(pluriel "$caches")" "$C0"
     return 0
 }
 
@@ -1141,7 +1166,8 @@ for e in "${COMMANDES[@]}"; do
     # serait comptée réussie : c'est le pire des cas, on l'attrape ici.
     cmd_nue="${reste#*|}"; cmd_nue="${cmd_nue//[[:space:]]/}"
     [[ -n "$cmd_nue" ]] || { erreur "commande vide :"; printf '  %s\n' "$e" >&2; exit 1; }
-    [[ -n "${e%%|*}" ]] || { erreur "titre vide :"; printf '  %s\n' "$e" >&2; exit 1; }
+    titre_nu="${e%%|*}"; titre_nu="${titre_nu//[[:space:]]/}"
+    [[ -n "$titre_nu" ]] || { erreur "titre vide :"; printf '  %s\n' "$e" >&2; exit 1; }
     analyser_validation "${reste%%|*}" || { erreur "validation « ${reste%%|*} » : $MSG_VALIDATION"; printf '  %s\n' "$e" >&2; exit 1; }
 done
 charger_listes
@@ -1152,8 +1178,8 @@ etape_retenue() {   # <n> : passe --only et --from ?
     (( DEPUIS > 0 && $1 < DEPUIS )) && return 1
     [[ -n "$FILTRE_ETAPES" ]] || return 0
     for m in "${_morceaux[@]}"; do
-        if [[ "$m" == *-* ]]; then (( $1 >= ${m%-*} && $1 <= ${m#*-} )) && return 0
-        else (( $1 == m )) && return 0; fi
+        if [[ "$m" == *-* ]]; then (( $1 >= 10#${m%-*} && $1 <= 10#${m#*-} )) && return 0
+        else (( $1 == 10#$m )) && return 0; fi
     done
     return 1
 }
@@ -1316,7 +1342,7 @@ for entree in "${COMMANDES[@]}"; do
         fi
 
         case "${CHOIX,,}" in
-            ""|o|y|u|t)
+            ""|o|oui|y|yes|u|t)
                 UNE_PAR_UNE=0; [[ "${CHOIX,,}" == "u" ]] && UNE_PAR_UNE=1
                 executer_groupe "$UNE_PAR_UNE" "$REPETEE"
                 (( REPETEE && ${#ITERS[@]} > 0 )) && ENFANTS["$NUM"]="$(printf '%s\x01' "${ITERS[@]}")"

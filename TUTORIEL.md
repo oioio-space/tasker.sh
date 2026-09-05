@@ -314,6 +314,86 @@ Essayez-le tout de suite :
 
 ---
 
+## 7 bis. Une liste écrite à la main : les homes, avec une boucle `for`
+
+Les exemples précédents passent par `fls` et `awk`, parce qu'ils lisent une
+image disque. Mais une liste n'est rien de plus qu'une fonction qui écrit
+**une ligne par valeur**. Voici la plus simple possible, sur des dossiers
+ordinaires — une image montée, ou n'importe quel répertoire :
+
+```bash
+lister_dossiers() {
+    local d
+    for d in "$1"/*/; do                  # le / final ne garde que les dossiers
+        (( INTERROMPU )) && return 130    # Ctrl-C doit pouvoir sortir de la boucle
+        [[ -d "$d" ]] || continue         # aucun dossier : le motif reste tel quel
+        d="${d%/}"                        # retire le / final
+        printf '%s\t%s\n' "$d" "${d##*/}"  # chemin, tabulation, nom seul
+    done
+    return 0
+}
+```
+
+Ligne par ligne :
+
+* `for d in "$1"/*/` — le shell remplace `*/` par chaque sous-dossier de
+  `$1` ; le `/` final exclut les fichiers.
+* `(( INTERROMPU )) && return 130` — sans cette ligne, Ctrl-C tue le `du`
+  en cours mais la boucle repart sur le dossier suivant.
+* `[[ -d "$d" ]] || continue` — s'il n'y a aucun dossier, bash laisse le
+  motif `*/` tel quel ; on l'écarte.
+* `printf '%s\t%s\n' "$d" "${d##*/}"` — la **valeur** (le chemin complet,
+  qui part dans la commande), une **tabulation**, le **libellé** (le nom
+  seul, qui s'affiche). `${d##*/}` retire tout jusqu'au dernier `/`.
+
+Appelée sur `/mnt/image/home`, elle écrit :
+
+```
+/mnt/image/home/alice	alice
+/mnt/image/home/bruno	bruno
+```
+
+Dans le script :
+
+```bash
+LISTES=(
+"profil|lister_dossiers '/mnt/image/home'"
+)
+COMMANDES=(
+"Espace de chaque profil|true|du -sh '{{profil}}'"
+"Fichiers cachés de chaque profil|true|ls -la '{{profil}}' | grep ' \\.'"
+)
+```
+
+Et à l'écran :
+
+```
+  ↻  étape répétée — 2 itérations
+      1  profil=alice
+      2  profil=bruno
+```
+
+Pour un fichier précis dans chaque profil, même recette, un niveau plus bas :
+
+```bash
+lister_bashrc() {
+    [[ -f "$1/.bashrc" ]] && printf '%s\t%s\n' "$1/.bashrc" "${1##*/}/.bashrc"
+    return 0
+}
+```
+
+```bash
+"bashrc|lister_bashrc '{{profil}}'"
+"Contenu de chaque .bashrc|true|cat '{{bashrc}}'"
+```
+
+Le `{{profil}}` dans la liste `bashrc` suffit : le script boucle sur les
+profils, appelle `lister_bashrc` pour chacun, et les profils sans
+`.bashrc` ne produisent simplement rien. C'est `exemples/demo.conf` qui
+fait exactement cela avec `lister_agents` et `lister_notes`.
+
+---
+
 ## 8. Écrire une fonction plutôt qu'une ligne à rallonge
 
 Au-delà de deux ou trois instructions, la ligne devient illisible et les
