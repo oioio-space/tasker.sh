@@ -419,49 +419,82 @@ invite() { printf '  %s›%s ' "$GRAS" "$C0"; }
 
 
 # --- 5.2 Aide --------------------------------------------------------
+# L'aide : option en cyan, touches en gras, rien d'autre.
+h_titre() { printf '\n%s%s%s\n' "$GRAS" "$1" "$C0"; }
+h_opt()   { printf '  %s%-26s%s %s\n' "$C_PROG" "$1" "$C0" "$2"; }          # -x, --xx VALEUR   explication
+h_cle()   { printf '  %s ' "$(pad_droite "$1" 16)"; shift; local e s=""; for e in "$@"; do s+="${s:+ · }${e%%=*:+$GRAS${e%%=*}$C0 }${e#*=}"; done; printf '%s\n' "$s"; }
 aide() {
-    cat <<'FIN_AIDE'
-forensic.sh — enchaîne des commandes, validées une à une.
+    printf '%sforensic.sh%s — enchaîne des commandes, validées une à une.\n' "$GRAS" "$C0"
+    printf 'Usage : %s./forensic.sh%s [options]\n' "$C_PROG" "$C0"
+    h_titre "Configurer"
+    h_opt "-c, --config FICHIER" "variables lues dans un fichier"
+    h_opt "-t, --template"       "écrire un fichier -c prêt à compléter (sur la sortie standard)"
+    h_opt "-s, --set NOM=valeur" "fixer une variable de la section 1"
+    h_opt "-D, --var nom=valeur" "répondre d'avance à une question [[nom]]"
+    h_opt "    --list nom=a,b"   "figer une liste {{nom}}"
+    h_opt "    --vars"           "montrer les questions et listes attendues"
+    h_titre "Choisir les étapes"
+    h_opt "-l, --plan"           "montrer le plan, sans rien lancer"
+    h_opt "-n, --dry-run"        "tout afficher, ne rien exécuter"
+    h_opt "-o, --only 2,5-7"     "ne jouer que ces étapes"
+    h_opt "-f, --from 4"         "partir de l'étape 4"
+    h_opt "-r, --resume"         "sauter les étapes déjà réussies"
+    h_titre "Dialoguer"
+    h_opt "-a, --ask"            "confirmer chaque étape, même les « false »"
+    h_opt "-y, --yes"            "ne rien demander (sudo ? faites « sudo -v » avant)"
+    h_opt "    --demo"           "essai dans un bac à sable, sans rien installer"
+    h_opt "    --color MODE"     "auto, always ou never  ·  --no-color"
+    h_opt "-h, --help"           "cette aide"
+    h_titre "Pendant l'exécution"
+    h_cle "à une étape"     "Entrée=exécuter" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
+    h_cle "étape répétée"   "u=une par une" "l=lister les itérations"
+    h_cle "question posée"  "1 2 3=choisir" "a=autre valeur" "p=passer" "q=quitter"
+    h_cle "Ctrl-C"          "=interrompt la commande ; à une question, arrête le script"
+    printf '  %-16s %s à faire  %s en cours  %s réussie  %s échec  %s passée  %s interrompue  %s simulée\n' "marques" \
+           "$(glyphe todo)" "$(glyphe cours)" "$(glyphe ok)" "$(glyphe ko)" "$(glyphe skip)" "$(glyphe int)" "$(glyphe sim)"
+    h_titre "Dans le script   1 variables · 2 commandes · 3 listes · 4 chemins · 5 fonctions"
+    printf '  %s"Titre|true|commande"%s   true = demander avant, false = lancer direct\n' "$C_PROG" "$C0"
+    printf '  %s[[nom]]%s  une valeur demandée une fois       %s{{nom}}%s  l%sétape rejouée par valeur\n' "$C_PROG" "$C0" "$C_PROG" "$C0" "'"
+    printf '  Exemples et détails : TUTORIEL.md            Code de sortie : 1 s%sil reste un échec\n\n' "'"
+}
 
-Usage : ./forensic.sh [options]
-
-  -c, --config FICHIER     variables lues dans un fichier
-  -s, --set NOM=valeur     fixer une variable de la section 1
-  -D, --var nom=valeur     répondre d'avance à une question [[nom]]
-      --list nom=a,b       figer une liste {{nom}}
-      --vars               montrer les questions et listes attendues
-
-  -l, --plan               montrer le plan, sans rien lancer
-  -n, --dry-run            tout afficher, ne rien exécuter
-  -o, --only 2,5-7         ne jouer que ces étapes
-  -f, --from 4             partir de l'étape 4
-  -r, --resume             sauter les étapes déjà réussies
-
-  -a, --ask                confirmer chaque étape, même les « false »
-  -y, --yes                ne rien demander (sudo ? faites « sudo -v » avant)
-      --demo               essai dans un bac à sable, sans rien installer
-      --color auto|always|never    --no-color
-  -h, --help
-
-Pendant l'exécution
-  Entrée exécuter · p passer · e éditer · r ressaisir · q quitter
-  étape répétée    u une par une · l lister les itérations
-  question posée   1 2 3 choisir · a autre valeur · p passer · q quitter
-  Ctrl-C           interrompt la commande ; à une question, arrête le script
-  ○ à faire  ◐ en cours  ● réussie  ✗ échec  ⊘ passée  ⊗ interrompue  ◌ simulée
-
-Dans le script  1 variables · 2 commandes · 3 listes · 4 chemins · 5 fonctions
-  "Titre|true|commande"   true = demander avant, false = lancer direct
-  [[nom]]  une valeur demandée une fois     {{nom}}  l'étape rejouée par valeur
-  Exemples et détails : TUTORIEL.md          Code de sortie : 1 s'il reste un échec
-FIN_AIDE
+# ---------- --template : un fichier -c déduit de la section 1 du script ----------
+# On relit la section 1 de ce fichier même : si vous y ajoutez ou renommez
+# une variable, le gabarit suit. La valeur écrite est la valeur courante,
+# donc « -c pc07.conf --template » donne un gabarit pré-rempli.
+gabarit() {
+    local src="${BASH_SOURCE[0]}" ligne nom com val decl e
+    printf '# Fichier de configuration pour %s — généré par --template\n' "$NOM_SCRIPT"
+    printf '#     ./%s -c CE_FICHIER\n#\n' "$NOM_SCRIPT"
+    printf '# Du shell : les guillemets sont obligatoires dès qu%sil y a un espace.\n' "'"
+    printf '# On peut aussi y redéfinir calculer_variables, verifier ou\n'
+    printf '# definir_commandes : voir exemples/demo.conf.\n\n'
+    while IFS= read -r ligne; do
+        [[ "$ligne" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+        nom="${BASH_REMATCH[1]}"; com=""
+        [[ "${BASH_REMATCH[2]}" =~ \#[[:space:]]*(.*)$ ]] && com="${BASH_REMATCH[1]}"
+        decl="$(declare -p "$nom" 2>/dev/null)" || continue
+        if [[ "$decl" == "declare -a"* ]]; then
+            local -n _t="$nom"; val=""
+            for e in ${_t[@]+"${_t[@]}"}; do val+="${val:+ }$(printf '%q' "$e")"; done
+            val="($val)"
+        else
+            val="${!nom}"
+            val="${val//\\/\\\\}"; val="${val//\"/\\\"}"; val="${val//\$/\\\$}"; val="${val//\`/\\\`}"
+            val="\"$val\""
+        fi
+        if [[ -n "$com" ]]; then printf '%-30s # %s\n' "$nom=$val" "$com"; else printf '%s=%s\n' "$nom" "$val"; fi
+    done < <(sed -n '/^# 1\. VARIABLES/,/^# 2\. COMMANDES/p' "$src")
+    # Si l'en-tête « # 1. VARIABLES » a été retouché, on ne trouve plus rien.
+    [[ "$(sed -n '/^# 1\. VARIABLES/,/^# 2\. COMMANDES/p' "$src" | grep -c '^[A-Za-z_][A-Za-z0-9_]*=')" -gt 0 ]] \
+        || erreur "aucune variable trouvée entre « # 1. VARIABLES » et « # 2. COMMANDES » dans $src"
 }
 
 
 # --- 5.3 Arguments et configuration ----------------------------------
 PRESETS=(); PRESETS_LISTE=(); SETS=()
 CONF=""; INTRO=""
-LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"
+LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"; AIDE="false"; GABARIT="false"
 SANS_QUESTION="false"; REPRENDRE="false"; FILTRE_ETAPES=""; DEPUIS=0
 
 exige_valeur() { [[ -n "${2:-}" ]] || { printf '%s attend une valeur.\n' "$1" >&2; exit 1; }; }
@@ -507,13 +540,15 @@ while (( $# > 0 )); do
         --config=*)        CONF="${1#*=}";                                    shift ;;
         --color)           exige_valeur "$1" "${2:-}"; COULEUR="$2";          shift 2 ;;
         --color=*)         COULEUR="${1#*=}";                                 shift ;;
-        -h|--help)         aide; exit 0 ;;
+        -t|--template)     GABARIT="true";       shift ;;
+        -h|--help)         AIDE="true";          shift ;;
         *) printf 'Option inconnue : %s   (-h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
     esac
 done
 case "$COULEUR" in always|yes|oui) COULEUR="oui" ;; never|no|non) COULEUR="non" ;; auto) ;;
     *) printf -- '--color attend auto, always ou never.\n' >&2; exit 1 ;; esac
 init_affichage
+[[ "$AIDE" == "true" ]] && { aide; exit 0; }
 
 # Le fichier -c est du shell : il peut fixer les variables, mais aussi
 # redéfinir definir_commandes et ajouter des fonctions (voir exemples/demo.conf).
@@ -538,6 +573,7 @@ case "${TOUT_VALIDER,,}" in true|oui|1) TOUT_VALIDER="true" ;; *) TOUT_VALIDER="
     || { erreur "MAX_ITERATIONS doit être un entier positif : $MAX_ITERATIONS"; exit 1; }
 [[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--from attend un numéro d'étape"; exit 1; }
 DEPUIS=$(( 10#$DEPUIS ))
+FILTRE_ETAPES="${FILTRE_ETAPES//[[:space:]]/}"
 if [[ -n "$FILTRE_ETAPES" ]]; then
     IFS=, read -r -a _morceaux <<< "$FILTRE_ETAPES"
     for m in "${_morceaux[@]}"; do
@@ -554,6 +590,8 @@ for v in SUJET PREFIX DIR_LOGS; do
     [[ -n "${!v:-}" ]] || { erreur "calculer_variables doit définir $v (section 4, ou votre fichier -c)"; exit 1; }
 done
 [[ "$PREFIX" != */* ]] || { erreur "PREFIX ne peut pas contenir de / : $PREFIX"; exit 1; }
+
+[[ "$GABARIT" == "true" ]] && { gabarit; exit 0; }
 
 # Un fichier -c peut écrire COMMANDES et LISTES directement, sans passer
 # par definir_commandes : on les prend tels quels. Sinon on appelle la
@@ -611,6 +649,8 @@ retablir_shell() {
     IFS=$' \t\n'
     trap gerer_int INT
     trap au_revoir EXIT
+    trap 'journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
+    trap 'journal "ARRÊT : SIGTERM"; exit 143' TERM
     restaurer_terminal
 }
 
@@ -628,6 +668,10 @@ gerer_int() {
     INTERROMPU=1
 }
 trap gerer_int INT
+# Terminal fermé ou kill : on passe par exit pour que le trap EXIT écrive
+# le récapitulatif et le rapport, et que le journal dise pourquoi.
+trap 'journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
+trap 'journal "ARRÊT : SIGTERM"; exit 143' TERM
 
 # lire <invite> <variable> : Entrée vide = défaut ; Ctrl-D = arrêt.
 lire() {
@@ -705,7 +749,8 @@ valeur_valide() {
     return 0
 }
 
-etapes_mot() { if [[ "$1" == *,* ]]; then printf 'aux étapes'; else printf "à l'étape"; fi; }
+etapes_mot() {   # « aux étapes 2, 3 » / « à l'étape 2 » / « seulement et par la liste v »
+    if [[ "$1" == et\ * ]]; then printf 'seulement'; elif [[ "$1" == *,* ]]; then printf 'aux étapes'; else printf "à l'étape"; fi; }
 ou_sert() {   # <nom> : « 2, 3 et par la liste home »
     local i
     for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do

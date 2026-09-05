@@ -52,6 +52,16 @@ chmod +x forensic.sh
 ./forensic.sh                 # pour de vrai
 ```
 
+Pour écrire un fichier de configuration sans partir de zéro :
+
+```bash
+./forensic.sh -t > postes/pc09.conf        # toutes les variables de la section 1, commentées
+./forensic.sh -c pc07.conf -t > pc08.conf  # pré-rempli avec les valeurs de pc07
+```
+
+Le gabarit est relu dans le script lui-même : ajoutez ou renommez une
+variable en section 1, il suit.
+
 Deux façons de décrire un poste :
 
 * éditer la **section 1** du script (le plus simple si vous n'avez qu'une image) ;
