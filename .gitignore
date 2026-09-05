@@ -1,0 +1,4 @@
+# Sorties d'analyse : elles n'ont rien à faire dans le dépôt.
+/cases/
+*.body
+*.log
