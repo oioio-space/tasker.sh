@@ -572,6 +572,12 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 | `u` `l` | *(étape répétée)* une itération à la fois · lister les itérations |
 | `t` | *(pendant un `u`)* enchaîner le reste sans redemander |
 
+`e` modifie la commande **pour cette fois** et n'est pas retenu. `r` oublie les
+réponses `[[…]]` de l'étape et les redemande — la nouvelle valeur vaut aussi
+pour les étapes suivantes, et les `{{listes}}` sont relues au passage. C'est ce
+qu'il faut quand on s'est trompé de chemin ou d'entrée dans un menu, ou quand
+le dossier a changé depuis le début.
+
 | à une question | |
 |---|---|
 | `1` `2` `3` | choisir ; `Entrée` prend la première |

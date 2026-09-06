@@ -548,6 +548,24 @@ repeter() {
     [[ "$1" == " " ]] || REPET="${REPET// /$1}"
     return 0
 }
+# couper <texte> <colonnes> -> COUPE, au plus <colonnes> de large
+# Un titre trop long poussait la colonne de droite hors de l'écran.
+COUPE=""
+couper() {
+    local t="$1" max="$2" out="" c larg=0
+    largeur_texte "$t"
+    (( LARG_TXT <= max )) && { COUPE="$t"; return 0; }
+    (( max < 2 )) && { COUPE=""; return 0; }
+    while [[ -n "$t" ]]; do
+        c="${t:0:1}"; t="${t:1}"
+        largeur_texte "$c"
+        (( larg + LARG_TXT > max - 1 )) && break
+        out+="$c"; larg=$(( larg + LARG_TXT ))
+    done
+    COUPE="$out…"
+    return 0
+}
+
 # pad_droite <texte> <largeur> -> PAD, complété à droite par des espaces
 PAD=""
 pad_droite() {
@@ -650,19 +668,30 @@ ligne_tache() {   # <état> <numéro> <titre> <détail>
     t="$(titre_lisible "$3")"
     case "$1" in ko) ct="$C_KO" ;; int) ct="$C_WARN" ;; skip) ct="$ESTOMPE" ;; sim) ct="$C_SIM" ;; esac
     if [[ -z "$4" ]]; then
-        printf '  %s %s%*s%s  %s%s%s\n' "${GLYPHE[$1]:- }" "$ESTOMPE" "$_LARG_NUM" "$2" "$C0" "$ct" "$t" "$C0"
+        couper "$t" $(( _LARGEUR - _LARG_NUM - 6 ))
+        printf '  %s %s%*s%s  %s%s%s\n' "${GLYPHE[$1]:- }" "$ESTOMPE" "$_LARG_NUM" "$2" "$C0" "$ct" "$COUPE" "$C0"
     else
-        pad_droite "$t" "$COL_TITRE"
+        # La colonne des titres recule si le détail est plus large que
+        # d'habitude — « ↻ répétée · auto » du plan, par exemple.
+        local col=$COL_TITRE
+        largeur_texte "$4"
+        (( _LARGEUR - _LARG_NUM - 8 - LARG_TXT < col )) && col=$(( _LARGEUR - _LARG_NUM - 8 - LARG_TXT ))
+        (( col < 12 )) && col=12
+        couper "$t" "$col"; pad_droite "$COUPE" "$col"
         printf '  %s %s%*s%s  %s%s%s  %s%s%s\n' "${GLYPHE[$1]:- }" "$ESTOMPE" "$_LARG_NUM" "$2" "$C0" \
                "$ct" "$PAD" "$C0" "$ESTOMPE" "$4" "$C0"
     fi
 }
 
 titre_etape() {   # <numéro> <total> <titre>
+    local rang
     printf '\n'; regle
     barre "$(( $1 - 1 ))" "$2"
-    printf '  %s %s%d/%d%s  %s  %s%s%s\n' "${GLYPHE[cours]}" "$GRAS$C_ACCENT" "$1" "$2" "$C0" \
-           "$BARRE" "$GRAS" "$(titre_lisible "$3")" "$C0"
+    # 20 colonnes de décor : marge, glyphe, espaces et les 12 de la barre.
+    printf -v rang '%d/%d' "$1" "$2"
+    couper "$(titre_lisible "$3")" $(( _LARGEUR - 20 - ${#rang} ))
+    printf '  %s %s%s%s  %s  %s%s%s\n' "${GLYPHE[cours]}" "$GRAS$C_ACCENT" "$rang" "$C0" \
+           "$BARRE" "$GRAS" "$COUPE" "$C0"
     regle
 }
 
@@ -766,6 +795,14 @@ aide_etapes() {
     h_ligne "Pas de | dans le titre ; ceux de la commande sont libres."
     h_ligne "Le code de sortie de la commande fait ● ou ✗. Un échec sans"
     h_ligne "« continu » ni « stop » pose la question : continuer ou non."
+    h_titre "Répondre à une étape"
+    h_ligne "e  éditer la commande POUR CETTE FOIS : rien n'est retenu."
+    h_ligne "r  oublier les [[valeurs]] de l'étape et les redemander ; la"
+    h_ligne "   nouvelle réponse vaut aussi pour les étapes suivantes, et"
+    h_ligne "   les {{listes}} sont relues. À faire quand on s'est trompé"
+    h_ligne "   de chemin ou d'entrée, ou quand le dossier a changé."
+    h_ligne "p  passer l'étape.   q  arrêter, avec le récapitulatif."
+
     h_titre "Les variables"
     h_ligne "\$VAR est remplacée au moment de lire les commandes ; \\\$VAR survit"
     h_ligne "jusqu'à l'exécution — c'est ce qu'il faut dans une boucle :"
@@ -1153,6 +1190,10 @@ else
     fi
     definir_commandes
 fi
+# definir_commandes redéfinie et vide : sans ce contrôle, set -u sortait
+# un « TK_COMMANDES: unbound variable » qui n'apprend rien à personne.
+declare -p TK_COMMANDES >/dev/null 2>&1 || { erreur "definir_commandes n'a pas rempli TK_COMMANDES (section 3, ou votre fichier -c)"; exit 1; }
+declare -p TK_LISTES    >/dev/null 2>&1 || TK_LISTES=()
 _TOTAL=${#TK_COMMANDES[@]}
 _LARG_NUM=${#_TOTAL}; (( _LARG_NUM < 2 )) && _LARG_NUM=2
 
@@ -1611,13 +1652,15 @@ executer_une() {
 # Résultat dans _G_OK _G_KO _G_SKIP _G_INT _G_ARRET(1 boucle, 2 script) _G_RC _G_DUREE, _ITERS.
 _G_OK=0; _G_KO=0; _G_SKIP=0; _G_INT=0; _G_ARRET=0; _G_DUREE=0; _G_RC=0; _ITERS=()
 executer_groupe() {
-    local _upu="$1" _rep="$2" _n=${#_EXP_CMDS[@]} _i _rc _choix _ign=0 _debut=$SECONDS
+    local _upu="$1" _rep="$2" _n=${#_EXP_CMDS[@]} _i _rc _choix _ign=0 _debut=$SECONDS _rang
     _G_OK=0; _G_KO=0; _G_SKIP=0; _G_INT=0; _G_ARRET=0; _G_RC=0; _ITERS=()
 
     for _i in "${!_EXP_CMDS[@]}"; do
         if (( _rep )); then
-            printf '\n  %s──%s %s%d/%d%s %s──%s %s%s%s\n' "$ESTOMPE" "$C0" "$GRAS" $(( _i + 1 )) "$_n" "$C0" \
-                   "$ESTOMPE" "$C0" "$C_BOUCLE" "${_EXP_LABELS[$_i]}" "$C0"
+            printf -v _rang '%d/%d' $(( _i + 1 )) "$_n"
+            couper "${_EXP_LABELS[$_i]}" $(( _LARGEUR - 12 - ${#_rang} ))
+            printf '\n  %s──%s %s%s%s %s──%s %s%s%s\n' "$ESTOMPE" "$C0" "$GRAS" "$_rang" "$C0" \
+                   "$ESTOMPE" "$C0" "$C_BOUCLE" "$COUPE" "$C0"
             afficher_commande "${_EXP_CMDS[$_i]}" "     "
         fi
         if (( _upu )); then
@@ -1672,7 +1715,10 @@ executer_groupe() {
 resume_iterations() {
     local n=${#_EXP_CMDS[@]} i max=6
     printf '  %s↻  étape répétée%s — %s%d itération%s%s\n' "$C_BOUCLE" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
-    for (( i = 0; i < n && i < max; i++ )); do printf '     %s%2d%s  %s%s%s\n' "$ESTOMPE" $(( i + 1 )) "$C0" "$C_BOUCLE" "${_EXP_LABELS[$i]}" "$C0"; done
+    for (( i = 0; i < n && i < max; i++ )); do
+        couper "${_EXP_LABELS[$i]}" $(( _LARGEUR - 9 ))
+        printf '     %s%2d%s  %s%s%s\n' "$ESTOMPE" $(( i + 1 )) "$C0" "$C_BOUCLE" "$COUPE" "$C0"
+    done
     (( n > max )) && printf '     %s..  et %d autre%s — « l » pour tout voir%s\n' "$ESTOMPE" $(( n - max )) "$(pluriel "$(( n - max ))")" "$C0"
     (( _EXP_TRONQUE )) && attention "limite de $TK_MAX_ITERATIONS itération$(pluriel "$TK_MAX_ITERATIONS") atteinte, liste tronquée (TK_MAX_ITERATIONS, section 2)"
     return 0
@@ -1680,7 +1726,8 @@ resume_iterations() {
 lister_iterations() {
     local i; printf '\n'
     for i in "${!_EXP_CMDS[@]}"; do
-        printf '     %s%3d%s  %s%s%s\n' "$GRAS" $(( i + 1 )) "$C0" "$C_BOUCLE" "${_EXP_LABELS[$i]}" "$C0"
+        couper "${_EXP_LABELS[$i]}" $(( _LARGEUR - 10 ))
+        printf '     %s%3d%s  %s%s%s\n' "$GRAS" $(( i + 1 )) "$C0" "$C_BOUCLE" "$COUPE" "$C0"
         afficher_commande "${_EXP_CMDS[$i]}" "          "
     done
     printf '\n'
@@ -1783,7 +1830,7 @@ recap_enfants() {
     for i in "${!montrees[@]}"; do
         e="${montrees[$i]%%|*}"; d="${montrees[$i]#*|}"; t="${d#*|}"; d="${d%%|*}"
         repeter ' ' $(( _LARG_NUM + 4 )); marge="$REPET"
-        pad_droite "$t" $(( COL_TITRE - 3 ))
+        couper "$t" $(( COL_TITRE - 3 )); pad_droite "$COUPE" $(( COL_TITRE - 3 ))
         printf '%s%s%s%s %s %s  %s%s%s\n' "$marge" "$ESTOMPE" "$( (( i == n - 1 && caches == 0 )) && printf '└─' || printf '├─')" "$C0" \
                "${GLYPHE[$e]:- }" "$PAD" "$ESTOMPE" "$d" "$C0"
     done
@@ -1816,7 +1863,8 @@ ecrire_rapport() {
             done <<< "${enfants//$'\x01'/$'\n'}"
         done
         printf '\n  %d reussies, %d en echec, %d passees\n' "$_NB_OK" "$_NB_KO" "$_NB_PASSEES"
-    } > "$f" 2>/dev/null && printf '  %srapport  %s%s\n' "$ESTOMPE" "$f" "$C0"
+    } 2>/dev/null > "$f" && printf '  %srapport  %s%s\n' "$ESTOMPE" "$f" "$C0" \
+        || attention "rapport non écrit : $f"
 }
 
 
@@ -1904,7 +1952,7 @@ for nom in ${!TK_DIR_@}; do
     fi
     [[ "$SIMULATION" == "true" || -w "$d" ]] || attention "dossier non inscriptible : $d"
 done
-[[ "$SIMULATION" == "true" ]] || { _LOG="$TK_DIR_LOGS/${TK_PREFIX}_script.log"; : >> "$_LOG" || { erreur "journal non inscriptible : $_LOG"; exit 1; }; }
+[[ "$SIMULATION" == "true" ]] || { _LOG="$TK_DIR_LOGS/${TK_PREFIX}_script.log"; : 2>/dev/null >> "$_LOG" || { erreur "journal non inscriptible : $_LOG"; exit 1; }; }
 
 # Reprise : empreinte du titre ET de la commande, une par étape réussie.
 _ETAT="$TK_DIR_LOGS/${TK_PREFIX}_etat.txt"
