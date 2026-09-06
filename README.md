@@ -3,6 +3,8 @@
 Enchaîne des commandes, **validées une à une**. Un tableau de lignes, un
 journal, et de quoi répéter une étape sur une liste de valeurs.
 
+![Le plan, une étape validée, une étape répétée sur trois sous-dossiers, une question devenue menu, le récapitulatif](demo.gif)
+
 ```bash
 ./tasker.sh -h          # l'aide
 ./tasker.sh -h tout     # le manuel complet, dans le script
