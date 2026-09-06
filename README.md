@@ -92,14 +92,61 @@ Une liste = un nom, et une commande qui écrit **une valeur par ligne**.
 
 ```bash
 LISTES=(
-"sousdossier|lister_dossiers '$DOSSIER'"
 "jours|printf '%s\n' 1 7 30"
+"sousdossier|lister_dossiers '$DOSSIER'"
 )
 ```
 
-### Avec un libellé : `valeur<TAB>libellé`
+Elle sert à deux choses, selon la façon dont une commande l'appelle :
 
-La valeur va dans la commande, le libellé s'affiche.
+| dans la commande | ce qui se passe |
+|---|---|
+| `[[jours]]` | **menu** : la question propose les valeurs, on en choisit une |
+| `{{jours}}` | **répétition** : l'étape est rejouée pour chaque valeur |
+
+### Faire d'une question un menu
+
+Sans liste, `[[jours]]` est une question libre :
+
+```
+    ┌─ [[jours]]  — utilisé à l'étape 1
+    └─ valeur › 
+```
+
+Ajoutez une liste **du même nom**, la question devient un menu :
+
+```bash
+"jours|printf '%s\n' 1 7 30"
+```
+
+```
+    ┌─ [[jours]]  — utilisé à l'étape 1
+    │
+    │   1  1
+    │   2  7
+    │   3  30
+    │
+    │   a  saisir une autre valeur
+    │   p  passer cette étape
+    │   q  quitter le script
+    └─ votre choix [1] › 
+```
+
+| touche | effet |
+|---|---|
+| `2` | prend la 2ᵉ proposition |
+| `Entrée` | prend la 1ʳᵉ |
+| `a` | tape une valeur qui n'est pas dans la liste |
+| `p` | passe l'étape |
+| `q` | quitte |
+
+La valeur choisie est **mémorisée** : toutes les étapes qui contiennent
+`[[jours]]` l'utilisent sans redemander. Pour la fournir d'avance :
+`./tasker.sh -D jours=7`. Pour tout ressaisir sur une étape : `r`.
+
+### Les libellés : une valeur pour la commande, un texte pour vous
+
+Une ligne de liste peut s'écrire `valeur<TAB>libellé` :
 
 ```bash
 "jours|printf '%s\t%s\n' 1 'hier' 7 'cette semaine' 30 'ce mois'"
@@ -111,14 +158,41 @@ La valeur va dans la commande, le libellé s'affiche.
     │   3  30             ce mois
 ```
 
-Le libellé reste disponible : `{{jours_libelle}}`.
+Seule la **valeur** (avant la tabulation) entre dans la commande. Le
+**libellé** sert à trois choses :
 
-### Le même nom en `[[ ]]` ou en `{{ }}`
+**1. Lire le menu** — ci-dessus : `7` seul ne dit rien, `cette semaine` si.
 
-| dans la commande | ce qui se passe |
-|---|---|
-| `[[jours]]` | menu numéroté, **une** valeur choisie |
-| `{{jours}}` | l'étape est rejouée pour **chaque** valeur |
+**2. Lire les itérations** — l'étiquette d'une étape répétée montre le
+libellé :
+
+```bash
+"home|lister_homes '$IMAGE'"        # écrit : 51-144-1<TAB>Users/alice
+"Inventaire|true|inventorier '{{home}}'"
+```
+
+```
+  ↻  étape répétée — 2 itérations
+      1  home=Users/alice            ← le libellé, pas 51-144-1
+      2  home=Users/bruno
+```
+
+**3. L'utiliser dans la commande** — `{{nom_libelle}}` donne le libellé
+de la valeur en cours. Typique : la valeur est ce que l'outil attend (un
+inode, un identifiant, un chemin complet), le libellé ce qu'on veut voir
+dans un nom de fichier :
+
+```bash
+"Inventaire|true|fls '$IMAGE' '{{home}}' > '$DIR_OUT/{{home_libelle}}.txt'"
+#                                  ↑ 51-144-1              ↑ Users/alice
+```
+
+```bash
+"Contenu de chaque home|true|ls -la '{{home}}' > '$DIR_OUT/ls_{{home_libelle}}.txt'"
+#                                      ↑ /home/alice              ↑ alice
+```
+
+Sans tabulation, `{{nom_libelle}}` vaut simplement la valeur.
 
 ### Une liste qui en utilise une autre
 
@@ -146,11 +220,14 @@ lister_dossiers() {
     for d in "$1"/*/; do
         (( INTERROMPU )) && return 130
         [[ -d "$d" ]] || continue
-        d="${d%/}"; printf '%s\t%s\n' "$d" "${d##*/}"
+        d="${d%/}"; printf '%s\t%s\n' "$d" "${d##*/}"    # valeur <TAB> libellé
     done
     return 0
 }
 ```
+
+Valeurs sur la sortie standard, messages sur `>&2`. Voir ce qui sera
+demandé et d'où ça vient : `./tasker.sh --vars`.
 
 ---
 
