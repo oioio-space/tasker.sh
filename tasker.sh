@@ -169,6 +169,7 @@ for _loc in "" C.UTF-8 C.utf8 en_US.UTF-8 fr_FR.UTF-8; do
     (( ${#_SONDE} == 1 )) && { UTF8_OK=1; break; }
 done
 (( UTF8_OK )) || unset LC_ALL
+LC_ALL_TK="${LC_ALL-__absent__}"   # pour la remettre si une commande la change
 unset _SONDE _loc
 largeur_texte() {
     if (( UTF8_OK )); then printf '%s' "${#1}"
@@ -528,9 +529,12 @@ restaurer_terminal() {
 # vos fonctions). Une commande qui fait « set -e », change IFS ou retire
 # un trap casserait donc la suite : après chaque commande, on remet ce
 # dont la mécanique dépend.
+SHOPT_TK="$(shopt -p)"       # les options du shell au départ, remises après chaque commande
 retablir_shell() {
-    set +e -u -o pipefail
+    set +e -u -o pipefail +x +v
     IFS=$' \t\n'
+    eval "$SHOPT_TK"
+    if [[ "$LC_ALL_TK" == "__absent__" ]]; then unset LC_ALL; else LC_ALL="$LC_ALL_TK"; fi
     trap gerer_int INT
     trap au_revoir EXIT
     trap 'journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
@@ -680,7 +684,11 @@ generer_liste() {
         sortie="$(eval "$gen" 2>> "$LOG" </dev/null)"; rc=$?
         retablir_shell
         [[ -t 1 ]] && printf '\r%s\r' "$(repeter ' ' $(( ${#nom} + 30 )))"
-        if (( rc != 0 && ${#sortie} == 0 )); then erreur "la liste « $nom » a échoué (code $rc) — voir $LOG"; return 1; fi
+        # Un code non nul sans aucune sortie n'est pas une erreur : ls, grep
+        # ou find rendent justement 1 ou 2 quand ils ne trouvent rien. C'est
+        # une liste vide — la branche ne produit rien — et le journal garde
+        # le code pour qui veut comprendre.
+        if (( rc != 0 && ${#sortie} == 0 )); then journal "LISTE $nom : aucune valeur (code $rc)"; CODE_LISTE_VIDE=$rc; fi
         CACHE_LISTE["$gen"]="${sortie:-$'\001'}"
     fi
 
@@ -696,6 +704,7 @@ generer_liste() {
     (( ${#VALEURS[@]} > 0 )) || { journal "LISTE $nom : aucune valeur"; return 2; }
     return 0
 }
+CODE_LISTE_VIDE=0
 
 # demander_valeur <nom> -> VALEUR ; 1 si l'utilisateur passe l'étape.
 VALEUR=""
@@ -707,7 +716,7 @@ demander_valeur() {
         generer_liste "$nom"
         case $? in
             0) v=("${VALEURS[@]}"); l=("${LIBELLES[@]}") ;;
-            2) attention "la liste « $nom » n'a rien renvoyé — saisissez la valeur" ;;
+            2) attention "la liste « $nom » n'a rien renvoyé$( (( CODE_LISTE_VIDE )) && printf ' (code %d)' "$CODE_LISTE_VIDE") — saisissez la valeur" ;;
         esac
     fi
     INTERROMPU=0
@@ -837,7 +846,7 @@ _expanser() {
     if (( rc == 2 )); then
         # Branche sans valeur : zéro itération ici, et c'est tout. Au
         # premier niveau on le dit, sinon l'étape entière paraîtrait muette.
-        (( prof == 0 )) && attention "la liste « $cible » n'a renvoyé aucune valeur"
+        (( prof == 0 )) && attention "la liste « $cible » n'a renvoyé aucune valeur$( (( CODE_LISTE_VIDE )) && printf ' (code %d)' "$CODE_LISTE_VIDE")"
         return 0
     fi
     (( rc != 0 )) && return 1
@@ -901,78 +910,78 @@ analyser_validation() {   # "true,log" -> F_VALIDER F_LOG F_STOP F_CONTINU ; 1 s
 # executer_une <commande> <log 0/1> : code de la commande ; DUREE_S posé.
 DUREE_S=0
 executer_une() {
-    local debut=$SECONDS rc
+    local _debut=$SECONDS _rc
     INTERROMPU=0; journal "$1"
     [[ "$SIMULATION" == "true" ]] && { DUREE_S=0; return 0; }
     if (( $2 )); then
         # Un tube et non une substitution de processus : le shell attend tee,
         # et PIPESTATUS donne le vrai code. La commande perd son terminal :
         # d'où l'option explicite.
-        eval "$1" 2>&1 | tee -a "$LOG"; rc=${PIPESTATUS[0]}
+        eval "$1" 2>&1 | tee -a "$LOG"; _rc=${PIPESTATUS[0]}
     else
-        eval "$1"; rc=$?
+        eval "$1"; _rc=$?
     fi
     retablir_shell
-    DUREE_S=$(( SECONDS - debut )); journal "code $rc en $(duree "$DUREE_S")"
-    return "$rc"
+    DUREE_S=$(( SECONDS - _debut )); journal "code $_rc en $(duree "$DUREE_S")"
+    return "$_rc"
 }
 
 # executer_groupe <une par une 0/1> <répétée 0/1> : joue EXP_CMDS.
 # Résultat dans G_OK G_KO G_SKIP G_INT G_ARRET(1 boucle, 2 script) G_RC G_DUREE, ITERS.
 G_OK=0; G_KO=0; G_SKIP=0; G_INT=0; G_ARRET=0; G_DUREE=0; G_RC=0; ITERS=()
 executer_groupe() {
-    local une_par_une="$1" repetee="$2" n=${#EXP_CMDS[@]} i rc choix ignorer=0 debut=$SECONDS
+    local _upu="$1" _rep="$2" _n=${#EXP_CMDS[@]} _i _rc _choix _ign=0 _debut=$SECONDS
     G_OK=0; G_KO=0; G_SKIP=0; G_INT=0; G_ARRET=0; G_RC=0; ITERS=()
 
-    for i in "${!EXP_CMDS[@]}"; do
-        if (( repetee )); then
-            printf '\n  %s──%s %s%d/%d%s %s──%s %s%s%s\n' "$ESTOMPE" "$C0" "$GRAS" $(( i + 1 )) "$n" "$C0" \
-                   "$ESTOMPE" "$C0" "$C_BOUCLE" "${EXP_LABELS[$i]}" "$C0"
-            afficher_commande "${EXP_CMDS[$i]}" "     "
+    for _i in "${!EXP_CMDS[@]}"; do
+        if (( _rep )); then
+            printf '\n  %s──%s %s%d/%d%s %s──%s %s%s%s\n' "$ESTOMPE" "$C0" "$GRAS" $(( _i + 1 )) "$_n" "$C0" \
+                   "$ESTOMPE" "$C0" "$C_BOUCLE" "${EXP_LABELS[$_i]}" "$C0"
+            afficher_commande "${EXP_CMDS[$_i]}" "     "
         fi
-        if (( une_par_une )); then
+        if (( _upu )); then
             menu "Entrée=exécuter" "p=passer" "t=tout enchaîner" "q=arrêter la boucle"
-            choix=""; lire "$(invite)" choix
-            case "${choix,,}" in
-                p) printf '     %s⊘  passée%s\n' "$ESTOMPE" "$C0"; G_SKIP=$(( G_SKIP + 1 )); ITERS+=("skip|passee|${EXP_LABELS[$i]}"); continue ;;
+            _choix=""; lire "$(invite)" _choix
+            case "${_choix,,}" in
+                p) printf '     %s⊘  passée%s\n' "$ESTOMPE" "$C0"; G_SKIP=$(( G_SKIP + 1 )); ITERS+=("skip|passee|${EXP_LABELS[$_i]}"); continue ;;
                 q) printf '     %sboucle arrêtée%s\n' "$JAUNE" "$C0"; G_ARRET=1; break ;;
-                t) une_par_une=0 ;;
+                t) _upu=0 ;;
             esac
         fi
 
-        executer_une "${EXP_CMDS[$i]}" "$F_LOG"; rc=$?
+        executer_une "${EXP_CMDS[$_i]}" "$F_LOG"; _rc=$?
 
         if (( INTERROMPU )); then
             INTERROMPU=0
             printf '  %s⊗  interrompu%s %sau bout de %s%s\n' "$C_WARN" "$C0" "$ESTOMPE" "$(duree "$DUREE_S")" "$C0"
-            G_INT=$(( G_INT + 1 )); ITERS+=("int|$(duree "$DUREE_S")|${EXP_LABELS[$i]}")
-            (( repetee )) || break
+            G_INT=$(( G_INT + 1 )); ITERS+=("int|$(duree "$DUREE_S")|${EXP_LABELS[$_i]}")
+            (( _rep )) || break
             demander_oui_non "  Continuer la boucle ? ${ESTOMPE}[O/n]${C0} " && continue
             G_ARRET=1; break
         fi
-        if (( rc == 0 )); then
+        if (( _rc == 0 )); then
             if [[ "$SIMULATION" == "true" ]]; then
-                printf '  %s◌  simulée%s\n' "$C_SIM" "$C0"; ITERS+=("sim|simulee|${EXP_LABELS[$i]}")
+                printf '  %s◌  simulée%s\n' "$C_SIM" "$C0"; ITERS+=("sim|simulee|${EXP_LABELS[$_i]}")
             else
-                printf '  %s●  terminée%s %sen %s%s\n' "$C_OK" "$C0" "$ESTOMPE" "$(duree "$DUREE_S")" "$C0"; ITERS+=("ok|$(duree "$DUREE_S")|${EXP_LABELS[$i]}")
+                printf '  %s●  terminée%s %sen %s%s\n' "$C_OK" "$C0" "$ESTOMPE" "$(duree "$DUREE_S")" "$C0"; ITERS+=("ok|$(duree "$DUREE_S")|${EXP_LABELS[$_i]}")
             fi
             G_OK=$(( G_OK + 1 )); continue
         fi
 
-        printf '  %s✗  échec%s %s— code %d, %s%s\n' "$C_KO" "$C0" "$ESTOMPE" "$rc" "$(duree "$DUREE_S")" "$C0"
-        G_KO=$(( G_KO + 1 )); G_RC=$rc; ITERS+=("ko|code $rc|${EXP_LABELS[$i]}")
+        printf '  %s✗  échec%s %s— code %d, %s%s\n' "$C_KO" "$C0" "$ESTOMPE" "$_rc" "$(duree "$DUREE_S")" "$C0"
+        G_KO=$(( G_KO + 1 )); G_RC=$_rc; ITERS+=("ko|code $_rc|${EXP_LABELS[$_i]}")
         (( F_CONTINU )) && { info "(étape marquée « continu » : on poursuit)"; continue; }
         (( F_STOP ))    && { erreur "étape marquée « stop » : arrêt du script."; G_ARRET=2; break; }
-        (( ignorer ))   && continue
-        if (( repetee )); then
+        (( _ign ))   && continue
+        if (( _rep )); then
             menu "Entrée=continuer" "t=continuer sans redemander" "n=arrêter la boucle" "q=quitter"
-            choix=""; lire "$(invite)" choix
-            case "${choix,,}" in t) ignorer=1 ;; n) G_ARRET=1; break ;; q) G_ARRET=2; break ;; esac
+            _choix=""; lire "$(invite)" _choix
+            case "${_choix,,}" in t) _ign=1 ;; n) G_ARRET=1; break ;; q) G_ARRET=2; break ;; esac
         else
             demander_oui_non "  Continuer quand même ? ${ESTOMPE}[O/n]${C0} " || G_ARRET=2
         fi
     done
-    G_DUREE=$(( SECONDS - debut ))
+    G_DUREE=$(( SECONDS - _debut ))
     return 0
 }
 
