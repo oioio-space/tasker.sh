@@ -6,6 +6,9 @@
 #   Sections, de la plus retouchée à la moins retouchée :
 #   1 VARIABLES · 2 RÉGLAGES · 3 COMMANDES · 4 LISTES · 5 FONCTIONS
 #   6 CHEMINS ET CONTRÔLES · 7 BOÎTE À OUTILS · 8 MÉCANIQUE
+#
+#   Un nom qui commence par TK_ est lu par le script : remplissez-le, ne le
+#   supprimez pas, ne le renommez pas. Tous les autres noms sont à vous.
 #   Voir aussi TUTORIEL.md.
 #
 set -uo pipefail
@@ -25,10 +28,10 @@ SORTIE="${TMPDIR:-/tmp}/tasker" # où écrire journal et rapport
 # =====================================================================
 # 2. RÉGLAGES      posés une fois, rarement retouchés
 # =====================================================================
-REQUIS=(du df)                 # binaires attendus ; absents = avertissement
-OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # noté dans le journal et le rapport
-TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -a)
-MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
+TK_REQUIS=(du df)              # binaires attendus ; absents = avertissement
+TK_OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # noté au journal et au rapport
+TK_TOUT_VALIDER="false"        # true = confirmer chaque étape (ou -a)
+TK_MAX_ITERATIONS=500          # au-delà, une étape répétée est tronquée
 
 
 # =====================================================================
@@ -50,7 +53,7 @@ MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
 # =====================================================================
 definir_commandes() {
 
-COMMANDES=(
+TK_COMMANDES=(
 "Espace disponible|false|df -h '$DOSSIER'"
 "Contenu du dossier|true|ls -la '$DOSSIER'"
 "Taille de chaque sous-dossier|true|du -sh '{{sousdossier}}'"
@@ -73,7 +76,7 @@ COMMANDES=(
 #   les deux niveaux. Une liste vide ne produit aucune itération, ce n'est
 #   pas une erreur. Exemple déroulé : TUTORIEL.md.
 # =====================================================================
-LISTES=(
+TK_LISTES=(
 "sousdossier|lister_dossiers '$DOSSIER'"
 "taille|printf '%s\t%s\n' 1M 'un mégaoctet' 10M 'dix mégaoctets' 100M 'cent mégaoctets'"
 )
@@ -112,20 +115,20 @@ lister_gros_dossiers() {          # <racine> [Mo mini, 100 par défaut]
 
 # Recalculé après -c et --set. Quatre noms sont attendus, le reste vous
 # appartient :
-#   SUJET    titre court, en tête et au récapitulatif
-#   DETAILS  lignes du bandeau de départ, "clé=valeur" (clé sans accent)
-#   PREFIX   préfixe des fichiers écrits
-#   DIR_xxx  dossiers de travail, vérifiés et créés au besoin.
-#            DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
+#   TK_SUJET    titre court, en tête et au récapitulatif
+#   TK_DETAILS  lignes du bandeau de départ, "clé=valeur" (clé sans accent)
+#   TK_PREFIX   préfixe des fichiers écrits
+#   TK_DIR_xxx  dossiers de travail, vérifiés et créés au besoin.
+#            TK_DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
 calculer_variables() {
-    SUJET="${DOSSIER##*/}"
-    DETAILS=("dossier=$DOSSIER")
-    PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
-    DIR_LOGS="$SORTIE/logs"
+    TK_SUJET="${DOSSIER##*/}"
+    TK_DETAILS=("dossier=$DOSSIER")
+    TK_PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
+    TK_DIR_LOGS="$SORTIE/logs"
 }
 
 # Contrôles avant de commencer : renvoyez 1 pour arrêter. Les dossiers et
-# les binaires de REQUIS sont déjà vérifiés par ailleurs.
+# les binaires de TK_REQUIS sont déjà vérifiés par ailleurs.
 verifier() {
     [[ -d "$DOSSIER" ]] || { erreur "dossier absent : $DOSSIER"
         info "réglez DOSSIER en section 1, ou : --set DOSSIER=/chemin · -c fichier.conf"
@@ -724,6 +727,9 @@ aide_outils() {
 
 aide_config() {
     h_titre "Le fichier -c"
+    h_ligne "Un nom en TK_ appartient au script : à remplir, jamais à supprimer"
+    h_ligne "ni à renommer. Les autres noms sont à vous."
+    h_vide
     h_ligne "Du shell, chargé après le script : il peut fixer les variables et"
     h_ligne "redéfinir les trois fonctions. Un squelette prêt à remplir :"
     h_code "./$NOM_SCRIPT -t > mon-cas.conf"
@@ -734,18 +740,18 @@ aide_config() {
     h_titre "Les trois fonctions   sections 3, 4 et 6 du script"
     h_opt "calculer_variables" "appelée après -c et --set ; pose les noms ci-dessous"
     h_opt "verifier"           "contrôles de départ ; return 1 pour arrêter"
-    h_opt "definir_commandes"  "remplit COMMANDES et LISTES"
-    h_titre "Les noms que le script lit"
-    h_opt "SUJET"    "titre court, en tête et au récapitulatif"
-    h_opt "DETAILS"  "lignes du bandeau, « clé=valeur » (clé sans accent)"
-    h_opt "PREFIX"   "préfixe des fichiers écrits"
-    h_opt "DIR_LOGS" "journal, rapport, état de reprise ; tout DIR_xxx est créé"
-    h_opt "INTRO"    "texte affiché après le bandeau (facultatif)"
+    h_opt "definir_commandes"  "remplit TK_COMMANDES et TK_LISTES"
+    h_titre "Les noms que le script lit   tout ce qui commence par TK_"
+    h_opt "TK_SUJET"    "titre court, en tête et au récapitulatif"
+    h_opt "TK_DETAILS"  "lignes du bandeau, « clé=valeur » (clé sans accent)"
+    h_opt "TK_PREFIX"   "préfixe des fichiers écrits"
+    h_opt "TK_DIR_LOGS" "journal, rapport, état de reprise ; tout TK_DIR_xxx est créé"
+    h_opt "TK_INTRO"    "texte affiché après le bandeau (facultatif)"
     h_titre "Les réglages   section 2"
-    h_opt "REQUIS"         "binaires attendus, absents = avertissement : (du df)"
-    h_opt "OPERATEUR"      "qui a lancé ; \${SUDO_USER:-\$USER} sous sudo"
-    h_opt "TOUT_VALIDER"   "true = confirmer chaque étape, même les « false »"
-    h_opt "MAX_ITERATIONS" "plafond d'une étape répétée, au-delà elle est tronquée"
+    h_opt "TK_REQUIS"         "binaires attendus, absents = avertissement : (du df)"
+    h_opt "TK_OPERATEUR"      "qui a lancé ; \${SUDO_USER:-\$USER} sous sudo"
+    h_opt "TK_TOUT_VALIDER"   "true = confirmer chaque étape, même les « false »"
+    h_opt "TK_MAX_ITERATIONS" "plafond d'une étape répétée, au-delà elle est tronquée"
 }
 
 aide_exemple() {
@@ -753,26 +759,26 @@ aide_exemple() {
     h_vide
     h_code "# Sauvegarde des comptes d'une machine."
     h_code "RACINE=\"/sauve/\$(hostname)\"        # ce qui change d'un usage à l'autre"
-    h_code "REQUIS=(tar du)"
+    h_code "TK_REQUIS=(tar du)"
     h_code ""
     h_code "calculer_variables() {"
-    h_code "    SUJET=\"sauvegarde \$(hostname)\""
-    h_code "    DETAILS=(\"racine=\$RACINE\")"
-    h_code "    PREFIX=\"sauve\""
-    h_code "    DIR_OUT=\"\$RACINE\"              # créé au besoin"
-    h_code "    DIR_LOGS=\"\$RACINE/logs\""
+    h_code "    TK_SUJET=\"sauvegarde \$(hostname)\""
+    h_code "    TK_DETAILS=(\"racine=\$RACINE\")"
+    h_code "    TK_PREFIX=\"sauve\""
+    h_code "    TK_DIR_OUT=\"\$RACINE\"              # créé au besoin"
+    h_code "    TK_DIR_LOGS=\"\$RACINE/logs\""
     h_code "}"
     h_code ""
     h_code "verifier() { [[ -w /sauve ]] || { erreur \"/sauve non inscriptible\"; return 1; }; }"
     h_code ""
     h_code "definir_commandes() {"
-    h_code "COMMANDES=("
+    h_code "TK_COMMANDES=("
     h_code "\"Place disponible|false|df -h /sauve\""
     h_code "\"Taille de chaque compte|false|du -sh '{{compte}}'\""
-    h_code "\"Archive de chaque compte|true,log|tar czf '\$DIR_OUT/{{compte_libelle}}.tgz' '{{compte}}'\""
-    h_code "\"Purge des archives anciennes|true|find '\$DIR_OUT' -name '*.tgz' -mtime +[[jours]] -delete\""
+    h_code "\"Archive de chaque compte|true,log|tar czf '\$TK_DIR_OUT/{{compte_libelle}}.tgz' '{{compte}}'\""
+    h_code "\"Purge des archives anciennes|true|find '\$TK_DIR_OUT' -name '*.tgz' -mtime +[[jours]] -delete\""
     h_code ")"
-    h_code "LISTES=("
+    h_code "TK_LISTES=("
     h_code "\"compte|lister_utilisateurs\""
     h_code "\"jours|printf '%s\\t%s\\n' 30 'un mois' 90 'un trimestre'\""
     h_code ")"
@@ -819,7 +825,7 @@ aide() {
     h_opt "-a, --ask"            "confirmer chaque étape, même les « false »"
     h_opt "-y, --yes"            "ne rien demander (sudo ? faites « sudo -v » avant)"
     h_opt "    --color MODE"     "auto, always ou never  ·  --no-color"
-    h_opt "-h, --help [SUJET]"   "cette aide ; SUJET = un chapitre, voir plus bas"
+    h_opt "-h, --help [TK_SUJET]"   "cette aide ; TK_SUJET = un chapitre, voir plus bas"
     h_titre "Pendant l'exécution"
     h_cle "à une étape"     "Entrée=exécuter" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
     h_cle "étape répétée"   "u=une par une" "l=lister les itérations"
@@ -830,7 +836,7 @@ aide() {
     h_titre "Dans le script   1 variables · 2 réglages · 3 commandes · 4 listes · 5 fonctions"
     printf '  %s"Titre|true|commande"%s   true = demander avant, false = lancer direct\n' "$C_PROG" "$C0"
     printf '  %s[[nom]]%s  une valeur demandée une fois       %s{{nom}}%s  l%sétape rejouée par valeur\n' "$C_PROG" "$C0" "$C_PROG" "$C0" "'"
-    h_titre "En savoir plus   -h SUJET"
+    h_titre "En savoir plus   -h TK_SUJET"
     h_opt "-h etapes"   "la ligne « Titre|validation|commande », les variables"
     h_opt "-h valeurs"  "[[demandée]], {{répétée}}, menus, libellés, emboîtement"
     h_opt "-h outils"   "les dix listes toutes faites, et écrire la vôtre"
@@ -874,14 +880,14 @@ gabarit() {
         [[ -z "${deja[$nom]:-}" ]] || continue; deja[$nom]=1
         if [[ -n "$com" ]]; then printf '%-30s # %s\n' "$nom=$val" "$com"; else printf '%s=%s\n' "$nom" "$val"; fi
     done < <(if [[ -n "$CONF" ]]; then sed '/^[a-zA-Z_][a-zA-Z0-9_]*() *{/,$d' "$CONF" | grep -E '^[A-Za-z_][A-Za-z0-9_]*='
-             else sed -n '/^# 1\. VARIABLES/,/^# 3\. COMMANDES/p' "$src"; fi)
-    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre « # 1. VARIABLES » et « # 3. COMMANDES » dans $src}"
+             else sed -n '/^# 1\. VARIABLES/,/^# 3\. TK_COMMANDES/p' "$src"; fi)
+    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre « # 1. VARIABLES » et « # 3. TK_COMMANDES » dans $src}"
 }
 
 
 # --- 8.3 Arguments et configuration ----------------------------------
 PRESETS=(); PRESETS_LISTE=(); SETS=()
-CONF=""; INTRO=""
+CONF=""; TK_INTRO=""
 LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"; AIDE="false"; GABARIT="false"
 SUJET_AIDE=""
 SANS_QUESTION="false"; REPRENDRE="false"; FILTRE_ETAPES=""; DEPUIS=0
@@ -907,7 +913,7 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 
 while (( $# > 0 )); do
     case "$1" in
-        -a|--ask)          TOUT_VALIDER="true";  shift ;;
+        -a|--ask)          TK_TOUT_VALIDER="true";  shift ;;
         -y|--yes)          SANS_QUESTION="true"; shift ;;
         -n|--dry-run)      SIMULATION="true";    shift ;;
         -l|--plan)         LISTER_ETAPES="true"; shift ;;
@@ -976,9 +982,9 @@ for e in ${SETS[@]+"${SETS[@]}"}; do
     printf -v "$k" '%s' "${e#*=}" 2>/dev/null \
         || { erreur "--set : « $k » ne peut pas être modifiée (lecture seule ?)"; exit 1; }
 done
-case "${TOUT_VALIDER,,}" in true|oui|1) TOUT_VALIDER="true" ;; *) TOUT_VALIDER="false" ;; esac
-[[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] && (( MAX_ITERATIONS >= 1 )) \
-    || { erreur "MAX_ITERATIONS doit être un entier positif : $MAX_ITERATIONS"; exit 1; }
+case "${TK_TOUT_VALIDER,,}" in true|oui|1) TK_TOUT_VALIDER="true" ;; *) TK_TOUT_VALIDER="false" ;; esac
+[[ "$TK_MAX_ITERATIONS" =~ ^[0-9]+$ ]] && (( TK_MAX_ITERATIONS >= 1 )) \
+    || { erreur "TK_MAX_ITERATIONS doit être un entier positif : $TK_MAX_ITERATIONS"; exit 1; }
 [[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--from attend un numéro d'étape"; exit 1; }
 DEPUIS=$(( 10#$DEPUIS ))
 FILTRE_ETAPES="${FILTRE_ETAPES//[[:space:]]/}"
@@ -994,28 +1000,28 @@ calculer_variables
 # Sans ces trois-là, la mécanique casserait bien plus loin, sur une
 # variable non définie, à un endroit qui n'aiderait personne. Le cas se
 # produit dès qu'un fichier -c redéfinit calculer_variables.
-for v in SUJET PREFIX DIR_LOGS; do
+for v in TK_SUJET TK_PREFIX TK_DIR_LOGS; do
     [[ -n "${!v:-}" ]] || { erreur "calculer_variables doit définir $v (section 6, ou votre fichier -c)"; exit 1; }
 done
-[[ "$PREFIX" != */* ]] || { erreur "PREFIX ne peut pas contenir de / : $PREFIX"; exit 1; }
+[[ "$TK_PREFIX" != */* ]] || { erreur "TK_PREFIX ne peut pas contenir de / : $TK_PREFIX"; exit 1; }
 
 [[ "$GABARIT" == "true" ]] && { gabarit; exit 0; }
 
-# Un fichier -c peut écrire COMMANDES et LISTES directement, sans passer
+# Un fichier -c peut écrire TK_COMMANDES et TK_LISTES directement, sans passer
 # par definir_commandes : on les prend tels quels. Sinon on appelle la
 # fonction — d'abord dans un sous-shell, pour transformer un
-# « DIR_BODY: unbound variable » en explication.
-if declare -p COMMANDES >/dev/null 2>&1; then
-    declare -p LISTES >/dev/null 2>&1 || LISTES=()
+# « TK_DIR_BODY: unbound variable » en explication.
+if declare -p TK_COMMANDES >/dev/null 2>&1; then
+    declare -p TK_LISTES >/dev/null 2>&1 || TK_LISTES=()
 else
     if ! _err="$( (definir_commandes) 2>&1 )"; then
-        erreur "impossible de construire COMMANDES : ${_err##*: }"
+        erreur "impossible de construire TK_COMMANDES : ${_err##*: }"
         info "une variable utilisée en section 3 ou 4 n'existe pas — votre fichier -c redéfinit calculer_variables sans definir_commandes ?"
         exit 1
     fi
     definir_commandes
 fi
-TOTAL=${#COMMANDES[@]}
+TOTAL=${#TK_COMMANDES[@]}
 LARG_NUM=${#TOTAL}; (( LARG_NUM < 2 )) && LARG_NUM=2
 
 
@@ -1130,11 +1136,11 @@ echapper_apostrophes() { printf '%s' "${1//\'/\'\\\'\'}"; }
 
 charger_listes() {
     local e nom
-    for e in ${LISTES[@]+"${LISTES[@]}"}; do
+    for e in ${TK_LISTES[@]+"${TK_LISTES[@]}"}; do
         nom="${e%%|*}"
-        [[ "$e" == *"|"* && -n "${e#*|}" ]] || { erreur "LISTES : il faut nom|commande : $e"; exit 1; }
-        [[ "$nom" =~ ^[a-zA-Z0-9_]+$ && "$nom" != *_libelle ]] || { erreur "LISTES : nom invalide « $nom »"; exit 1; }
-        [[ -z "${GENERATEUR[$nom]:-}" ]] || { erreur "LISTES : « $nom » défini deux fois"; exit 1; }
+        [[ "$e" == *"|"* && -n "${e#*|}" ]] || { erreur "TK_LISTES : il faut nom|commande : $e"; exit 1; }
+        [[ "$nom" =~ ^[a-zA-Z0-9_]+$ && "$nom" != *_libelle ]] || { erreur "TK_LISTES : nom invalide « $nom »"; exit 1; }
+        [[ -z "${GENERATEUR[$nom]:-}" ]] || { erreur "TK_LISTES : « $nom » défini deux fois"; exit 1; }
         GENERATEUR["$nom"]="${e#*|}"
     done
 }
@@ -1360,7 +1366,7 @@ _expanser() {
 
     cmd="$(substituer_liaisons "$1")"
     if [[ ! "$cmd" =~ $RE_LISTE ]]; then
-        (( ${#EXP_CMDS[@]} >= MAX_ITERATIONS )) && { EXP_TRONQUE=1; return 0; }
+        (( ${#EXP_CMDS[@]} >= TK_MAX_ITERATIONS )) && { EXP_TRONQUE=1; return 0; }
         EXP_CMDS+=("$cmd"); EXP_LABELS+=("$label"); return 0
     fi
     cible="$(liste_a_parcourir "${BASH_REMATCH[1]}")" || return 1
@@ -1400,7 +1406,7 @@ scanner_placeholders() {
         elif [[ "${usages[$t]}" != *"$4"* ]]; then
             if [[ "$4" == et\ * ]]; then usages[$t]+=" $4"; else usages[$t]+=", $4"; fi; fi
     }
-    for e in "${COMMANDES[@]}"; do
+    for e in "${TK_COMMANDES[@]}"; do
         i=$(( i + 1 )); cmd="${e#*|}"; cmd="${cmd#*|}"
         while [[ "$cmd" =~ $RE_SIMPLE ]]; do nom="${BASH_REMATCH[1]}"; _noter PH_SIMPLES USAGE_SIMPLES "$nom" "$i"; cmd="${cmd//\[\[$nom\]\]/}"; done
         while [[ "$cmd" =~ $RE_LISTE ]];  do nom="${BASH_REMATCH[1]}"; cmd="${cmd//\{\{$nom\}\}/}"; _noter PH_LISTES USAGE_LISTES "$(liste_de "$nom")" "$i"; done
@@ -1514,7 +1520,7 @@ resume_iterations() {
     printf '  %s↻  étape répétée%s — %s%d itération%s%s\n' "$C_BOUCLE" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
     for (( i = 0; i < n && i < max; i++ )); do printf '     %s%2d%s  %s%s%s\n' "$ESTOMPE" $(( i + 1 )) "$C0" "$C_BOUCLE" "${EXP_LABELS[$i]}" "$C0"; done
     (( n > max )) && printf '     %s..  et %d autre%s — « l » pour tout voir%s\n' "$ESTOMPE" $(( n - max )) "$(pluriel "$(( n - max ))")" "$C0"
-    (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itération$(pluriel "$MAX_ITERATIONS") atteinte, liste tronquée (MAX_ITERATIONS, section 2)"
+    (( EXP_TRONQUE )) && attention "limite de $TK_MAX_ITERATIONS itération$(pluriel "$TK_MAX_ITERATIONS") atteinte, liste tronquée (TK_MAX_ITERATIONS, section 2)"
     return 0
 }
 lister_iterations() {
@@ -1538,11 +1544,11 @@ plan_initial() {   # [oui] = avec les commandes
     printf '\n'; regle "$GRAS"
     printf ' %sPlan%s   %s%d étape%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$TOTAL" "$(pluriel "$TOTAL")" "$C0"
     regle "$GRAS"
-    for e in "${COMMANDES[@]}"; do
+    for e in "${TK_COMMANDES[@]}"; do
         i=$(( i + 1 )); reste="${e#*|}"; analyser_validation "${reste%%|*}"
         m=""   # seul l'inhabituel est signalé : « auto » plutôt que « confirmation »
         [[ "${reste#*|}" == *"{{"* ]] && m+="${m:+ · }↻ répétée"
-        [[ "$F_VALIDER" == "false" && "$TOUT_VALIDER" != "true" ]] && m+="${m:+ · }auto"
+        [[ "$F_VALIDER" == "false" && "$TK_TOUT_VALIDER" != "true" ]] && m+="${m:+ · }auto"
         (( F_LOG ))     && m+="${m:+ · }log"
         (( F_STOP ))    && m+="${m:+ · }stop"
         (( F_CONTINU )) && m+="${m:+ · }continu"
@@ -1563,7 +1569,7 @@ recap() {
     (( ${#RECAP[@]} == 0 && DEMARRE == 0 )) && return
     local l num e d t
     printf '\n'; regle "$GRAS"
-    printf ' %sRécapitulatif%s   %s%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$SUJET" "$C0"
+    printf ' %sRécapitulatif%s   %s%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$TK_SUJET" "$C0"
     regle "$GRAS"
     for l in "${RECAP[@]}"; do
         num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
@@ -1602,14 +1608,14 @@ recap_enfants() {
 }
 
 ecrire_rapport() {
-    [[ -d "${DIR_LOGS:-}" ]] || return 0
-    local f="$DIR_LOGS/${PREFIX}_rapport.txt" l num e d t ligne
+    [[ -d "${TK_DIR_LOGS:-}" ]] || return 0
+    local f="$TK_DIR_LOGS/${TK_PREFIX}_rapport.txt" l num e d t ligne
     {
-        printf 'Rapport %s\n  sujet      %s\n' "$NOM_SCRIPT" "$SUJET"
-        for l in ${DETAILS[@]+"${DETAILS[@]}"}; do
+        printf 'Rapport %s\n  sujet      %s\n' "$NOM_SCRIPT" "$TK_SUJET"
+        for l in ${TK_DETAILS[@]+"${TK_DETAILS[@]}"}; do
             if [[ "$l" == *=* ]]; then printf '  %-10s %s\n' "${l%%=*}" "${l#*=}"; else printf '  %s\n' "$l"; fi
         done
-        printf '  par        %s%s sur %s\n' "$OPERATEUR" "$( (( EUID == 0 )) && printf ' (root)')" "$(hostname 2>/dev/null || printf '?')"
+        printf '  par        %s%s sur %s\n' "$TK_OPERATEUR" "$( (( EUID == 0 )) && printf ' (root)')" "$(hostname 2>/dev/null || printf '?')"
         printf '  debut      %s\n  fin        %s\n  duree      %s\n\n' "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$(duree "$SECONDS")"
         for l in "${RECAP[@]}"; do
             num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
@@ -1626,8 +1632,8 @@ ecrire_rapport() {
 
 
 # --- 8.8 Contrôles de départ -----------------------------------------
-(( TOTAL > 0 )) || { erreur "le tableau COMMANDES est vide."; exit 1; }
-for e in "${COMMANDES[@]}"; do
+(( TOTAL > 0 )) || { erreur "le tableau TK_COMMANDES est vide."; exit 1; }
+for e in "${TK_COMMANDES[@]}"; do
     reste="${e#*|}"
     [[ "$e" == *"|"* && "$reste" == *"|"* ]] || { erreur "format attendu Titre|validation|commande :"; printf '  %s\n' "$e" >&2; exit 1; }
     # Une commande réduite à des espaces passerait eval sans rien faire et
@@ -1686,13 +1692,13 @@ if [[ "$LISTER_ETAPES" == "true" ]]; then plan_initial oui; printf '\n'; exit 0;
 # En simulation, un contrôle qui échoue n'empêche pas de voir le plan.
 if ! verifier; then [[ "$SIMULATION" == "true" ]] && attention "contrôles en échec — simulation quand même" || exit 1; fi
 [[ "$INTERACTIF" == "non" && "$SANS_QUESTION" != "true" ]] && attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
-MANQUANTS=""; for b in "${REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
+MANQUANTS=""; for b in "${TK_REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
 [[ -n "$MANQUANTS" ]] && attention "binaires absents :$MANQUANTS"
 
 # sudo demande son mot de passe sur le terminal, au moment où la commande
 # part — donc au milieu du déroulé. Avec -y, personne n'est là pour
 # répondre et le script attendrait indéfiniment.
-if (( EUID != 0 )) && printf '%s\n' "${COMMANDES[@]}" ${LISTES[@]+"${LISTES[@]}"} | grep -qw sudo; then
+if (( EUID != 0 )) && printf '%s\n' "${TK_COMMANDES[@]}" ${TK_LISTES[@]+"${TK_LISTES[@]}"} | grep -qw sudo; then
     if [[ "$SANS_QUESTION" == "true" ]]; then
         attention "des étapes utilisent sudo : lancez « sudo -v » avant, sinon -y restera bloqué sur la demande de mot de passe"
     else
@@ -1701,7 +1707,7 @@ if (( EUID != 0 )) && printf '%s\n' "${COMMANDES[@]}" ${LISTES[@]+"${LISTES[@]}"
 fi
 
 CREES=0
-for nom in ${!DIR_@}; do
+for nom in ${!TK_DIR_@}; do
     d="${!nom}"
     [[ -n "$d" ]] || { erreur "$nom est vide."; exit 1; }
     if [[ ! -d "$d" && "$SIMULATION" != "true" ]]; then
@@ -1709,10 +1715,10 @@ for nom in ${!DIR_@}; do
     fi
     [[ "$SIMULATION" == "true" || -w "$d" ]] || attention "dossier non inscriptible : $d"
 done
-[[ "$SIMULATION" == "true" ]] || { LOG="$DIR_LOGS/${PREFIX}_script.log"; : >> "$LOG" || { erreur "journal non inscriptible : $LOG"; exit 1; }; }
+[[ "$SIMULATION" == "true" ]] || { LOG="$TK_DIR_LOGS/${TK_PREFIX}_script.log"; : >> "$LOG" || { erreur "journal non inscriptible : $LOG"; exit 1; }; }
 
 # Reprise : empreinte du titre ET de la commande, une par étape réussie.
-ETAT="$DIR_LOGS/${PREFIX}_etat.txt"
+ETAT="$TK_DIR_LOGS/${TK_PREFIX}_etat.txt"
 empreinte() {
     if command -v sha1sum >/dev/null 2>&1; then printf '%s' "$1" | sha1sum | cut -d' ' -f1
     elif command -v shasum >/dev/null 2>&1; then printf '%s' "$1" | shasum | cut -d' ' -f1
@@ -1722,30 +1728,30 @@ deja_faite()   { [[ "$REPRENDRE" == "true" && -r "$ETAT" ]] && grep -qxF "$1" "$
 marquer_faite() { [[ "$SIMULATION" == "true" ]] || printf '%s\n' "$1" >> "$ETAT" 2>/dev/null || true; }
 
 printf '\n'; regle "$GRAS"
-printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$CYAN" "$SUJET" "$C0"
+printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$CYAN" "$TK_SUJET" "$C0"
 regle "$GRAS"
-for l in ${DETAILS[@]+"${DETAILS[@]}"}; do
+for l in ${TK_DETAILS[@]+"${TK_DETAILS[@]}"}; do
     if [[ "$l" == *=* ]]; then entete "${l%%=*}" "${l#*=}"; else info "$l"; fi
 done
-entete "sortie"   "${DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
-entete "par"      "$OPERATEUR$( (( EUID == 0 )) && printf ' (root)')"
+entete "sortie"   "${TK_DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
+entete "par"      "$TK_OPERATEUR$( (( EUID == 0 )) && printf ' (root)')"
 entete "journal"  "$LOG"
 [[ -n "$CONF" ]]                 && entete "config"     "$CONF"
 [[ "$SIMULATION" == "true" ]]    && entete "dry-run"    "rien ne sera exécuté"
 [[ "$SANS_QUESTION" == "true" ]] && entete "-y"         "aucune question ne sera posée"
-[[ "$TOUT_VALIDER" == "true" ]]  && entete "-a"         "chaque étape sera confirmée"
+[[ "$TK_TOUT_VALIDER" == "true" ]]  && entete "-a"         "chaque étape sera confirmée"
 [[ "$REPRENDRE" == "true" ]]     && entete "resume"     "les étapes déjà réussies seront sautées"
 [[ -n "$FILTRE_ETAPES" ]]        && entete "only"       "étapes $FILTRE_ETAPES"
 (( DEPUIS > 0 ))                 && entete "from"       "étape $DEPUIS"
-[[ -n "$INTRO" ]] && printf '\n%s\n' "$INTRO"
-journal "=== démarrage — $SUJET — par $OPERATEUR"
+[[ -n "$TK_INTRO" ]] && printf '\n%s\n' "$TK_INTRO"
+journal "=== démarrage — $TK_SUJET — par $TK_OPERATEUR"
 plan_initial
 
 
 # --- 8.9 Boucle principale -------------------------------------------
 DEMARRE=1
 NUM=0; NB_FILTREES=0
-for entree in "${COMMANDES[@]}"; do
+for entree in "${TK_COMMANDES[@]}"; do
     NUM=$(( NUM + 1 ))
     # Le titre garde ses [[nom]] : c'est la clé de --resume et ce qu'affiche
     # le plan. Au récapitulatif il est figé avec les valeurs du moment, pour
@@ -1756,7 +1762,7 @@ for entree in "${COMMANDES[@]}"; do
 
     # Deux étapes identiques ont deux clés : sinon l'échec de la seconde
     # serait masqué par la réussite de la première au prochain --resume.
-    OCC=0; for e in "${COMMANDES[@]:0:NUM-1}"; do [[ "$e" == "$entree" ]] && OCC=$(( OCC + 1 )); done
+    OCC=0; for e in "${TK_COMMANDES[@]:0:NUM-1}"; do [[ "$e" == "$entree" ]] && OCC=$(( OCC + 1 )); done
     CLE="$(empreinte "$TITRE|$BRUTE|$OCC")"
     if deja_faite "$CLE"; then
         titre_etape "$NUM" "$TOTAL" "$TITRE"; info "déjà réussie précédemment — sautée (--resume)"
@@ -1808,7 +1814,7 @@ for entree in "${COMMANDES[@]}"; do
         (( F_CONTINU )) && info "un échec ici est ignoré, sans question"
 
         CHOIX=""   # vide = exécuter : les étapes « false » partent seules
-        if [[ "$F_VALIDER" == "true" || "$TOUT_VALIDER" == "true" ]]; then
+        if [[ "$F_VALIDER" == "true" || "$TK_TOUT_VALIDER" == "true" ]]; then
             if (( REPETEE )); then menu "Entrée=tout exécuter" "u=une par une" "l=lister" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
             else menu "Entrée=exécuter" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"; fi
             lire "$(invite)" CHOIX

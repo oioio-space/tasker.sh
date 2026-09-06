@@ -27,7 +27,7 @@ PC="PC07"
 SALLE="B204"
 OS="windows"
 BASE="/cases"
-OPERATEUR="M. Dupont"
+TK_OPERATEUR="M. Dupont"
 TZ_MACTIME="Europe/Paris"
 ```
 
@@ -173,12 +173,12 @@ PC="PC07"                      # poste
 SALLE="B204"                   # salle
 OS="windows"                   # windows ou linux
 BASE="/cases"                  # racine où tout est écrit
-OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"
+TK_OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"
 TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ
-REQUIS=(mmls fls ils icat mactime testdisk photorec)
+TK_REQUIS=(mmls fls ils icat mactime testdisk photorec)
 ```
 
-Les noms sont libres : le script ne connaît aucun d'eux. `REQUIS` est
+Les noms sont libres : le script ne connaît aucun d'eux. `TK_REQUIS` est
 vérifié au départ ; un binaire absent n'est qu'un avertissement, car on
 peut vouloir ne jouer qu'une partie des étapes.
 
@@ -191,19 +191,19 @@ serait faux la moitié de l'année.
 
 ```bash
 calculer_variables() {
-    SUJET="$PC · $SALLE · $OS"                       # en tête et au récapitulatif
-    DETAILS=("image=$IMAGE" "fuseau=$TZ_MACTIME")    # lignes du bandeau
-    PREFIX="${PC}_${SALLE}_${OS}"                    # préfixe des fichiers écrits
+    TK_SUJET="$PC · $SALLE · $OS"                       # en tête et au récapitulatif
+    TK_DETAILS=("image=$IMAGE" "fuseau=$TZ_MACTIME")    # lignes du bandeau
+    TK_PREFIX="${PC}_${SALLE}_${OS}"                    # préfixe des fichiers écrits
     DEST="$BASE/$SALLE/$OS/$PC"
-    DIR_BODY="$DEST/body"                            # DIR_xxx : créés au besoin
-    DIR_TIMELINE="$DEST/timeline"
-    DIR_CARVING="$DEST/carving"
-    DIR_LOGS="$DEST/logs"                            # journal, rapport, état
+    TK_DIR_BODY="$DEST/body"                            # TK_DIR_xxx : créés au besoin
+    TK_DIR_TIMELINE="$DEST/timeline"
+    TK_DIR_CARVING="$DEST/carving"
+    TK_DIR_LOGS="$DEST/logs"                            # journal, rapport, état
 }
 ```
 
-Quatre noms sont obligatoires : `SUJET`, `DETAILS`, `PREFIX`, `DIR_LOGS`.
-Tout `DIR_xxx` est vérifié et créé. C'est une fonction, et pas des
+Quatre noms sont obligatoires : `TK_SUJET`, `TK_DETAILS`, `TK_PREFIX`, `TK_DIR_LOGS`.
+Tout `TK_DIR_xxx` est vérifié et créé. C'est une fonction, et pas des
 affectations en vrac, pour être **recalculée après** `-c` et `--set`.
 
 ```bash
@@ -224,29 +224,29 @@ Vos contrôles de départ. `return 1` arrête tout avant la première étape.
 `log` : la table est recopiée au journal, on la retrouvera.
 
 ```bash
-"Fichiers alloués et supprimés|true|fls -r -p -m / -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_fls.body'"
+"Fichiers alloués et supprimés|true|fls -r -p -m / -o [[offset]] '$IMAGE' > '$TK_DIR_BODY/${TK_PREFIX}_fls.body'"
 ```
 `-r` récursif, `-p` chemins complets, `-m /` format *body* pour
 `mactime`. `[[offset]]` : demandé ici, réutilisé ensuite. `'$IMAGE'`
 entre apostrophes : le chemin peut contenir des espaces.
 
 ```bash
-"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_ils.body'"
+"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$TK_DIR_BODY/${TK_PREFIX}_ils.body'"
 ```
 `continu` : `ils` échoue souvent sur NTFS ; on ne veut pas de question.
 
 ```bash
-"Fusion des body files|false|fusionner_body '$DIR_BODY/${PREFIX}_full.body' '$DIR_BODY/${PREFIX}_fls.body' '$DIR_BODY/${PREFIX}_ils.body'"
+"Fusion des body files|false|fusionner_body '$TK_DIR_BODY/${TK_PREFIX}_full.body' '$TK_DIR_BODY/${TK_PREFIX}_fls.body' '$TK_DIR_BODY/${TK_PREFIX}_ils.body'"
 ```
 `false` : pas de validation, c'est une concaténation. `fusionner_body`
 est une fonction du fichier : `cat` échouerait sur le body absent d'`ils`.
 
 ```bash
-"Timeline|true|mactime -b '$DIR_BODY/${PREFIX}_full.body' -z '$TZ_MACTIME' -d -y > '$DIR_TIMELINE/${PREFIX}_timeline.csv'"
+"Timeline|true|mactime -b '$TK_DIR_BODY/${TK_PREFIX}_full.body' -z '$TZ_MACTIME' -d -y > '$TK_DIR_TIMELINE/${TK_PREFIX}_timeline.csv'"
 ```
 
 ```bash
-"Inventaire par utilisateur|true|inventorier_home '$IMAGE' '[[offset]]' '{{home}}' '{{home_libelle}}' '$DIR_BODY'"
+"Inventaire par utilisateur|true|inventorier_home '$IMAGE' '[[offset]]' '{{home}}' '{{home_libelle}}' '$TK_DIR_BODY'"
 ```
 `{{home}}` : rejouée pour chaque profil. La liste `home` renvoie
 `inode<TAB>chemin` — `{{home}}` vaut l'inode (ce que `fls` attend),
@@ -254,7 +254,7 @@ est une fonction du fichier : `cat` échouerait sur le body absent d'`ils`.
 produit).
 
 ```bash
-"Carving|true|photorec /log /logname '$DIR_LOGS/${PREFIX}_photorec.log' /d '$DIR_CARVING/recup_' /cmd '$IMAGE' [[index_testdisk]],fileopt,everything,enable,freespace,search"
+"Carving|true|photorec /log /logname '$TK_DIR_LOGS/${TK_PREFIX}_photorec.log' /d '$TK_DIR_CARVING/recup_' /cmd '$IMAGE' [[index_testdisk]],fileopt,everything,enable,freespace,search"
 ```
 `photorec` veut le **numéro** de partition selon `testdisk`, pas l'offset :
 d'où une seconde valeur, `[[index_testdisk]]`, avec son propre menu.
@@ -454,22 +454,22 @@ OUT="/tmp/collecte"
 HOMES="/home"
 
 calculer_variables() {
-    SUJET="collecte $(hostname)"
-    DETAILS=("homes=$HOMES")
-    PREFIX="collecte"
-    DIR_OUT="$OUT"                 # DIR_xxx : créé au besoin — le mkdir disparaît
-    DIR_LOGS="$OUT/logs"
+    TK_SUJET="collecte $(hostname)"
+    TK_DETAILS=("homes=$HOMES")
+    TK_PREFIX="collecte"
+    TK_DIR_OUT="$OUT"                 # TK_DIR_xxx : créé au besoin — le mkdir disparaît
+    TK_DIR_LOGS="$OUT/logs"
 }
 verifier() { [[ -d "$HOMES" ]] || { erreur "pas de $HOMES"; return 1; }; return 0; }
 
 definir_commandes() {
-COMMANDES=(
-"Nom de la machine|false|hostname > '$DIR_OUT/hostname.txt'"
-"Version du système|false|cat /etc/os-release > '$DIR_OUT/os-release.txt'"
-"Contenu de chaque home|true|ls -la '{{home}}' > '$DIR_OUT/ls_{{home_libelle}}.txt'"
-"Historique de chaque home|true|cp '{{historique}}' '$DIR_OUT/history_{{home_libelle}}.txt'"
+TK_COMMANDES=(
+"Nom de la machine|false|hostname > '$TK_DIR_OUT/hostname.txt'"
+"Version du système|false|cat /etc/os-release > '$TK_DIR_OUT/os-release.txt'"
+"Contenu de chaque home|true|ls -la '{{home}}' > '$TK_DIR_OUT/ls_{{home_libelle}}.txt'"
+"Historique de chaque home|true|cp '{{historique}}' '$TK_DIR_OUT/history_{{home_libelle}}.txt'"
 )
-LISTES=(
+TK_LISTES=(
 "home|lister_dossiers '$HOMES'"
 "historique|lister_si_present '{{home}}/.bash_history'"
 )
@@ -482,7 +482,7 @@ LISTES=(
 | avant | après | pourquoi |
 |---|---|---|
 | `OUT=/tmp/collecte` | `OUT="/tmp/collecte"` en tête | même chose, mais `-s OUT=/ailleurs` marche |
-| `mkdir -p $OUT` | `DIR_OUT="$OUT"` | tout `DIR_xxx` est créé au besoin |
+| `mkdir -p $OUT` | `TK_DIR_OUT="$OUT"` | tout `TK_DIR_xxx` est créé au besoin |
 | `hostname > $OUT/…` | `"Nom de la machine\|false\|hostname > …"` | une ligne = une étape ; `false` : rien à valider |
 | `for h in /home/*` | liste `home` + `{{home}}` | l'étape est rejouée par home, on voit combien avant de lancer |
 | `u=$(basename $h)` | `{{home_libelle}}` | le libellé de la liste, c'est le nom seul |
@@ -546,9 +546,9 @@ Rien ici n'est propre au forensique. Le même fichier `-c` peut décrire une
 sauvegarde, une batterie de tests, une installation. Ce qu'il faut :
 
 1. des variables en tête ;
-2. `calculer_variables` qui pose `SUJET`, `DETAILS`, `PREFIX`, `DIR_LOGS` ;
+2. `calculer_variables` qui pose `TK_SUJET`, `TK_DETAILS`, `TK_PREFIX`, `TK_DIR_LOGS` ;
 3. `verifier` pour les contrôles de départ ;
-4. `definir_commandes` avec `COMMANDES` et `LISTES` ;
+4. `definir_commandes` avec `TK_COMMANDES` et `TK_LISTES` ;
 5. vos fonctions.
 
 `./tasker.sh -t > mon-cas.conf` écrit le squelette des variables ; le § 3

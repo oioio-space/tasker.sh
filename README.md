@@ -18,13 +18,16 @@ et un cas complet à copier (`-h etapes`, `-h valeurs`, `-h outils`,
 Prérequis : bash 4.3 (sur macOS : `brew install bash`, puis `/opt/homebrew/bin/bash tasker.sh`).
 Pour comprendre en profondeur : **[TUTORIEL.md](TUTORIEL.md)**.
 
+**Un nom qui commence par `TK_` est lu par le script** : remplissez-le, ne le
+supprimez pas, ne le renommez pas. Tous les autres noms sont à vous.
+
 Le script est rangé de ce qu'on retouche le plus vers ce qu'on ne touche
 jamais :
 
 | | section | ce qu'on y met |
 |---|---|---|
 | 1 | variables | ce qui change d'un usage à l'autre |
-| 2 | réglages | posés une fois : `REQUIS`, `OPERATEUR`, `TOUT_VALIDER`, `MAX_ITERATIONS` |
+| 2 | réglages | posés une fois : `TK_REQUIS`, `TK_OPERATEUR`, `TK_TOUT_VALIDER`, `TK_MAX_ITERATIONS` |
 | 3 | commandes | les étapes |
 | 4 | listes | les valeurs sur lesquelles une étape se répète |
 | 5 | fonctions | ce que 3 et 4 appellent |
@@ -120,7 +123,7 @@ Toujours entre apostrophes : `'{{nom}}'`.
 Une liste = un nom, et une commande qui écrit **une valeur par ligne**.
 
 ```bash
-LISTES=(
+TK_LISTES=(
 "jours|printf '%s\n' 1 7 30"
 "sousdossier|lister_dossiers '$DOSSIER'"
 )
@@ -263,12 +266,12 @@ inode, un identifiant, un chemin complet), le libellé ce qu'on veut voir
 dans un nom de fichier :
 
 ```bash
-"Inventaire|true|fls '$IMAGE' '{{home}}' > '$DIR_OUT/{{home_libelle}}.txt'"
+"Inventaire|true|fls '$IMAGE' '{{home}}' > '$TK_DIR_OUT/{{home_libelle}}.txt'"
 #                                  ↑ 51-144-1              ↑ Users/alice
 ```
 
 ```bash
-"Contenu de chaque home|true|ls -la '{{home}}' > '$DIR_OUT/ls_{{home_libelle}}.txt'"
+"Contenu de chaque home|true|ls -la '{{home}}' > '$TK_DIR_OUT/ls_{{home_libelle}}.txt'"
 #                                      ↑ /home/alice              ↑ alice
 ```
 
@@ -359,7 +362,7 @@ erreur.
 | `lister_montages [-i] [motif...]` | point de montage · type et périphérique |
 
 ```bash
-LISTES=(
+TK_LISTES=(
 "journal|lister_fichiers /var/log '*.log' '*.log.1'"
 "recent|lister_recents /var/log 2"
 "config|lister_arbre /etc '*.conf'"
@@ -372,7 +375,7 @@ Chaque home du système, et un fichier dans chacun — les deux listes
 s'emboîtent toutes seules :
 
 ```bash
-LISTES=(
+TK_LISTES=(
 "compte|lister_utilisateurs"
 "historique|lister_si_present '{{compte}}/.bash_history'"
 )
@@ -436,7 +439,7 @@ Du shell. Il fixe les variables, et peut redéfinir les commandes.
 ```bash
 # poste.conf
 DOSSIER="/srv/data"
-OPERATEUR="M. Dupont"
+TK_OPERATEUR="M. Dupont"
 ```
 
 ```bash
@@ -446,7 +449,7 @@ OPERATEUR="M. Dupont"
 ./tasker.sh -c cas.conf -t > poste2.conf        # gabarit d'un cas : « source cas.conf » + ses variables
 ```
 
-Priorité : valeurs du script &lt; fichier `-c` &lt; `--set`. Un tableau (`REQUIS`)
+Priorité : valeurs du script &lt; fichier `-c` &lt; `--set`. Un tableau (`TK_REQUIS`)
 ne se change que dans le fichier, pas par `--set`. Dans le fichier,
 `return` et jamais `exit` : `exit` tuerait le script, et il est refusé.
 
@@ -456,8 +459,8 @@ Un jeu d'étapes complet, sans copier le script :
 # cas.conf
 DOSSIER="/srv/data"
 definir_commandes() {
-    COMMANDES=("Contenu|true|ls '$DOSSIER'")
-    LISTES=()
+    TK_COMMANDES=("Contenu|true|ls '$DOSSIER'")
+    TK_LISTES=()
 }
 ```
 
@@ -478,18 +481,17 @@ DOSSIER="/srv/autre"
 
 ## Ce que le script attend de vous
 
-Les noms de vos variables sont libres, **sauf ceux-ci**. Le script les lit ;
-ne les supprimez pas, renommez-les encore moins.
+Tout ce qui commence par `TK_` est à lui. Les autres noms sont à vous.
 
 ### Les réglages — section 2, ou votre fichier `-c`
 
 | variable | rôle | valeurs |
 |---|---|---|
-| `OPERATEUR` | qui a lancé, noté au bandeau, au journal et au rapport | texte ; `${SUDO_USER:-$USER}` prend la vraie personne sous sudo |
-| `TOUT_VALIDER` | confirmer chaque étape, même les `false` | `true` / `false` (ou `-a`) |
-| `MAX_ITERATIONS` | plafond d'une étape répétée, au-delà elle est tronquée | entier ≥ 1 |
-| `REQUIS` | binaires vérifiés au départ ; absents = avertissement | tableau : `(du df)` |
-| `INTRO` | texte affiché après le bandeau (facultatif) | texte, plusieurs lignes possibles |
+| `TK_OPERATEUR` | qui a lancé, noté au bandeau, au journal et au rapport | texte ; `${SUDO_USER:-$USER}` prend la vraie personne sous sudo |
+| `TK_TOUT_VALIDER` | confirmer chaque étape, même les `false` | `true` / `false` (ou `-a`) |
+| `TK_MAX_ITERATIONS` | plafond d'une étape répétée, au-delà elle est tronquée | entier ≥ 1 |
+| `TK_REQUIS` | binaires vérifiés au départ ; absents = avertissement | tableau : `(du df)` |
+| `TK_INTRO` | texte affiché après le bandeau (facultatif) | texte, plusieurs lignes possibles |
 
 ### Dans `calculer_variables` (section 6)
 
@@ -497,13 +499,13 @@ Recalculée après `-c` et `--set`, pour que tout suive la dernière valeur.
 
 | variable | rôle | exemple |
 |---|---|---|
-| `SUJET` | titre court, en tête et au récapitulatif | `"$PC · $SALLE"` |
-| `DETAILS` | lignes du bandeau de départ | `("image=$IMAGE" "fuseau=$TZ")` — clé sans accent |
-| `PREFIX` | préfixe des fichiers écrits, sans `/` | `"${PC}_${SALLE}"` |
-| `DIR_LOGS` | dossier du journal, du rapport et de l'état de reprise | `"$DEST/logs"` |
-| `DIR_xxx` | tout autre dossier de travail : vérifié, créé au besoin | `DIR_BODY`, `DIR_SORTIE`… |
+| `TK_SUJET` | titre court, en tête et au récapitulatif | `"$PC · $SALLE"` |
+| `TK_DETAILS` | lignes du bandeau de départ | `("image=$IMAGE" "fuseau=$TZ")` — clé sans accent |
+| `TK_PREFIX` | préfixe des fichiers écrits, sans `/` | `"${PC}_${SALLE}"` |
+| `TK_DIR_LOGS` | dossier du journal, du rapport et de l'état de reprise | `"$DEST/logs"` |
+| `TK_DIR_xxx` | tout autre dossier de travail : vérifié, créé au besoin | `TK_DIR_BODY`, `TK_DIR_SORTIE`… |
 
-`SUJET`, `PREFIX` et `DIR_LOGS` sont obligatoires : le script refuse de
+`TK_SUJET`, `TK_PREFIX` et `TK_DIR_LOGS` sont obligatoires : le script refuse de
 partir sans.
 
 ### Les trois fonctions appelées par le script
@@ -512,10 +514,10 @@ partir sans.
 |---|---|---|
 | `calculer_variables` | après `-c` et `--set` | poser les variables ci-dessus |
 | `verifier` | avant la première étape | vos contrôles ; `return 1` arrête tout |
-| `definir_commandes` | après `calculer_variables` | remplir `COMMANDES` et `LISTES` |
+| `definir_commandes` | après `calculer_variables` | remplir `TK_COMMANDES` et `TK_LISTES` |
 
 Un fichier `-c` peut remplacer n'importe laquelle des trois. S'il écrit
-`COMMANDES=(…)` directement, `definir_commandes` n'est pas appelée.
+`TK_COMMANDES=(…)` directement, `definir_commandes` n'est pas appelée.
 
 ### Ce que vous pouvez utiliser dans vos fonctions
 
@@ -543,10 +545,10 @@ valeurs.
 | `-D`, `--var` | `nom=valeur` | répondre d'avance à `[[nom]]` |
 | `--list` | `nom=a,b,c` | figer `{{nom}}` sur ces valeurs |
 | `--vars` | | montrer les `[[ ]]` et `{{ }}` attendus |
-| `-h`, `--help` | `SUJET` | l'aide ; `etapes` `valeurs` `outils` `config` `exemple` `tout` |
+| `-h`, `--help` | `TK_SUJET` | l'aide ; `etapes` `valeurs` `outils` `config` `exemple` `tout` |
 | `-t`, `--template` | | écrire un fichier `-c` sur la sortie standard |
 | `-l`, `--plan` | | le plan, sans rien lancer |
-| `-n`, `--dry-run` | | tout afficher, rien exécuter — sauf les commandes de `LISTES`, lancées pour annoncer les itérations |
+| `-n`, `--dry-run` | | tout afficher, rien exécuter — sauf les commandes de `TK_LISTES`, lancées pour annoncer les itérations |
 | `-o`, `--only` | `2,5-7` | ne jouer que ces étapes |
 | `-f`, `--from` | `4` | partir de l'étape 4 |
 | `-r`, `--resume` | | sauter les étapes déjà réussies |
@@ -620,9 +622,9 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 ## Ce qui est écrit
 
 ```
-<DIR_LOGS>/<PREFIX>_script.log     chaque commande, code, durée ; s'allonge à chaque exécution
-<DIR_LOGS>/<PREFIX>_rapport.txt    le récapitulatif, réécrit à chaque exécution
-<DIR_LOGS>/<PREFIX>_etat.txt       les étapes réussies (pour -r)
+<TK_DIR_LOGS>/<TK_PREFIX>_script.log     chaque commande, code, durée ; s'allonge à chaque exécution
+<TK_DIR_LOGS>/<TK_PREFIX>_rapport.txt    le récapitulatif, réécrit à chaque exécution
+<TK_DIR_LOGS>/<TK_PREFIX>_etat.txt       les étapes réussies (pour -r)
 ```
 
 `-r` reconnaît une étape à l'empreinte de son titre **et** de sa commande :
@@ -651,7 +653,7 @@ empreintes.
   options `shopt`, `LC_ALL` et les traps sont remis après chaque commande.
 * `head` derrière un `tee` ferme le tube : code 141. Utilisez `tail`.
 * Pas de commande interactive avec `log`.
-* Une commande de `LISTES` ne lit pas le clavier.
+* Une commande de `TK_LISTES` ne lit pas le clavier.
 * Ctrl-C interrompt la commande en cours, pas la ligne : sur `a ; b`, `b` tourne. Écrivez `a && b`.
 
 ---
