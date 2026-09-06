@@ -5,9 +5,15 @@ journal, et de quoi répéter une étape sur une liste de valeurs.
 
 ```bash
 ./tasker.sh -h          # l'aide
+./tasker.sh -h tout     # le manuel complet, dans le script
 ./tasker.sh -l          # voir le plan sans rien lancer
 ./tasker.sh             # lancer
 ```
+
+Le script se suffit à lui-même : copié seul sur une machine, `-h` explique
+tout — la ligne d'étape, les valeurs, les listes fournies, le fichier `-c`,
+et un cas complet à copier (`-h etapes`, `-h valeurs`, `-h outils`,
+`-h config`, `-h exemple`). Ce README est le même contenu, en plus confortable.
 
 Prérequis : bash 4.3 (sur macOS : `brew install bash`, puis `/opt/homebrew/bin/bash tasker.sh`).
 Pour comprendre en profondeur : **[TUTORIEL.md](TUTORIEL.md)**.
@@ -527,6 +533,7 @@ valeurs.
 | `-D`, `--var` | `nom=valeur` | répondre d'avance à `[[nom]]` |
 | `--list` | `nom=a,b,c` | figer `{{nom}}` sur ces valeurs |
 | `--vars` | | montrer les `[[ ]]` et `{{ }}` attendus |
+| `-h`, `--help` | `SUJET` | l'aide ; `etapes` `valeurs` `outils` `config` `exemple` `tout` |
 | `-t`, `--template` | | écrire un fichier `-c` sur la sortie standard |
 | `-l`, `--plan` | | le plan, sans rien lancer |
 | `-n`, `--dry-run` | | tout afficher, rien exécuter — sauf les commandes de `LISTES`, lancées pour annoncer les itérations |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # tasker.sh — enchaîne des commandes, validées une à une.
-#     ./tasker.sh -h       aide          ./tasker.sh -l       voir le plan
+#     ./tasker.sh -h       aide          ./tasker.sh -h tout  tout le manuel
 #
 #   Sections, de la plus retouchée à la moins retouchée :
 #   1 VARIABLES · 2 RÉGLAGES · 3 COMMANDES · 4 LISTES · 5 FONCTIONS
@@ -580,6 +580,190 @@ h_cle() {   # <libellé> clé=texte ... — une clé vide n'affiche que le texte
     for e in "$@"; do k="${e%%=*}"; s+="${s:+ · }${k:+$GRAS$k$C0 }${e#*=}"; done
     printf '%s\n' "$s"
 }
+h_ligne() { printf '  %s\n' "$*"; }
+h_code()  { printf '  %s%s%s\n' "$C_PROG" "$*" "$C0"; }
+h_vide()  { printf '\n'; }
+h_ex()    { printf '  %s%-38s%s %s\n' "$C_PROG" "$1" "$C0" "$2"; }   # code   commentaire
+
+SUJETS="etapes valeurs outils config exemple tout"
+
+aide_etapes() {
+    h_titre "Une étape   section 3 du script, ou votre fichier -c"
+    h_code '"Titre|validation|commande"'
+    h_vide
+    h_code '"Espace disque|true|df -h /"'
+    h_code '"Sauvegarde|false|tar czf /tmp/etc.tgz /etc"'
+    h_code '"Journalisée|true,log|dmesg | tail -n 50"'
+    h_code '"Optionnelle|true,continu|systemctl status nginx"'
+    h_code '"Critique|true,stop|mount /dev/sdb1 /mnt"'
+    h_vide
+    h_opt "true"      "demande avant de lancer"
+    h_opt "false"     "lance directement"
+    h_opt ",log"      "la sortie va aussi dans le journal (pas d'interactif)"
+    h_opt ",continu"  "un échec est ignoré, sans question"
+    h_opt ",stop"     "un échec arrête tout, sans question"
+    h_vide
+    h_ligne "Pas de | dans le titre ; ceux de la commande sont libres."
+    h_ligne "Le code de sortie de la commande fait ● ou ✗. Un échec sans"
+    h_ligne "« continu » ni « stop » pose la question : continuer ou non."
+    h_titre "Les variables"
+    h_ligne "\$VAR est remplacée au moment de lire les commandes ; \\\$VAR survit"
+    h_ligne "jusqu'à l'exécution — c'est ce qu'il faut dans une boucle :"
+    h_code "\"Boucle|true|for f in '\$DOSSIER'/*; do echo \\\$f; done\""
+    h_vide
+    h_ligne "Les commandes tournent dans le shell du script : vos fonctions"
+    h_ligne "sont appelables, un cd persiste, set -u est actif."
+}
+
+aide_valeurs() {
+    h_titre "Demander une valeur   [[nom]]"
+    h_ligne "Demandée une fois, réutilisée par toutes les étapes qui l'écrivent."
+    h_code '"Récents|true|find / -mtime -[[jours]]"'
+    h_ligne "Fournie d'avance : --var jours=7   ·   la ressaisir : touche r"
+    h_titre "Répéter une étape   {{nom}}"
+    h_ligne "L'étape est rejouée pour chaque valeur de la liste « nom »."
+    h_ex "\"Taille|true|du -sh '{{dossier}}'\"" "toujours entre apostrophes"
+    h_titre "Les listes   section 4 du script"
+    h_ligne "Un nom, et une commande qui écrit une valeur par ligne."
+    h_code '"jours|printf '"'"'%s\n'"'"' 1 7 30"'
+    h_code "\"dossier|lister_dossiers '\$DOSSIER'\""
+    h_vide
+    h_ligne "Même nom qu'un [[ ]] : la question devient un menu numéroté."
+    h_ligne "Écrite en {{ }} : une itération par valeur, annoncées avant."
+    h_titre "Les libellés   valeur<TAB>libellé"
+    h_ligne "Seule la valeur entre dans la commande ; le libellé s'affiche, et"
+    h_ligne "{{nom_libelle}} le rend dans la commande."
+    h_ex "\"home|printf '%s\\t%s\\n' 51-144-1 alice\"" "valeur, puis libellé"
+    h_titre "Listes emboîtées"
+    h_ligne "Une liste peut en appeler une autre : elle est régénérée pour"
+    h_ligne "chaque valeur de celle dont elle dépend, et l'étape parcourt les"
+    h_ligne "deux niveaux toute seule. Une branche sans résultat ne produit"
+    h_ligne "rien, sans erreur."
+    h_code '"compte|lister_utilisateurs"'
+    h_code '"historique|lister_si_present '"'"'{{compte}}/.bash_history'"'"'"'
+    h_code '"Copie|true|cp '"'"'{{historique}}'"'"' /sauve/{{compte_libelle}}"'
+    h_vide
+    h_ligne "Voir ce qui sera demandé et d'où ça vient : --vars"
+    h_ligne "Figer une liste sans l'interroger : --list dossier=/a,/b"
+}
+
+aide_outils() {
+    h_titre "Listes toutes faites   section 7 du script"
+    h_ligne "Elles écrivent déjà valeur<TAB>libellé, encaissent les noms avec"
+    h_ligne "espaces ou apostrophes, laissent Ctrl-C sortir, et ne prennent"
+    h_ligne "jamais « rien trouvé » pour une erreur."
+    h_vide
+    h_opt "lister_dossiers"     "[-i] <racine> [motif...]    sous-dossiers directs"
+    h_opt "lister_fichiers"     "[-i] <racine> [motif...]    fichiers directs"
+    h_opt "lister_arbre"        "[-i] <racine> [motif...]    toute l'arborescence"
+    h_opt "lister_recents"      "[-i] <racine> <jours> [motif...]"
+    h_opt "lister_gros"         "[-i] <racine> <Mo> [motif...]"
+    h_opt "lister_si_present"   "<chemin>...                 ce qui existe"
+    h_opt "lister_lignes"       "[-i] <fichier> [motif...]   un fichier de valeurs"
+    h_opt "lister_colonne"      "<fichier> <n> [séparateur]  la colonne n"
+    h_opt "lister_utilisateurs" "[uid_mini]                  les comptes"
+    h_opt "lister_montages"     "[-i] [motif...]             les disques montés"
+    h_titre "Les motifs"
+    h_ligne "Facultatifs et multiples. Ils portent sur le NOM seul, jamais sur"
+    h_ligne "le chemin, et distinguent les majuscules ; -i les ignore."
+    h_vide
+    h_ex "lister_fichiers /etc"                  "tout, cachés compris"
+    h_ex "lister_fichiers /etc '*.conf' '*.cfg'" "deux motifs"
+    h_ex "lister_fichiers /etc '[!.]*'"          "sauf les cachés"
+    h_ex "lister_fichiers -i /docs '*.pdf'"      "-i : .pdf, .PDF, .Pdf"
+    h_titre "Écrire la vôtre"
+    h_ligne "emettre <valeur> [libellé] écrit une ligne et refuse ce qui"
+    h_ligne "casserait la suite. Avec le test d'interruption, c'est tout."
+    h_code "ma_liste() {"
+    h_code "    local d"
+    h_code "    for d in \"\$1\"/*/; do"
+    h_code "        (( INTERROMPU )) && return 130"
+    h_code "        emettre \"\${d%/}\" \"\$(basename \"\$d\")\""
+    h_code "    done"
+    h_code "    return 0"
+    h_code "}"
+    h_vide
+    h_ligne "Valeurs sur la sortie standard, messages sur >&2 : ils vont au"
+    h_ligne "journal. Une liste vide n'est pas une erreur."
+}
+
+aide_config() {
+    h_titre "Le fichier -c"
+    h_ligne "Du shell, chargé après le script : il peut fixer les variables et"
+    h_ligne "redéfinir les trois fonctions. Un squelette prêt à remplir :"
+    h_code "./$NOM_SCRIPT -t > mon-cas.conf"
+    h_code "./$NOM_SCRIPT -c mon-cas.conf"
+    h_vide
+    h_ligne "Priorité : valeurs du script < fichier -c < --set."
+    h_ligne "Dans le fichier : return, jamais exit."
+    h_titre "Les trois fonctions   sections 3, 4 et 6 du script"
+    h_opt "calculer_variables" "appelée après -c et --set ; pose les noms ci-dessous"
+    h_opt "verifier"           "contrôles de départ ; return 1 pour arrêter"
+    h_opt "definir_commandes"  "remplit COMMANDES et LISTES"
+    h_titre "Les noms que le script lit"
+    h_opt "SUJET"    "titre court, en tête et au récapitulatif"
+    h_opt "DETAILS"  "lignes du bandeau, « clé=valeur » (clé sans accent)"
+    h_opt "PREFIX"   "préfixe des fichiers écrits"
+    h_opt "DIR_LOGS" "journal, rapport, état de reprise ; tout DIR_xxx est créé"
+    h_opt "INTRO"    "texte affiché après le bandeau (facultatif)"
+    h_titre "Les réglages   section 2"
+    h_opt "REQUIS"         "binaires attendus, absents = avertissement : (du df)"
+    h_opt "OPERATEUR"      "qui a lancé ; \${SUDO_USER:-\$USER} sous sudo"
+    h_opt "TOUT_VALIDER"   "true = confirmer chaque étape, même les « false »"
+    h_opt "MAX_ITERATIONS" "plafond d'une étape répétée, au-delà elle est tronquée"
+}
+
+aide_exemple() {
+    h_titre "Un cas complet   à copier dans un fichier, puis -c ce fichier"
+    h_vide
+    h_code "# Sauvegarde des comptes d'une machine."
+    h_code "RACINE=\"/sauve/\$(hostname)\"        # ce qui change d'un usage à l'autre"
+    h_code "REQUIS=(tar du)"
+    h_code ""
+    h_code "calculer_variables() {"
+    h_code "    SUJET=\"sauvegarde \$(hostname)\""
+    h_code "    DETAILS=(\"racine=\$RACINE\")"
+    h_code "    PREFIX=\"sauve\""
+    h_code "    DIR_OUT=\"\$RACINE\"              # créé au besoin"
+    h_code "    DIR_LOGS=\"\$RACINE/logs\""
+    h_code "}"
+    h_code ""
+    h_code "verifier() { [[ -w /sauve ]] || { erreur \"/sauve non inscriptible\"; return 1; }; }"
+    h_code ""
+    h_code "definir_commandes() {"
+    h_code "COMMANDES=("
+    h_code "\"Place disponible|false|df -h /sauve\""
+    h_code "\"Taille de chaque compte|false|du -sh '{{compte}}'\""
+    h_code "\"Archive de chaque compte|true,log|tar czf '\$DIR_OUT/{{compte_libelle}}.tgz' '{{compte}}'\""
+    h_code "\"Purge des archives anciennes|true|find '\$DIR_OUT' -name '*.tgz' -mtime +[[jours]] -delete\""
+    h_code ")"
+    h_code "LISTES=("
+    h_code "\"compte|lister_utilisateurs\""
+    h_code "\"jours|printf '%s\\t%s\\n' 30 'un mois' 90 'un trimestre'\""
+    h_code ")"
+    h_code "}"
+    h_vide
+    h_ligne "Ce que ça donne : quatre étapes, la 2 et la 3 rejouées par compte,"
+    h_ligne "un menu à deux entrées pour [[jours]]. Voir avant de lancer : -l"
+    h_ligne "puis --vars ; répéter sans question : -y --var jours=30."
+}
+
+aide_sujet() {
+    case "${1,,}" in
+        etapes|étapes|etape|step)  aide_etapes ;;
+        valeurs|valeur|listes|liste) aide_valeurs ;;
+        outils|outil|fonctions)    aide_outils ;;
+        config|conf|fichier)       aide_config ;;
+        exemple|exemples|demo)     aide_exemple ;;
+        tout|all)                  aide_etapes; h_vide; aide_valeurs; h_vide
+                                   aide_outils; h_vide; aide_config; h_vide; aide_exemple ;;
+        *) erreur "aide : sujet inconnu « $1 »"
+           info "sujets : $SUJETS"; return 1 ;;
+    esac
+    printf '\n'
+    return 0
+}
+
 aide() {
     printf '%s%s%s — enchaîne des commandes, validées une à une.\n' "$GRAS" "$NOM_SCRIPT" "$C0"
     printf 'Usage : %s./%s%s [options]\n' "$C_PROG" "$NOM_SCRIPT" "$C0"
@@ -600,7 +784,7 @@ aide() {
     h_opt "-a, --ask"            "confirmer chaque étape, même les « false »"
     h_opt "-y, --yes"            "ne rien demander (sudo ? faites « sudo -v » avant)"
     h_opt "    --color MODE"     "auto, always ou never  ·  --no-color"
-    h_opt "-h, --help"           "cette aide"
+    h_opt "-h, --help [SUJET]"   "cette aide ; SUJET = un chapitre, voir plus bas"
     h_titre "Pendant l'exécution"
     h_cle "à une étape"     "Entrée=exécuter" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
     h_cle "étape répétée"   "u=une par une" "l=lister les itérations"
@@ -611,13 +795,14 @@ aide() {
     h_titre "Dans le script   1 variables · 2 réglages · 3 commandes · 4 listes · 5 fonctions"
     printf '  %s"Titre|true|commande"%s   true = demander avant, false = lancer direct\n' "$C_PROG" "$C0"
     printf '  %s[[nom]]%s  une valeur demandée une fois       %s{{nom}}%s  l%sétape rejouée par valeur\n' "$C_PROG" "$C0" "$C_PROG" "$C0" "'"
-    h_titre "Listes toutes faites   section 7 du script, à appeler dans la section 4"
-    h_opt "[-i] <racine> [motif...]"     "lister_dossiers · lister_fichiers · lister_arbre"
-    h_opt "[-i] <racine> <n> [motif]"    "lister_recents (jours) · lister_gros (Mo)"
-    h_opt "<fichier>, <chemin>..."       "lister_lignes · lister_colonne · lister_si_present"
-    h_opt ""                             "lister_utilisateurs · lister_montages"
-    printf '  motif : sur le nom, sensible à la casse (-i pour ignorer) ; sans motif, tout\n'
-    printf '\n  Exemples et détails : TUTORIEL.md            Code de sortie : 1 s%sil reste un échec\n\n' "'"
+    h_titre "En savoir plus   -h SUJET"
+    h_opt "-h etapes"   "la ligne « Titre|validation|commande », les variables"
+    h_opt "-h valeurs"  "[[demandée]], {{répétée}}, menus, libellés, emboîtement"
+    h_opt "-h outils"   "les dix listes toutes faites, et écrire la vôtre"
+    h_opt "-h config"   "le fichier -c, les noms que le script lit"
+    h_opt "-h exemple"  "un cas complet, à copier"
+    h_opt "-h tout"     "les cinq d'affilée"
+    printf '\n  Code de sortie : 1 s%sil reste un échec\n\n' "'"
 }
 
 # ---------- --template : un fichier -c déduit des sections 1 et 2 ----------
@@ -663,6 +848,7 @@ gabarit() {
 PRESETS=(); PRESETS_LISTE=(); SETS=()
 CONF=""; INTRO=""
 LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"; AIDE="false"; GABARIT="false"
+SUJET_AIDE=""
 SANS_QUESTION="false"; REPRENDRE="false"; FILTRE_ETAPES=""; DEPUIS=0
 
 exige_valeur() { [[ -n "${2:-}" ]] || { printf '%s attend une valeur.\n' "$1" >&2; exit 1; }; }
@@ -708,14 +894,22 @@ while (( $# > 0 )); do
         --color)           exige_valeur "$1" "${2:-}"; COULEUR="$2";          shift 2 ;;
         --color=*)         COULEUR="${1#*=}";                                 shift ;;
         -t|--template)     GABARIT="true";       shift ;;
-        -h|--help)         AIDE="true";          shift ;;
+        -h|--help)         AIDE="true"
+                           # « -h listes » : le mot qui suit est un sujet,
+                           # sauf si c'est une autre option.
+                           if [[ -n "${2-}" && "$2" != -* ]]; then SUJET_AIDE="$2"; shift; fi
+                           shift ;;
+        --help=*)          AIDE="true"; SUJET_AIDE="${1#*=}";                     shift ;;
         *) printf 'Option inconnue : %s   (-h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
     esac
 done
 case "$COULEUR" in always|yes|oui) COULEUR="oui" ;; never|no|non) COULEUR="non" ;; auto) ;;
     *) printf -- '--color attend auto, always ou never.\n' >&2; exit 1 ;; esac
 init_affichage
-[[ "$AIDE" == "true" ]] && { aide; exit 0; }
+if [[ "$AIDE" == "true" ]]; then
+    if [[ -n "$SUJET_AIDE" ]]; then aide_sujet "$SUJET_AIDE"; exit $?; fi
+    aide; exit 0
+fi
 
 # Le fichier -c est du shell : il peut fixer les variables, mais aussi
 # redéfinir definir_commandes et ajouter des fonctions (voir exemples/).
