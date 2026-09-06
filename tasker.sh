@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# forensic.sh — enchaîne des commandes, validées une à une.
-#     ./forensic.sh -h       aide          ./forensic.sh --demo   essai sans risque
+# tasker.sh — enchaîne des commandes, validées une à une.
+#     ./tasker.sh -h       aide          ./tasker.sh --demo   essai sans risque
 #
 #   1 VARIABLES · 2 COMMANDES · 3 LISTES · 4 CHEMINS · 5 FONCTIONS · 6 MÉCANIQUE
 #   Tout ce qui se modifie est dans les cinq premières. Voir aussi TUTORIEL.md.
@@ -15,16 +15,12 @@ fi
 # =====================================================================
 # 1. VARIABLES     aussi : -c fichier.conf, ou --set NOM=valeur
 # =====================================================================
-IMAGE="/images/pc07.dd"        # image disque à analyser
-PC="PC07"                      # poste
-SALLE="B204"                   # salle
-OS="windows"                   # windows ou linux
-BASE="/cases"                  # racine où tout est écrit
-OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # SUDO_USER : la vraie personne sous sudo
-TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ (un nom de zone, jamais UTC+1)
+DOSSIER="$HOME"                # ce sur quoi on travaille
+SORTIE="${TMPDIR:-/tmp}/tasker" # où écrire journal et rapport
+OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # noté dans le journal et le rapport
 TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -a)
 MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
-REQUIS=(mmls fls ils icat mactime testdisk photorec)   # absents = avertissement
+REQUIS=(du df)                 # binaires attendus ; absents = avertissement
 
 
 # =====================================================================
@@ -39,26 +35,18 @@ REQUIS=(mmls fls ils icat mactime testdisk photorec)   # absents = avertissement
 #   {{nom}}     l'étape est rejouée pour chaque valeur de la liste « nom »,
 #               toujours entre apostrophes : '{{nom}}'
 #   Pas de | dans le titre ; ceux de la commande sont libres.
-#   Le tout est dans une fonction pour que $IMAGE etc. suivent -c et --set.
+#   Le tout est dans une fonction pour que $DOSSIER etc. suivent -c et --set.
+#
+#   Ce qui suit est un exemple qui tourne partout. Remplacez-le, ou
+#   laissez-le et mettez les vôtres dans un fichier -c (voir exemples/).
 # =====================================================================
 definir_commandes() {
 
 COMMANDES=(
-"Table des partitions|true,log|mmls '$IMAGE'"
-"Fichiers alloués et supprimés|true|fls -r -p -m / -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_fls.body'"
-"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_ils.body'"
-"Fusion des body files|false|fusionner_body '$DIR_BODY/${PREFIX}_full.body' '$DIR_BODY/${PREFIX}_fls.body' '$DIR_BODY/${PREFIX}_ils.body'"
-"Timeline|true|mactime -b '$DIR_BODY/${PREFIX}_full.body' -z '$TZ_MACTIME' -d -y > '$DIR_TIMELINE/${PREFIX}_timeline.csv'"
-"Inventaire par utilisateur|true|inventorier_home '$IMAGE' '[[offset]]' '{{home}}' '{{home_libelle}}' '$DIR_BODY'"
-"Liste des partitions (testdisk)|true,log|testdisk /list '$IMAGE'"
-"Carving|true|photorec /log /logname '$DIR_LOGS/${PREFIX}_photorec.log' /d '$DIR_CARVING/recup_' /cmd '$IMAGE' [[index_testdisk]],fileopt,everything,enable,freespace,search"
-
-# Un fichier de chaque profil : {{fichier}} dépend de {{home}}, la boucle
-# sur les profils se déclenche toute seule. Vérifiez le nombre d'itérations.
-#"Hachage fichier par fichier|true|hacher_fichier '$IMAGE' '[[offset]]' '{{fichier}}' '{{fichier_libelle}}' >> '$DIR_LOGS/${PREFIX}_hashes.txt'"
-
-# Le .bashrc de chaque utilisateur (voir la liste « bashrc », section 3).
-#"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
+"Espace disponible|false|df -h '$DOSSIER'"
+"Contenu du dossier|true|ls -la '$DOSSIER'"
+"Taille de chaque sous-dossier|true|du -sh '{{sousdossier}}'"
+"Les fichiers les plus gros|true,log|find '$DOSSIER' -maxdepth [[profondeur]] -type f -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -n 10"
 )
 
 
@@ -71,21 +59,15 @@ COMMANDES=(
 #   Une ligne  valeur<TAB>libellé  envoie la valeur dans la commande et
 #   affiche le libellé, disponible en {{nom_libelle}}.
 #
-#   UNE LISTE PEUT EN APPELER UNE AUTRE, et c'est tout le mécanisme :
-#   « fichier » contient {{home}}, donc elle est régénérée pour chaque
-#   home — écrire {{fichier}} seul parcourt les fichiers de tous les
-#   profils. Une liste qui ne renvoie rien ne produit aucune itération,
-#   ce n'est pas une erreur. Exemple déroulé : TUTORIEL.md, § 7.
+#   UNE LISTE PEUT EN APPELER UNE AUTRE, et c'est tout le mécanisme : une
+#   liste qui contient {{sousdossier}} est régénérée pour chaque
+#   sous-dossier, et l'écrire seule dans une commande suffit à parcourir
+#   les deux niveaux. Une liste vide ne produit aucune itération, ce n'est
+#   pas une erreur. Exemple déroulé : TUTORIEL.md.
 # =====================================================================
 LISTES=(
-"offset|lister_partitions '$IMAGE'"
-"index_testdisk|lister_partitions_testdisk '$IMAGE'"
-"home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
-"fichier|lister_fichiers '$IMAGE' '[[offset]]' '{{home}}'"
-
-# Un fichier précis dans chaque home. Le motif est une expression
-# régulière : ^\.bashrc$ pour ce seul nom, \.(bash|zsh)rc$ pour les deux.
-#"bashrc|lister_fichiers_nommes '$IMAGE' '[[offset]]' '{{home}}' '^\.bashrc$'"
+"sousdossier|lister_dossiers '$DOSSIER'"
+"profondeur|printf '%s\t%s\n' 1 'ce dossier seulement' 2 'et ses sous-dossiers' 4 'quatre niveaux'"
 )
 
 }
@@ -103,27 +85,21 @@ LISTES=(
 #   DIR_xxx  dossiers de travail, vérifiés et créés au besoin.
 #            DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
 calculer_variables() {
-    SUJET="$PC · $SALLE · $OS"
-    DETAILS=("image=$IMAGE" "fuseau=$TZ_MACTIME")
-
-    PREFIX="${PC}_${SALLE}_${OS}"
-    DEST="$BASE/$SALLE/$OS/$PC"
-    DIR_BODY="$DEST/body"
-    DIR_TIMELINE="$DEST/timeline"
-    DIR_CARVING="$DEST/carving"
-    DIR_LOGS="$DEST/logs"
+    SUJET="${DOSSIER##*/}"
+    DETAILS=("dossier=$DOSSIER")
+    PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
+    DIR_LOGS="$SORTIE/logs"
 }
 
 # Contrôles avant de commencer : renvoyez 1 pour arrêter. Les dossiers et
 # les binaires de REQUIS sont déjà vérifiés par ailleurs.
 verifier() {
-    [[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"
-        info "réglez IMAGE en section 1, ou : --set IMAGE=/chemin.dd · -c poste.conf · --demo pour essayer sans image"
+    [[ -d "$DOSSIER" ]] || { erreur "dossier absent : $DOSSIER"
+        info "réglez DOSSIER en section 1, ou : --set DOSSIER=/chemin · -c fichier.conf · --demo pour essayer"
         return 1; }
-    [[ -r "$IMAGE" ]] || { erreur "image illisible : $IMAGE"; return 1; }
-    [[ -d /usr/share/zoneinfo && ! -e "/usr/share/zoneinfo/$TZ_MACTIME" ]] && attention "fuseau inconnu du système : $TZ_MACTIME"
     return 0
 }
+
 
 # =====================================================================
 # 5. FONCTIONS
@@ -132,69 +108,10 @@ verifier() {
 #    Dans une boucle longue :  (( INTERROMPU )) && return 130
 # =====================================================================
 
-# Menu de [[offset]] : offset<TAB>type et taille.
-lister_partitions() {
-    mmls "$1" 2>/dev/null | awk '
-        /Units are in/ { for (i=1; i<=NF; i++) if ($i ~ /-byte/) { split($i, u, "-"); unite = u[1] } }
-        $1 ~ /^[0-9]+:$/ && $2 ~ /^[0-9]+:[0-9]+$/ {
-            desc = $6; for (i = 7; i <= NF; i++) desc = desc " " $i
-            if (desc ~ /^Unallocated/) next
-            if (unite == "") unite = 512
-            o = $5 * unite
-            if      (o >= 1073741824) t = sprintf("%.1f Go", o / 1073741824)
-            else if (o >= 1048576)    t = sprintf("%.1f Mo", o / 1048576)
-            else                      t = sprintf("%d o", o)
-            printf "%d\t%s — %s\n", $3 + 0, desc, t
-        }'
-    return "${PIPESTATUS[0]}"
-}
-
-# Menu de [[index_testdisk]] : le numéro que photorec attend.
-lister_partitions_testdisk() {
-    testdisk /list "$1" 2>/dev/null | awk '
-        $1 ~ /^[0-9]+$/ && $2 ~ /^[PLED*]$/ {
-            d = $3; for (i = 4; i <= NF; i++) d = d " " $i
-            printf "%d\t%s\n", $1, d
-        }'
-    return "${PIPESTATUS[0]}"
-}
-
-# lister_homes <image> <offset> <os> : inode<TAB>chemin de chaque profil.
-lister_homes() {
-    local img="$1" off="$2" racine ino
-    case "${3,,}" in windows|win) racine="Users" ;; *) racine="home" ;; esac
-
-    ino=$(fls -o "$off" -D -p "$img" 2>/dev/null | awk -F'\t' -v r="$racine" '
-        { n = $2; sub(/^.*\//, "", n)
-          if (tolower(n) == tolower(r)) { split($1, c, " "); i = c[length(c)]; sub(/:$/, "", i); print i; exit } }')
-    [[ -n "$ino" ]] || { printf 'pas de dossier "%s" sur la partition %s\n' "$racine" "$off" >&2; return 1; }
-
-    # Profils système écartés ; retirez la ligne tolower(...) pour les garder.
-    fls -o "$off" -D -p "$img" "$ino" 2>/dev/null | awk -F'\t' '
-        { n = $2; sub(/^.*\//, "", n)
-          if (n == "." || n == ".." || n ~ /^\$/) next
-          if (tolower(n) ~ /^(all users|default|default user|public)$/) next
-          split($1, c, " "); i = c[length(c)]; sub(/:$/, "", i)
-          printf "%s\t%s%s\n", i, $2, ($1 ~ /\*/) ? " (supprimé)" : "" }'
-    return 0
-}
-
-# lister_fichiers <image> <offset> <inode> : inode<TAB>chemin, récursif.
-lister_fichiers() {
-    fls -o "$2" -F -p -r "$1" "$3" 2>/dev/null | awk -F'\t' '
-        { split($1, c, " "); i = c[length(c)]; sub(/:$/, "", i)
-          if (i !~ /^[0-9]/) next
-          printf "%s\t%s%s\n", i, $2, ($1 ~ /\*/) ? " (supprimé)" : "" }'
-    return 0
-}
-
 # lister_dossiers <racine>
 # La fonction de liste la plus simple qui soit : une boucle for sur les
 # sous-dossiers d'un répertoire, une ligne « chemin<TAB>nom » par dossier.
-# Sur une image montée, lister_dossiers /mnt/image/home donne un profil
-# par ligne ; {{profil}} vaut alors le chemin et {{profil_libelle}} le nom.
-#   "profil|lister_dossiers '/mnt/image/home'"
-#   "Espace de chaque profil|true|du -sh '{{profil}}'"
+# {{sousdossier}} vaut alors le chemin et {{sousdossier_libelle}} le nom.
 lister_dossiers() {
     local d
     for d in "$1"/*/; do                  # le / final ne garde que les dossiers
@@ -204,54 +121,6 @@ lister_dossiers() {
         printf '%s\t%s\n' "$d" "${d##*/}"  # chemin, tabulation, nom seul
     done
     return 0
-}
-
-# lister_fichiers_nommes <image> <offset> <inode> <motif>
-# Les fichiers d'un dossier dont le NOM correspond au motif — le reste du
-# chemin est ignoré. Une liste vide n'est pas une erreur : un home sans
-# .bashrc produit simplement zéro itération.
-lister_fichiers_nommes() {
-    lister_fichiers "$1" "$2" "$3" | awk -F'\t' -v m="$4" '
-        { n = $2; sub(/^.*\//, "", n); if (n ~ m) print }'
-    return 0
-}
-
-# fusionner_body <sortie> <entrées...> : ignore les fichiers absents ou vides.
-fusionner_body() {
-    local sortie="$1" f n; shift
-    local -a ok=()
-    for f in "$@"; do
-        [[ -s "$f" ]] && ok+=("$f") || printf '  (ignoré : %s)\n' "$f"
-    done
-    (( ${#ok[@]} )) || { printf 'rien à fusionner\n' >&2; return 1; }
-    cat "${ok[@]}" > "$sortie" || return 1
-    n=$(wc -l < "$sortie" | tr -d ' ')
-    printf '  %s ligne%s -> %s\n' "$n" "$(pluriel "$n")" "$sortie"
-    return 0
-}
-
-# inventorier_home <image> <offset> <inode> <chemin> <dossier> : un body par profil.
-inventorier_home() {
-    local sortie n
-    sortie="$5/home_$(nettoyer_nom "$4").body"
-    fls -r -p -m "/$4" -o "$2" "$1" "$3" > "$sortie" || return 1
-    n=$(wc -l < "$sortie" | tr -d ' ')
-    printf '  %s entrée%s -> %s\n' "$n" "$(pluriel "$n")" "$sortie"
-    return 0
-}
-
-# hacher_fichier <image> <offset> <inode> <chemin>
-hacher_fichier() {
-    local h
-    h=$(icat -o "$2" "$1" "$3" 2>/dev/null | sha256sum | cut -d' ' -f1) || return 1
-    printf '%s  %s\n' "$h" "$4"
-    return 0
-}
-
-# nettoyer_nom <texte> : un nom de fichier sûr.
-nettoyer_nom() {
-    local s="${1//\//_}"; s="${s// /_}"; s="${s//[^A-Za-z0-9._-]/}"
-    printf '%s' "${s:-sans_nom}"
 }
 
 
@@ -429,8 +298,8 @@ h_cle() {   # <libellé> clé=texte ... — une clé vide n'affiche que le texte
     printf '%s\n' "$s"
 }
 aide() {
-    printf '%sforensic.sh%s — enchaîne des commandes, validées une à une.\n' "$GRAS" "$C0"
-    printf 'Usage : %s./forensic.sh%s [options]\n' "$C_PROG" "$C0"
+    printf '%s%s%s — enchaîne des commandes, validées une à une.\n' "$GRAS" "$NOM_SCRIPT" "$C0"
+    printf 'Usage : %s./%s%s [options]\n' "$C_PROG" "$NOM_SCRIPT" "$C0"
     h_titre "Configurer"
     h_opt "-c, --config FICHIER" "variables lues dans un fichier"
     h_opt "-t, --template"       "écrire un fichier -c prêt à compléter (sur la sortie standard)"
@@ -469,11 +338,17 @@ aide() {
 # donc « -c pc07.conf --template » donne un gabarit pré-rempli.
 gabarit() {
     local src="${BASH_SOURCE[0]}" ligne nom com val decl e
+    local -A deja=()
     printf '# Fichier de configuration pour %s — généré par --template\n' "$NOM_SCRIPT"
     printf '#     ./%s -c CE_FICHIER\n#\n' "$NOM_SCRIPT"
     printf '# Du shell : les guillemets sont obligatoires dès qu%sil y a un espace.\n' "'"
     printf '# On peut aussi y redéfinir calculer_variables, verifier ou\n'
-    printf '# definir_commandes : voir exemples/demo.conf.\n\n'
+    printf '# definir_commandes : voir exemples/.\n\n'
+    # Généré depuis un fichier -c : on en hérite, et ce sont SES variables
+    # qui sont proposées — celles de la section 1 ne le concernent pas.
+    if [[ -n "$CONF" ]]; then
+        printf 'source "%s"\n\n' "$(readlink -f "$CONF" 2>/dev/null || printf '%s' "$CONF")"
+    fi
     while IFS= read -r ligne; do
         [[ "$ligne" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
         nom="${BASH_REMATCH[1]}"; com=""
@@ -488,11 +363,11 @@ gabarit() {
             val="${val//\\/\\\\}"; val="${val//\"/\\\"}"; val="${val//\$/\\\$}"; val="${val//\`/\\\`}"
             val="\"$val\""
         fi
+        [[ -z "${deja[$nom]:-}" ]] || continue; deja[$nom]=1
         if [[ -n "$com" ]]; then printf '%-30s # %s\n' "$nom=$val" "$com"; else printf '%s=%s\n' "$nom" "$val"; fi
-    done < <(sed -n '/^# 1\. VARIABLES/,/^# 2\. COMMANDES/p' "$src")
-    # Si l'en-tête « # 1. VARIABLES » a été retouché, on ne trouve plus rien.
-    [[ "$(sed -n '/^# 1\. VARIABLES/,/^# 2\. COMMANDES/p' "$src" | grep -c '^[A-Za-z_][A-Za-z0-9_]*=')" -gt 0 ]] \
-        || erreur "aucune variable trouvée entre « # 1. VARIABLES » et « # 2. COMMANDES » dans $src"
+    done < <(if [[ -n "$CONF" ]]; then sed '/^[a-zA-Z_][a-zA-Z0-9_]*() *{/,$d' "$CONF" | grep -E '^[A-Za-z_][A-Za-z0-9_]*='
+             else sed -n '/^# 1\. VARIABLES/,/^# 2\. COMMANDES/p' "$src"; fi)
+    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre « # 1. VARIABLES » et « # 2. COMMANDES » dans $src}"
 }
 
 
@@ -625,14 +500,14 @@ else ENTREE="/dev/stdin"; INTERACTIF="non"; fi
 LOG="/dev/null"
 journal() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
 
-# Une commande peut laisser le terminal inutilisable : photorec et
-# testdisk passent en plein écran, et un Ctrl-C au mauvais moment ne rend
-# pas la main proprement — les touches ne s'affichent plus, Entrée ne
+# Une commande peut laisser le terminal inutilisable : un programme plein
+# écran interrompu par Ctrl-C au mauvais moment ne rend pas la main
+# proprement — les touches ne s'affichent plus, Entrée ne
 # valide plus. On mémorise les réglages et on les remet après chaque
 # commande, ainsi qu'en sortant.
 TTY_ETAT=""
 [[ -r /dev/tty ]] && TTY_ETAT="$(stty -g 2>/dev/null < /dev/tty)" 2>/dev/null
-# Régler le terminal depuis un job en arrière-plan (./forensic.sh -y &)
+# Régler le terminal depuis un job en arrière-plan (./tasker.sh -y &)
 # vaudrait un SIGTTOU : le script serait stoppé net. On ne le fait que si
 # l'on est au premier plan.
 en_avant_plan() {

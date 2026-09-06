@@ -1,130 +1,61 @@
-# forensic.sh
+# tasker.sh
 
-Un script bash qui enchaîne des commandes forensiques, **validées une à une**.
-
-Il ne remplace ni `fls` ni `photorec` : il les met bout à bout, vous montre
-chaque commande avant de la lancer, garde une trace de tout, et vous laisse
-reprendre la main à n'importe quel moment.
+Un script bash qui enchaîne des commandes, **validées une à une**. Il ne
+fait rien lui-même : il met vos commandes bout à bout, vous montre chacune
+avant de la lancer, garde une trace de tout, et vous laisse reprendre la
+main à n'importe quel moment.
 
 ```
-────────────────────────────────────────────────────────────────
- ━━━━━━━━━━━━  [6/8] Inventaire par utilisateur
-────────────────────────────────────────────────────────────────
-  ↻ 3 itérations
-    · home=Users/alice
-    · home=Users/bob
-    · home=Users/charlie
+────────────────────────────────────────────────────────
+  ◐ 3/4  ━━━━━━━━━━━━  Taille de chaque sous-dossier
+────────────────────────────────────────────────────────
+  ↻  étape répétée — 3 itérations
+      1  sousdossier=documents
+      2  sousdossier=images
+      3  sousdossier=projets
   Entrée tout exécuter · u une par une · l lister · p passer · q quitter
-  >
+  ›
 ```
+
+Un tableau de commandes, deux façons d'y insérer une valeur inconnue
+d'avance, et un journal. Tout le reste est du confort.
 
 ---
 
-## Commencer par la démonstration
+## Commencer
 
 ```bash
-./forensic.sh --demo
+./tasker.sh --demo      # un bac à sable dans /tmp, rien à installer
+./tasker.sh -h          # l'aide, en 34 lignes
+./tasker.sh -l          # le plan de l'exemple fourni, sans rien lancer
+./tasker.sh             # l'exemple fourni : quelques commandes sur $HOME
 ```
 
-Un bac à sable est fabriqué dans `/tmp` et le script y rejoue **tous ses
-mécanismes** — menus, étapes répétées, boucles imbriquées, journal — avec
-`ls`, `wc` et `sha256sum`. Aucune image disque, aucun outil forensique,
-rien à installer, rien à casser.
+👉 **[TUTORIEL.md](TUTORIEL.md)** reprend tout depuis zéro, exemples exécutables à l'appui.
 
-Les étapes de la démonstration sont dans `exemples/demo.conf`, commentées
-une à une. C'est aussi un exemple complet de fichier `-c` : il fixe les
-variables, définit ses propres commandes et listes, et ajoute deux
-fonctions.
-
-👉 **[TUTORIEL.md](TUTORIEL.md)** reprend tout depuis zéro, avec des
-exemples exécutables.
+Prérequis : bash 4.3 ou plus. Rien d'autre que ce que vos commandes demandent.
 
 ---
 
-## Démarrer
+## Le script en cinq sections
 
-```bash
-chmod +x forensic.sh
-./forensic.sh -h              # l'aide complète
-./forensic.sh --plan        # le plan, sans rien exécuter
-./forensic.sh --vars          # les valeurs qui vont être demandées
-./forensic.sh -n              # simulation
-./forensic.sh                 # pour de vrai
-```
+| section | contenu | on y touche |
+|---|---|---|
+| 1 | variables : ce qui change d'une exécution à l'autre | à chaque fois |
+| 2 | `COMMANDES` : les étapes, dans l'ordre | souvent |
+| 3 | `LISTES` : d'où viennent les `[[valeurs]]` et les `{{listes}}` | avec les commandes |
+| 4 | chemins, titre, contrôles de départ | à l'installation |
+| 5 | vos fonctions | parfois |
+| 6 | mécanique | jamais |
 
-Pour écrire un fichier de configuration sans partir de zéro :
-
-```bash
-./forensic.sh -t > postes/pc09.conf        # toutes les variables de la section 1, commentées
-./forensic.sh -c pc07.conf -t > pc08.conf  # pré-rempli avec les valeurs de pc07
-```
-
-Le gabarit est relu dans le script lui-même : ajoutez ou renommez une
-variable en section 1, il suit.
-
-Deux façons de décrire un poste :
-
-* éditer la **section 1** du script (le plus simple si vous n'avez qu'une image) ;
-* écrire un petit fichier de configuration et le passer avec `-c` :
-
-```bash
-./forensic.sh -c exemples/pc07.conf
-./forensic.sh -c exemples/pc07.conf --set IMAGE=/images/autre.dd   # surcharge ponctuelle
-```
-
-Priorité : section 1 &lt; fichier `-c` &lt; `--set NOM=valeur`.
-
-Les noms des variables sont les vôtres : le script ne connaît que ce que
-`calculer_variables` lui donne (`SUJET`, `DETAILS`, `PREFIX`, `DIR_xxx`) et
-les contrôles que vous écrivez dans `verifier`. Rien dans la mécanique ne
-parle d'image disque, de poste ni de salle.
-
-Prérequis : **bash 4.3+** et la Sleuth Kit / TestDisk. Un binaire manquant
-n'est qu'un avertissement : on peut vouloir ne lancer qu'une partie des étapes.
+Les sections 1 à 3 tiennent dans le premier écran. Le script est livré
+avec un petit exemple qui tourne partout (espace disque, contenu d'un
+dossier, taille de chaque sous-dossier) ; remplacez-le, ou laissez-le et
+mettez le vôtre dans un fichier de configuration.
 
 ---
 
-## Lire l'écran
-
-Le plan s'affiche au démarrage, le récapitulatif à la sortie. Les deux
-emploient les mêmes marques, et les itérations d'une étape répétée
-apparaissent en dessous d'elle, comme des sous-tâches.
-
-| | |
-|---|---|
-| `○` | à faire |
-| `◐` | en cours |
-| `●` | réussie |
-| `✗` | échec |
-| `⊘` | passée |
-| `⊗` | interrompue |
-| `◌` | simulée (`-n`) |
-
-```
-────────────────────────────────────────────────────────────
- Récapitulatif   PC07 · B204 · windows
-────────────────────────────────────────────────────────────
-  ●  1  Table des partitions                            0s
-  ●  2  Fichiers alloués et supprimés                   4s
-  ⊘  3  Inodes non alloués                          passee
-  ●  4  Fusion des body files                           0s
-  ●  6  Inventaire par utilisateur                 3/3  4s
-      ├─ ● home=Users/alice                             1s
-      ├─ ● home=Users/bruno                             2s
-      └─ ✗ home=Users/celia                        code 1
-────────────────────────────────────────────────────────────
-  4 réussies · 1 en échec · 1 passée · total 9s
-```
-
-Les titres accentués sont alignés correctement même sous une locale
-`POSIX`, où `printf` compte les octets : le script mesure la largeur
-réelle des chaînes (`largeur_texte`).
-
----
-
-## Ajouter une étape
-
-Une ligne dans le tableau `COMMANDES`, section 2 :
+## Une étape
 
 ```bash
 "Titre|validation|commande"
@@ -134,121 +65,92 @@ Une ligne dans le tableau `COMMANDES`, section 2 :
 |---|---|
 | `Titre` | ce qui s'affiche et ce qui apparaît au récapitulatif |
 | `validation` | `true` = demander avant de lancer, `false` = lancer directement |
-| `commande` | n'importe quelle commande shell : tubes, redirections, tests |
+| `commande` | n'importe quelle commande shell : tubes, redirections, tests, fonctions de la section 5 |
 
-Le champ `validation` accepte des options, séparées par des virgules :
+Après `true` ou `false`, des options séparées par des virgules :
 
 | option | effet |
 |---|---|
 | `log` | la sortie de la commande est recopiée dans le journal |
-| `stop` | un échec arrête le script, sans question |
 | `continu` | un échec est ignoré, sans question |
+| `stop` | un échec arrête tout, sans question |
 
-```bash
-"Table des partitions|true,log|mmls '$IMAGE'"
-"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$DIR_BODY/x.body'"
-```
-
-Le découpage se fait sur les **deux premiers `|`** seulement : les tubes de la
-commande sont préservés, mais le titre ne peut pas contenir de `|`.
+Le découpage se fait sur les **deux premiers `|`** : les tubes de la
+commande sont préservés, mais le titre ne peut pas en contenir.
 
 ---
 
 ## Trois façons d'insérer une valeur
 
-### `$VARIABLE` — connue à l'avance
+**`$VARIABLE`** — connue à l'avance, remplacée au lancement. Une variable
+née *pendant* la commande s'échappe : `for f in *; do echo \$f; done`.
 
-Remplacée au lancement. `$IMAGE`, `$DIR_BODY`, `$PREFIX`…
+**`[[nom]]`** — demandée quand on arrive sur la première étape qui
+l'utilise, puis réutilisée partout. Si `LISTES` contient une entrée du
+même nom, la question devient un menu numéroté :
 
-⚠️ Le tableau est entre guillemets doubles : une variable née **pendant** la
-commande doit être échappée, sinon `set -u` arrête tout.
+```
+    ┌─ [[profondeur]]  — utilisé à l'étape 4
+    │
+    │   1  1              ce dossier seulement
+    │   2  2              et ses sous-dossiers
+    │   3  4              quatre niveaux
+    │
+    │   a  saisir une autre valeur
+    │   p  passer cette étape
+    │   q  quitter le script
+    └─ votre choix [1] ›
+```
+
+**`{{nom}}`** — l'étape est rejouée pour chaque valeur de la liste
+`nom`. Deux listes s'emboîtent ; une liste qui en utilise une autre
+déclenche la boucle extérieure toute seule. Toujours entre apostrophes :
+`'{{nom}}'`. Le libellé d'une valeur est dans `{{nom_libelle}}`.
+
+Une liste, c'est une commande qui écrit **une valeur par ligne**,
+éventuellement `valeur<TAB>libellé` :
 
 ```bash
-FAUX   "Boucle|true|for u in a b; do echo home_$u; done"
-JUSTE  "Boucle|true|for u in a b; do echo home_\$u; done"
-```
-
-Idem pour `\$(date)`, `\$1`, `\$?`.
-
-### `[[nom]]` — une valeur, demandée une fois
-
-Demandée quand on arrive sur l'étape, puis **réutilisée** partout où le même
-`[[nom]]` apparaît. `[[offset]]` est saisi une fois et servi à `fls` comme à `ils`.
-
-Si le tableau `LISTES` contient une entrée du même nom, la question devient un
-**menu numéroté** — plus de chiffre recopié à la main :
-
-```
-    ┌ [[offset]] — 2 propositions
-    │  1  2048           NTFS / exFAT (0x07) — 40.0 Go
-    │  2  83884032       Linux (0x83) — 10.0 Go
-    │  a  saisir une autre valeur
-    └ choix [1] :
-```
-
-Pré-remplissable : `--var offset=2048` (répétable), `--vars` pour voir les noms attendus.
-
-### `{{nom}}` — plusieurs valeurs, l'étape est répétée
-
-C'est le mécanisme des traitements récursifs. Les valeurs viennent de `LISTES` :
-
-```bash
-LISTES=(
-  "home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
-  "fichier|lister_fichiers '$IMAGE' '[[offset]]' '{{home}}'"
-)
-```
-
-```bash
-# une itération par profil utilisateur
-"Inventaire|true|inventorier_home '$IMAGE' '[[offset]]' '{{home}}' '{{home_libelle}}' '$DIR_BODY'"
-
-# une itération par fichier de chaque profil : la boucle sur les homes
-# se déclenche toute seule, parce que la liste "fichier" en dépend
-"Hachage|true|hacher_fichier '$IMAGE' '[[offset]]' '{{fichier}}' '{{fichier_libelle}}' >> '$DIR_LOGS/h.txt'"
-```
-
-Trois choses à retenir :
-
-* **Emboîtement automatique.** Une liste qui en appelle une autre déclenche la
-  boucle extérieure : vous n'écrivez que la liste qui vous intéresse.
-  Deux `{{listes}}` écrites côte à côte s'emboîtent de gauche à droite.
-* **Valeur et libellé.** Une ligne de liste peut s'écrire
-  `valeur<TAB>libellé` : seule la valeur entre dans la commande, le libellé
-  s'affiche. Il reste accessible sous `{{nom_libelle}}`. Pour `home`, la valeur
-  est l'inode (ce qu'attend `fls`) et le libellé le chemin (ce que vous lisez).
-* **Toujours entre apostrophes** : `'{{fichier}}'`. Les valeurs viennent d'un
-  programme et contiennent des espaces ; le script neutralise les apostrophes
-  qu'elles pourraient contenir, à condition que le placeholder soit quoté.
-
-Un garde-fou (`MAX_ITERATIONS`, section 1) évite de lancer trois mille commandes
-par inadvertance, et le nombre d'itérations est toujours annoncé **avant**
-validation.
-
-Pour figer une liste sans l'interroger : `--list home=41-144-1,52-144-1`.
-
----
-
-## Écrire une fonction plutôt qu'une ligne à rallonge
-
-Au-delà de deux ou trois instructions, écrivez une fonction en **section 5** et
-appelez-la depuis le tableau. Plus d'échappements à gérer, et la ligne reste
-lisible à l'affichage.
-
-```bash
-mon_traitement() {
-    local racine="$1"
-    local f
-    for f in "$racine"/*; do
-        (( INTERROMPU )) && return 130     # sans ça, Ctrl-C ne sort pas de la boucle
-        traiter "$f" || return 1
+lister_dossiers() {
+    local d
+    for d in "$1"/*/; do
+        (( INTERROMPU )) && return 130
+        [[ -d "$d" ]] || continue
+        d="${d%/}"; printf '%s\t%s\n' "$d" "${d##*/}"
     done
-    return 0                                # ce code devient ✅ ou ❌
+    return 0
 }
 ```
 
-Une fonction de **liste** écrit une valeur par ligne sur sa sortie standard
-(et ses messages d'erreur sur `>&2`, sinon ils seraient pris pour des valeurs).
+---
+
+## Fichiers de configuration
+
+Un fichier `-c` est du shell. Il peut fixer les variables de la section 1,
+mais aussi redéfinir `calculer_variables`, `verifier`, `definir_commandes`
+et ajouter des fonctions : c'est un jeu d'étapes complet, sans copier le
+script.
+
+```bash
+./tasker.sh -t > mon-cas.conf                     # gabarit des variables de la section 1
+./tasker.sh -c exemples/forensic.conf -t > pc09.conf   # gabarit d'un cas existant, pré-rempli
+./tasker.sh -c pc09.conf
+./tasker.sh -c pc09.conf -s IMAGE=/images/autre.dd    # surcharge ponctuelle
+```
+
+Priorité : section 1 &lt; fichier `-c` &lt; `--set NOM=valeur`.
+
+Le script ne connaît que ce que `calculer_variables` lui donne (`SUJET`,
+`DETAILS`, `PREFIX`, `DIR_xxx`) et les contrôles de `verifier`. Les noms
+de vos variables sont les vôtres.
+
+### Exemples fournis
+
+| fichier | ce que c'est |
+|---|---|
+| `exemples/demo.conf` | le bac à sable de `--demo` : chaque mécanisme, commenté |
+| `exemples/forensic.conf` | un cas complet : analyse d'une image disque avec la Sleuth Kit, menus, listes emboîtées, fonctions |
+| `exemples/pc07.conf` | un poste précis : `source forensic.conf` puis six variables |
 
 ---
 
@@ -258,146 +160,97 @@ Une fonction de **liste** écrit une valeur par ligne sur sa sortie standard
 |---|---|
 | `Entrée` | exécuter |
 | `p` | passer cette étape |
-| `e` | éditer la ligne pour cette exécution seulement |
-| `r` | ressaisir les `[[valeurs]]` de l'étape |
+| `e` | éditer la ligne, pour cette exécution seulement |
+| `r` | ressaisir les `[[valeurs]]` de cette étape |
 | `q` | arrêter le script |
-| `u` | *(étape répétée)* exécuter une itération à la fois |
-| `l` | *(étape répétée)* lister toutes les itérations prévues |
+| `u` | *(étape répétée)* une itération à la fois |
+| `l` | *(étape répétée)* lister les itérations avec leur commande |
 
-### Ctrl-C, Ctrl-D
-
-| quand | ce qui se passe |
+| quand | Ctrl-C fait |
 |---|---|
-| pendant une **commande** | la commande est interrompue, **pas** le script ; il vous demande si vous continuez avec la suivante |
-| pendant une **question** | arrêt propre, avec le récapitulatif et le rapport |
-| `Ctrl-D` à une question | plus personne au clavier : arrêt, plutôt qu'une réponse inventée |
+| pendant une **commande** | interrompt la commande, pas le script ; il demande si l'on continue |
+| pendant une **question** | arrête le script proprement, avec le récapitulatif |
+| Ctrl-D à une question | arrêt : plus personne au clavier |
 
-Attention : Ctrl-C interrompt **la commande en cours**, pas la ligne
-entière. Sur une étape `a ; b`, `b` s'exécutera quand même — écrivez
-`a && b` si ce n'est pas ce que vous voulez. Et dans une boucle de vos
-propres fonctions, mettez `(( INTERROMPU )) && return 130` en première
-ligne.
+Ctrl-C interrompt la commande en cours, pas la ligne entière : sur `a ; b`,
+`b` s'exécutera quand même. Dans vos propres boucles, mettez
+`(( INTERROMPU )) && return 130` en première ligne.
 
-### À une question de valeur
+### Lire l'écran
 
-| touche | effet |
-|---|---|
-| `1` `2` `3` | choisir dans le menu |
-| `Entrée` | prendre la proposition 1 |
-| `a` | saisir une autre valeur |
-| `p` | passer cette étape |
-| `q` | quitter le script |
+Le plan s'affiche au départ, le récapitulatif à la sortie, avec les mêmes
+marques ; les itérations d'une étape répétée apparaissent dessous, comme
+des sous-tâches.
 
-Après un `a`, `p` et `q` redeviennent des valeurs ordinaires.
+```
+  ○ à faire  ◐ en cours  ● réussie  ✗ échec  ⊘ passée  ⊗ interrompue  ◌ simulée
+```
+
+```
+  ●  2  Contenu du dossier                                0s
+  ●  3  Taille de chaque sous-dossier                 3/3  1s
+      ├─ ● sousdossier=documents                          0s
+      ├─ ● sousdossier=images                             1s
+      └─ ✗ sousdossier=projets                        code 1
+```
+
+Au-delà de dix itérations, seules celles qui ont mal tourné sont
+détaillées.
 
 ---
 
-## Reprendre, filtrer, rejouer
+## Reprendre, filtrer, automatiser
 
 ```bash
-./forensic.sh --resume         # saute les étapes déjà réussies
-./forensic.sh --only 2,5-7   # ne joue que celles-là
-./forensic.sh --from 4          # repart de l'étape 4
-./forensic.sh -a                  # confirme chaque étape, même les false
-./forensic.sh -y                  # ne demande jamais rien
+./tasker.sh -r              # sauter les étapes déjà réussies
+./tasker.sh -o 2,5-7        # ne jouer que celles-là
+./tasker.sh -f 4            # partir de l'étape 4
+./tasker.sh -n              # simulation
+./tasker.sh -a              # confirmer chaque étape, même les false
+./tasker.sh -y              # ne rien demander
+./tasker.sh -y &            # en arrière-plan : le terminal n'est pas touché
 ```
 
-`--resume` s'appuie sur l'empreinte du titre **et** de la commande : modifiez
-la commande, l'étape sera rejouée.
+Les options courtes se combinent (`-yn`) et acceptent une valeur collée
+(`-o3`, `-cFICHIER`). Code de sortie : `0` si tout est passé, `1` s'il
+reste un échec.
 
-Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
+`-r` s'appuie sur l'empreinte du titre et de la commande : modifiez la
+commande, l'étape sera rejouée.
+
+### sudo et programmes plein écran
+
+* Le mot de passe de `sudo` est demandé au moment où la commande part,
+  y compris avec `log` et depuis une commande de `LISTES`. Avec `-y`,
+  personne ne répondrait : le script prévient au démarrage, faites
+  `sudo -v` avant.
+* Le terminal est rendu tel qu'il était après chaque commande : un
+  programme plein écran interrompu ne laisse plus l'écran en mode brut.
+* Sous `sudo`, le rapport note qui a lancé (`SUDO_USER`) et l'exécution
+  en root.
+* Fermer le terminal ou tuer le script laisse quand même un récapitulatif
+  et un journal qui dit pourquoi.
 
 ---
 
-## Ce qui est écrit sur le disque
+## Ce qui est écrit
 
 ```
-<BASE>/<SALLE>/<OS>/<PC>/
-├── body/       les body files (fls, ils, fusion, un par profil)
-├── timeline/   la timeline mactime
-├── carving/    la récupération photorec
-└── logs/
-    ├── <prefixe>_script.log     chaque commande, son code, sa durée
-    ├── <prefixe>_rapport.txt    le récapitulatif, poste et analyste inclus
-    └── <prefixe>_etat.txt       les étapes réussies (pour --resume)
+<DIR_LOGS>/
+├── <PREFIX>_script.log     chaque commande, son code, sa durée
+├── <PREFIX>_rapport.txt    le récapitulatif, sujet et opérateur inclus
+└── <PREFIX>_etat.txt       les étapes réussies (pour -r)
 ```
-
-Toute variable nommée `DIR_quelquechose` est vue comme un dossier de travail :
-le script la vérifie et la crée au besoin. En ajouter un ne demande rien d'autre
-que de l'écrire dans `calculer_chemins`.
-
-## Organisation du script
-
-| section | contenu | on y touche |
-|---|---|---|
-| 1 | variables : ce qui change d'une exécution à l'autre | à chaque fois |
-| 2 | `COMMANDES` : les étapes | souvent |
-| 3 | `LISTES` : d'où viennent `[[valeurs]]` et `{{listes}}` | avec les commandes |
-| 4 | `calculer_variables` et `verifier` : chemins, titre, contrôles | à l'installation |
-| 5 | fonctions : vos traitements | parfois |
-| 6 | mécanique | jamais |
-
-Les sections 1 à 3 tiennent dans le premier écran : le tableau `COMMANDES`
-commence à la ligne 46.
-
-Un fichier `-c` peut redéfinir `definir_commandes` et ajouter des fonctions :
-`exemples/demo.conf` le fait, ce qui permet d'avoir un jeu d'étapes par type
-d'analyse sans copier le script.
 
 ---
 
-## Sans image sous la main
+## Limites
 
-```
-$ ./forensic.sh
-✗  image absente : /images/pc07.dd
-   réglez IMAGE en section 1, ou : --set IMAGE=/chemin.dd · -c poste.conf · --demo pour essayer sans image
-```
-
-## sudo, et les commandes qui prennent le terminal
-
-Une étape peut contenir `sudo`, ou être un programme plein écran comme
-`photorec`. Ce qui est prévu :
-
-* **Le mot de passe de `sudo`** est demandé sur le terminal, au moment où
-  la commande part — donc au milieu du déroulé, y compris depuis une
-  commande de `LISTES`. Cela fonctionne aussi avec l'option `log`, car
-  `sudo` écrit son invite sur `/dev/tty` et non sur la sortie standard.
-* **Avec `-y`**, personne n'est là pour répondre et le script attendrait
-  indéfiniment. Il vous prévient au démarrage s'il repère `sudo` dans une
-  étape : lancez `sudo -v` juste avant.
-* **Le terminal est rendu tel qu'il était** après chaque commande. Sans
-  cela, un `photorec` interrompu au mauvais moment laisse l'écran en mode
-  brut — plus d'écho des touches, plus de validation par Entrée — et le
-  reste de la session est inutilisable.
-* **Sous `sudo`**, le rapport note qui a réellement lancé le script
-  (`SUDO_USER`) et signale l'exécution en root :
-  `par        mathieu (root) sur poste-analyse`.
-  Les fichiers écrits appartiennent alors à root : pensez-y avant de
-  vouloir les rouvrir sans privilèges.
-
-Deux détails d'affichage à connaître :
-
-* Une commande dont la sortie ne finit pas par un saut de ligne colle la
-  ligne de résultat : `bonjour  ●  terminée en 0s`.
-* Si une commande de `LISTES` pose une question, son invite s'affiche à la
-  suite du message « … lecture de la liste ».
-
-## Limites connues
-
-* Les commandes passent par `eval` : `>`, `|` et `sudo tee` fonctionnent, mais
-  **tout est interprété par le shell**. N'y mettez que des commandes que vous
-  écrivez vous-même.
-* `tail` après un `tee`, oui ; `head`, non : `head` ferme le tube, la commande
-  amont meurt d'un `SIGPIPE` et l'étape est comptée en échec (code 141).
-* Ne mettez jamais une commande interactive dans un tube ni avec l'option `log` :
-  `photorec` perdrait son terminal.
-* Pas de `|` dans le titre ni dans le champ validation.
-* Ctrl-C n'interrompt pas un `read` simplement piégé : bash exécute le
-  gestionnaire puis retourne attendre. Le script traite donc les deux
-  situations séparément (`EN_SAISIE`), sans quoi une question paraîtrait
-  figée après un `^C`.
-* Dans le code, tout texte affiché dans une **colonne de largeur imposée**
-  (`%-10s`…) reste en ASCII : sous une locale `C`, `printf` compte les octets et
-  un accent décalerait la colonne. Les libellés accentués sont toujours rejetés
-  en fin de ligne.
+* Les commandes passent par `eval` : n'y mettez que des commandes que
+  vous écrivez vous-même.
+* `tail` après un `tee`, oui ; `head`, non : `head` ferme le tube et
+  l'étape est comptée en échec (code 141).
+* Pas de commande interactive avec l'option `log` : elle perdrait son
+  terminal.
+* Une sortie sans saut de ligne final colle la ligne de résultat.
+* Une commande de `LISTES` ne lit pas le clavier (elle reçoit `/dev/null`).
