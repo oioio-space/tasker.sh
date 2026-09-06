@@ -88,6 +88,16 @@ Une variable qui naît **pendant** la commande s'échappe :
 
 Fournie d'avance : `./tasker.sh -D jours=7`.
 
+Un `[[nom]]` écrit dans le **titre** s'affiche avec la valeur dès qu'elle est
+connue — « Purge de plus de 30 jours » plutôt que « … de plus de [[jours]]
+jours » — au plan si `-D` l'a fournie, sinon à partir de la question. Il faut
+que la commande de l'étape emploie le même `[[nom]]` : c'est elle qui
+déclenche la question.
+
+Entre apostrophes de préférence : `'[[nom]]'`. Une valeur qui en contient une
+est protégée à l'entrée dans la commande, quelle que soit son origine — menu,
+saisie ou `-D`.
+
 ### `{{nom}}` — l'étape est rejouée pour chaque valeur
 
 ```bash

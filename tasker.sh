@@ -503,21 +503,53 @@ glyphe_texte() {
 colonne_titre() { local l=$(( LARGEUR - 22 )); (( l < 24 )) && l=24; (( l > 52 )) && l=52; printf '%s' "$l"; }
 
 LARG_NUM=2   # largeur des numéros d'étape, recalculée d'après TOTAL
+
+# remplacer <texte> <motif> <remplacement> -> REMPLACE ; tout est littéral.
+# ${t//motif/rempl} ne convient pas : depuis bash 5.2, un « & » dans le
+# remplacement y réinsère le texte trouvé. Une valeur comme « Rock & Roll »
+# remettait donc le [[nom]] dans la commande, et la boucle qui résout les
+# placeholders tournait sans fin.
+REMPLACE=""
+remplacer() {
+    local t="${1-}" m="${2-}" r="${3-}" out=""
+    if [[ -z "$m" ]]; then REMPLACE="$t"; return 0; fi
+    while [[ "$t" == *"$m"* ]]; do
+        out+="${t%%"$m"*}$r"
+        t="${t#*"$m"}"
+    done
+    REMPLACE="$out$t"
+}
+
+# Un titre s'affiche avec les [[valeurs]] déjà répondues : « Purge de plus
+# de 30 jours » plutôt que « [[jours]] ». Celles qui ne sont pas encore
+# connues — au plan, rien ne l'est — restent telles quelles.
+titre_lisible() {
+    local t="${1-}" reste="${1-}" nom
+    t="${t//$'\t'/ }"          # une tabulation dans un titre casserait l'alignement
+    while [[ "$reste" =~ $RE_SIMPLE ]]; do
+        nom="${BASH_REMATCH[1]}"
+        reste="${reste//\[\[$nom\]\]/}"
+        [[ -n "${REPONSES[$nom]:-}" ]] && { remplacer "$t" "[[$nom]]" "${REPONSES[$nom]}"; t="$REMPLACE"; }
+    done
+    printf '%s' "$t"
+}
+
 ligne_tache() {   # <état> <numéro> <titre> <détail>
-    local ct=""
+    local ct="" t
+    t="$(titre_lisible "$3")"
     case "$1" in ko) ct="$C_KO" ;; int) ct="$C_WARN" ;; skip) ct="$ESTOMPE" ;; sim) ct="$C_SIM" ;; esac
     if [[ -z "$4" ]]; then
-        printf '  %s %s%*s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$LARG_NUM" "$2" "$C0" "$ct" "$3" "$C0"
+        printf '  %s %s%*s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$LARG_NUM" "$2" "$C0" "$ct" "$t" "$C0"
     else
         printf '  %s %s%*s%s  %s%s%s  %s%s%s\n' "$(glyphe "$1")" "$ESTOMPE" "$LARG_NUM" "$2" "$C0" \
-               "$ct" "$(pad_droite "$3" "$(colonne_titre)")" "$C0" "$ESTOMPE" "$4" "$C0"
+               "$ct" "$(pad_droite "$t" "$(colonne_titre)")" "$C0" "$ESTOMPE" "$4" "$C0"
     fi
 }
 
 titre_etape() {   # <numéro> <total> <titre>
     printf '\n'; regle
     printf '  %s %s%s%d/%d%s  %s  %s%s%s\n' "$(glyphe cours)" "$GRAS" "$CYAN" "$1" "$2" "$C0" \
-           "$(barre "$(( $1 - 1 ))" "$2")" "$GRAS" "$3" "$C0"
+           "$(barre "$(( $1 - 1 ))" "$2")" "$GRAS" "$(titre_lisible "$3")" "$C0"
     regle
 }
 
@@ -620,6 +652,9 @@ aide_valeurs() {
     h_ligne "Demandée une fois, réutilisée par toutes les étapes qui l'écrivent."
     h_code '"Récents|true|find / -mtime -[[jours]]"'
     h_ligne "Fournie d'avance : --var jours=7   ·   la ressaisir : touche r"
+    h_ligne "Le même [[nom]] dans le titre s'affiche avec la valeur, une fois"
+    h_ligne "connue. Entre apostrophes de préférence : '[[nom]]' — une valeur"
+    h_ligne "qui en contient une est protégée à l'entrée dans la commande."
     h_titre "Répéter une étape   {{nom}}"
     h_ligne "L'étape est rejouée pour chaque valeur de la liste « nom »."
     h_ex "\"Taille|true|du -sh '{{dossier}}'\"" "toujours entre apostrophes"
@@ -914,8 +949,16 @@ fi
 # Le fichier -c est du shell : il peut fixer les variables, mais aussi
 # redéfinir definir_commandes et ajouter des fonctions (voir exemples/).
 if [[ -n "$CONF" ]]; then
+    [[ -e "$CONF" ]] || { erreur "configuration introuvable : $CONF"; exit 1; }
+    [[ -f "$CONF" ]] || { erreur "configuration : pas un fichier : $CONF"; exit 1; }
     [[ -r "$CONF" ]] || { erreur "configuration illisible : $CONF"; exit 1; }
-    bash -n "$CONF" 2>/dev/null || { erreur "erreur de syntaxe dans $CONF"; bash -n "$CONF"; exit 1; }
+    if ! bash -n "$CONF" 2>/dev/null; then
+        erreur "erreur de syntaxe dans $CONF"
+        # Un fichier écrit sous Windows finit ses lignes par CR : bash le
+        # signale comme une fin de fichier inattendue, ce qui n'aide personne.
+        grep -q $'\r' "$CONF" 2>/dev/null && info "le fichier contient des retours chariot (Windows) : dos2unix ou sed -i 's/\r\$//'"
+        bash -n "$CONF"; exit 1
+    fi
     # Un « exit » dans le fichier tuerait le script sans un mot : on le
     # charge d'abord dans un sous-shell pour le voir venir.
     # shellcheck disable=SC1090
@@ -1099,7 +1142,7 @@ charger_listes() {
 substituer_liaisons() {   # remplace les {{nom}} déjà liés
     local t="$1" k
     if (( ${#BINDINGS[@]} > 0 )); then
-        for k in "${!BINDINGS[@]}"; do t="${t//\{\{$k\}\}/${BINDINGS[$k]}}"; done
+        for k in "${!BINDINGS[@]}"; do remplacer "$t" "{{$k}}" "${BINDINGS[$k]}"; t="$REMPLACE"; done
     fi
     printf '%s' "$t"
 }
@@ -1226,8 +1269,7 @@ demander_valeur() {
             esac
             if [[ "$choix" =~ ^[0-9]+$ ]] && (( 10#$choix >= 1 && 10#$choix <= n )); then
                 choix=$(( 10#$choix ))
-                # Valeur produite par un programme : on neutralise les apostrophes.
-                VALEUR="$(echapper_apostrophes "${v[$(( choix - 1 ))]}")"
+                VALEUR="${v[$(( choix - 1 ))]}"
                 printf '    %s→ %s%s\n\n' "$C_OK" "${v[$(( choix - 1 ))]}" "$C0"; return 0
             fi
             printf '    %s« %s » n'"'"'est pas dans la liste%s\n' "$JAUNE" "$choix" "$C0"
@@ -1266,7 +1308,9 @@ resoudre_simples() {
             demander_valeur "$nom" || return 1
             REPONSES["$nom"]="$VALEUR"
         fi
-        cmd="${cmd//\[\[$nom\]\]/${REPONSES[$nom]}}"
+        # En mémoire la valeur est brute — c'est elle qu'on affiche ; les
+        # apostrophes ne sont neutralisées qu'en entrant dans la commande.
+        remplacer "$cmd" "[[$nom]]" "$(echapper_apostrophes "${REPONSES[$nom]}")"; cmd="$REMPLACE"
     done
     CMD="$cmd"
 }
@@ -1470,7 +1514,7 @@ resume_iterations() {
     printf '  %s↻  étape répétée%s — %s%d itération%s%s\n' "$C_BOUCLE" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
     for (( i = 0; i < n && i < max; i++ )); do printf '     %s%2d%s  %s%s%s\n' "$ESTOMPE" $(( i + 1 )) "$C0" "$C_BOUCLE" "${EXP_LABELS[$i]}" "$C0"; done
     (( n > max )) && printf '     %s..  et %d autre%s — « l » pour tout voir%s\n' "$ESTOMPE" $(( n - max )) "$(pluriel "$(( n - max ))")" "$C0"
-    (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itérations atteinte, liste tronquée (MAX_ITERATIONS, section 2)"
+    (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itération$(pluriel "$MAX_ITERATIONS") atteinte, liste tronquée (MAX_ITERATIONS, section 2)"
     return 0
 }
 lister_iterations() {
@@ -1510,8 +1554,13 @@ plan_initial() {   # [oui] = avec les commandes
     return 0
 }
 
+# DEMARRE passe à 1 juste avant la première étape : avant ça — -l, --vars,
+# une erreur de configuration — il n'y a rien à récapituler. Après, même
+# sans une seule étape terminée (un kill pendant la première), l'en-tête,
+# la durée et le rapport valent mieux que rien.
+DEMARRE=0
 recap() {
-    (( ${#RECAP[@]} == 0 )) && return
+    (( ${#RECAP[@]} == 0 && DEMARRE == 0 )) && return
     local l num e d t
     printf '\n'; regle "$GRAS"
     printf ' %sRécapitulatif%s   %s%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$SUJET" "$C0"
@@ -1564,7 +1613,7 @@ ecrire_rapport() {
         printf '  debut      %s\n  fin        %s\n  duree      %s\n\n' "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$(duree "$SECONDS")"
         for l in "${RECAP[@]}"; do
             num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
-            printf '  %2s  %-12s %-10s %s\n' "$num" "$(glyphe_texte "$e")" "$d" "$t"
+            printf '  %2s  %-12s %-10s %s\n' "$num" "$(glyphe_texte "$e")" "$d" "$(titre_lisible "$t")"
             while IFS= read -r ligne; do
                 [[ -n "$ligne" ]] || continue
                 e="${ligne%%|*}"; d="${ligne#*|}"; t="${d#*|}"; d="${d%%|*}"
@@ -1694,9 +1743,13 @@ plan_initial
 
 
 # --- 8.9 Boucle principale -------------------------------------------
+DEMARRE=1
 NUM=0; NB_FILTREES=0
 for entree in "${COMMANDES[@]}"; do
     NUM=$(( NUM + 1 ))
+    # Le titre garde ses [[nom]] : c'est la clé de --resume et ce qu'affiche
+    # le plan. Au récapitulatif il est figé avec les valeurs du moment, pour
+    # qu'une valeur ressaisie plus tard ne réécrive pas l'étape déjà jouée.
     TITRE="${entree%%|*}"; RESTE="${entree#*|}"; BRUTE="${RESTE#*|}"
     analyser_validation "${RESTE%%|*}"
     etape_retenue "$NUM" || { NB_FILTREES=$(( NB_FILTREES + 1 )); continue; }
@@ -1707,13 +1760,13 @@ for entree in "${COMMANDES[@]}"; do
     CLE="$(empreinte "$TITRE|$BRUTE|$OCC")"
     if deja_faite "$CLE"; then
         titre_etape "$NUM" "$TOTAL" "$TITRE"; info "déjà réussie précédemment — sautée (--resume)"
-        RECAP+=("$NUM|skip|reprise|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); continue
+        RECAP+=("$NUM|skip|reprise|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); continue
     fi
 
     titre_etape "$NUM" "$TOTAL" "$TITRE"
     INTERROMPU=0; ETAPE_PASSEE=0
     if ! resoudre_simples "$BRUTE"; then
-        RECAP+=("$NUM|skip|passee|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); journal "PASSÉE : $TITRE"; continue
+        RECAP+=("$NUM|skip|passee|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); journal "PASSÉE : $TITRE"; continue
     fi
     CMDBASE="$CMD"; BESOIN_EXP=1
 
@@ -1722,16 +1775,16 @@ for entree in "${COMMANDES[@]}"; do
             ETAPE_PASSEE=0          # un « p » donné pendant une édition annulée ne compte plus
             expanser "$CMDBASE"; RCEXP=$?; BESOIN_EXP=0
             if (( ETAPE_PASSEE )); then
-                RECAP+=("$NUM|skip|passee|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); journal "PASSÉE : $TITRE"; break
+                RECAP+=("$NUM|skip|passee|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); journal "PASSÉE : $TITRE"; break
             fi
             if (( INTERROMPU )); then
                 INTERROMPU=0; attention "lecture des listes interrompue — étape abandonnée"
-                RECAP+=("$NUM|int|listes|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); break
+                RECAP+=("$NUM|int|listes|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); break
             fi
             if (( RCEXP != 0 || ${#EXP_CMDS[@]} == 0 )); then
                 erreur "les listes de cette étape n'ont rien donné : rien à exécuter."
                 info "vérifiez la commande de liste (--vars), ou figez-la avec --list"
-                RECAP+=("$NUM|ko|liste vide|$TITRE"); NB_KO=$(( NB_KO + 1 ))
+                RECAP+=("$NUM|ko|liste vide|$(titre_lisible "$TITRE")"); NB_KO=$(( NB_KO + 1 ))
                 if [[ "$SANS_QUESTION" != "true" ]]; then
                     menu "Entrée=passer à la suite" "r=ressaisir les valeurs" "q=quitter"
                     CHOIX=""; lire "$(invite)" CHOIX
@@ -1768,26 +1821,26 @@ for entree in "${COMMANDES[@]}"; do
                 (( REPETEE && ${#ITERS[@]} > 0 )) && ENFANTS["$NUM"]="$(printf '%s\x01' "${ITERS[@]}")"
 
                 if (( REPETEE )); then
-                    if [[ "$SIMULATION" == "true" ]]; then RECAP+=("$NUM|sim|$NB_ITER iter|$TITRE")
+                    if [[ "$SIMULATION" == "true" ]]; then RECAP+=("$NUM|sim|$NB_ITER iter|$(titre_lisible "$TITRE")")
                     elif (( G_KO == 0 && G_INT == 0 && G_SKIP == 0 )); then
-                        RECAP+=("$NUM|ok|$G_OK/$NB_ITER$( (( EXP_TRONQUE )) && printf ' tronq') $(duree "$G_DUREE")|$TITRE"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
-                    elif (( G_KO > 0 )); then RECAP+=("$NUM|ko|$G_KO KO /$NB_ITER|$TITRE"); NB_KO=$(( NB_KO + 1 ))
-                    else RECAP+=("$NUM|int|$G_OK/$NB_ITER ok|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); fi
+                        RECAP+=("$NUM|ok|$G_OK/$NB_ITER$( (( EXP_TRONQUE )) && printf ' tronq') $(duree "$G_DUREE")|$(titre_lisible "$TITRE")"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"
+                    elif (( G_KO > 0 )); then RECAP+=("$NUM|ko|$G_KO KO /$NB_ITER|$(titre_lisible "$TITRE")"); NB_KO=$(( NB_KO + 1 ))
+                    else RECAP+=("$NUM|int|$G_OK/$NB_ITER ok|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); fi
                     BILAN="$C_OK$G_OK réussie$(pluriel "$G_OK")$C0"
                     (( G_KO ))   && BILAN+=" · $C_KO$G_KO échec$(pluriel "$G_KO")$C0"
                     (( G_INT ))  && BILAN+=" · $C_WARN$G_INT interrompue$(pluriel "$G_INT")$C0"
                     (( G_SKIP )) && BILAN+=" · $ESTOMPE$G_SKIP passée$(pluriel "$G_SKIP")$C0"
                     printf '\n  %s└─%s  %s · %s%s%s\n' "$ESTOMPE" "$C0" "$BILAN" "$ESTOMPE" "$(duree "$G_DUREE")" "$C0"
                 elif (( G_INT )); then
-                    RECAP+=("$NUM|int|$(duree "$G_DUREE")|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 ))
+                    RECAP+=("$NUM|int|$(duree "$G_DUREE")|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 ))
                     (( G_ARRET )) || demander_oui_non "  Passer à l'étape suivante ? ${ESTOMPE}[O/n]${C0} " || quitter 130
-                elif (( G_KO )); then RECAP+=("$NUM|ko|code $G_RC|$TITRE"); NB_KO=$(( NB_KO + 1 ))
-                elif [[ "$SIMULATION" == "true" ]]; then RECAP+=("$NUM|sim|simulee|$TITRE")
-                else RECAP+=("$NUM|ok|$(duree "$G_DUREE")|$TITRE"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"; fi
+                elif (( G_KO )); then RECAP+=("$NUM|ko|code $G_RC|$(titre_lisible "$TITRE")"); NB_KO=$(( NB_KO + 1 ))
+                elif [[ "$SIMULATION" == "true" ]]; then RECAP+=("$NUM|sim|simulee|$(titre_lisible "$TITRE")")
+                else RECAP+=("$NUM|ok|$(duree "$G_DUREE")|$(titre_lisible "$TITRE")"); NB_OK=$(( NB_OK + 1 )); marquer_faite "$CLE"; fi
                 (( G_ARRET == 2 )) && quitter 1
                 break ;;
             l) lister_iterations ;;
-            p) printf '  %s⊘  passée%s\n' "$ESTOMPE" "$C0"; RECAP+=("$NUM|skip|passee|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); journal "PASSÉE : $TITRE"; break ;;
+            p) printf '  %s⊘  passée%s\n' "$ESTOMPE" "$C0"; RECAP+=("$NUM|skip|passee|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); journal "PASSÉE : $TITRE"; break ;;
             e)  # modification pour cette exécution seulement
                 NOUVELLE=""; lire_edit "$CMDBASE" NOUVELLE
                 if [[ -z "${NOUVELLE// /}" ]]; then attention "commande vide : édition annulée"
@@ -1796,7 +1849,7 @@ for entree in "${COMMANDES[@]}"; do
             r)  # ressaisir les valeurs de CETTE étape seulement
                 oublier_valeurs "$BRUTE"
                 if resoudre_simples "$BRUTE"; then CMDBASE="$CMD"; BESOIN_EXP=1; info "valeurs ressaisies"
-                else RECAP+=("$NUM|skip|passee|$TITRE"); NB_PASSEES=$(( NB_PASSEES + 1 )); break; fi ;;
+                else RECAP+=("$NUM|skip|passee|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); break; fi ;;
             q) quitter ;;
             *) printf '  %s« %s » n'"'"'est pas une réponse attendue%s\n' "$JAUNE" "$CHOIX" "$C0" ;;
         esac
@@ -1806,7 +1859,7 @@ done
 if (( NB_FILTREES == TOTAL )); then
     attention "aucune étape retenue : --only / --from les écartent toutes"
 elif (( NB_FILTREES > 0 )); then
-    info "$NB_FILTREES étape(s) écartée(s) par --only / --from"
+    info "$NB_FILTREES étape$(pluriel "$NB_FILTREES") écartée$(pluriel "$NB_FILTREES") par --only / --from"
 fi
 (( NB_KO > 0 )) && exit 1
 exit 0
