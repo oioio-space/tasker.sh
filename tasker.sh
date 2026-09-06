@@ -466,31 +466,25 @@ init_affichage() {
     # sont les étapes. Un programme qui pose ses propres couleurs reprend
     # la main, on ne lutte pas contre lui.
     SORTIE_GRISE="$ESTOMPE"
-    # tput demande la taille par un ioctl sur la sortie d'erreur : la
-    # rediriger vers /dev/null lui fait rendre la valeur du terminfo — 80,
-    # quelle que soit la fenêtre. On demande donc à stty, et COLUMNS passe
-    # devant quand il est posé, ce qui laisse forcer la largeur.
-    if [[ -t 1 ]]; then
-        local taille
-        LARGEUR="${COLUMNS:-}"
-        if [[ ! "$LARGEUR" =~ ^[0-9]+$ ]]; then
-            taille="$(stty size 2>/dev/null < /dev/tty)"
-            [[ "$taille" =~ ^[0-9]+[[:space:]]+([0-9]+)$ ]] && LARGEUR="${BASH_REMATCH[1]}"
-        fi
-    fi
-    [[ "$LARGEUR" =~ ^[0-9]+$ ]] || LARGEUR=80
-    poser_largeur
+    suivre_fenetre
     init_glyphes
 }
 
-# La fenêtre peut changer de taille en cours de route : les filets et les
-# colonnes suivent, sans rien relancer.
+# La largeur du terminal. tput la demande par un ioctl sur la sortie
+# d'erreur : le 2>/dev/null qu'il faut bien lui mettre lui fait rendre la
+# valeur du terminfo — 80, quelle que soit la fenêtre. On la demande donc à
+# stty, et COLUMNS passe devant quand il est posé, ce qui laisse la forcer.
+# Appelée entre deux étapes : la fenêtre a pu changer de taille. Pas de
+# [[ =~ ]] ici, il écraserait le BASH_REMATCH d'un appelant.
 suivre_fenetre() {
-    local taille
-    [[ -t 1 ]] || return 0
-    taille="$(stty size 2>/dev/null < /dev/tty)"
-    [[ "$taille" =~ ^[0-9]+[[:space:]]+([0-9]+)$ ]] || return 0
-    LARGEUR="${BASH_REMATCH[1]}"; poser_largeur
+    local taille cols="${COLUMNS:-}"      # posé à la main : il gagne
+    if [[ -z "$cols" && -t 1 ]]; then
+        taille="$(stty size 2>/dev/null < /dev/tty)"
+        cols="${taille#* }"
+    fi
+    case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+    LARGEUR="$cols"
+    poser_largeur
     return 0
 }
 
@@ -1187,7 +1181,6 @@ retablir_shell() {
     eval "$SHOPT_TK"
     if [[ "$LC_ALL_TK" == "__absent__" ]]; then unset LC_ALL; else LC_ALL="$LC_ALL_TK"; fi
     trap gerer_int INT
-    trap suivre_fenetre WINCH
     trap au_revoir EXIT
     trap 'journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
     trap 'journal "ARRÊT : SIGTERM"; exit 143' TERM
@@ -1208,7 +1201,6 @@ gerer_int() {
     INTERROMPU=1
 }
 trap gerer_int INT
-trap suivre_fenetre WINCH
 # Terminal fermé ou kill : on passe par exit pour que le trap EXIT écrive
 # le récapitulatif et le rapport, et que le journal dise pourquoi.
 trap 'journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
@@ -1727,7 +1719,10 @@ recap_retirer() {
 
 recap() {
     (( ${#RECAP[@]} == 0 && DEMARRE == 0 )) && return
+    suivre_fenetre
     local l num e d t
+    local TOTAL_TXT
+    duree "$SECONDS"; TOTAL_TXT="$DUREE_TXT"
     printf '\n'; regle "$GRAS"
     printf ' %sRécapitulatif%s   %s%s%s\n' "$C_TITRE" "$C0" "$ESTOMPE" "$TK_SUJET" "$C0"
     regle "$GRAS"
@@ -1739,7 +1734,7 @@ recap() {
     regle
     printf '  %s%d réussie%s%s · %s%d en échec%s · %s%d passée%s%s · total %s\n' \
            "$C_OK" "$NB_OK" "$(pluriel "$NB_OK")" "$C0" "$( (( NB_KO )) && printf '%s' "$C_KO" )" "$NB_KO" "$C0" \
-           "$ESTOMPE" "$NB_PASSEES" "$(pluriel "$NB_PASSEES")" "$C0" "$DUREE_TXT"
+           "$ESTOMPE" "$NB_PASSEES" "$(pluriel "$NB_PASSEES")" "$C0" "$TOTAL_TXT"
     printf '  %sjournal  %s%s\n' "$ESTOMPE" "$LOG" "$C0"
     ecrire_rapport
 }
@@ -1921,6 +1916,7 @@ plan_initial
 # verdict. Rend 1 si --only ou --from l'écartent, 0 sinon.
 jouer_etape() {
     local entree="$1" e
+    suivre_fenetre          # la fenêtre a pu changer depuis l'étape d'avant
     local TITRE RESTE BRUTE OCC CLE CMDBASE NOUVELLE BILAN CHOIX
     local BESOIN_EXP RCEXP NB_ITER REPETEE UNE_PAR_UNE
     # Le titre garde ses [[nom]] : c'est la clé de --resume et ce qu'affiche
