@@ -365,7 +365,7 @@ lister_lignes() {
 #   lister_colonne ./postes.csv 2
 lister_colonne() {
     local fichier="${1-}" n="${2-}" sep="${3:-,}"
-    local ligne val ; local -a champs
+    local ligne val reste i
     [[ -n "$fichier" && -n "$n" ]] || { printf 'lister_colonne : il faut <fichier> <n>\n' >&2; return 1; }
     [[ "$n" =~ ^[0-9]+$ ]] && (( 10#$n >= 1 )) || { printf 'lister_colonne : n doit être un entier ≥ 1 : %s\n' "$n" >&2; return 1; }
     [[ -f "$fichier" && -r "$fichier" ]] || { printf 'lister_colonne : fichier illisible, ignoré : %s\n' "$fichier" >&2; return 0; }
@@ -373,8 +373,11 @@ lister_colonne() {
         (( INTERROMPU )) && return 130
         ligne="${ligne%$'\r'}"
         [[ -z "$ligne" || "$ligne" == '#'* ]] && continue
-        IFS="$sep" read -r -a champs <<< "$ligne"
-        val="${champs[$(( 10#$n - 1 ))]-}"
+        # Pas de read -a : avec une tabulation en séparateur il fondrait
+        # les cellules vides et décalerait les colonnes.
+        reste="$ligne"; i=1
+        while (( i < 10#$n )) && [[ "$reste" == *"$sep"* ]]; do reste="${reste#*"$sep"}"; i=$(( i + 1 )); done
+        if (( i < 10#$n )); then val=""; else val="${reste%%"$sep"*}"; fi
         [[ -n "$val" ]] && emettre "$val" "$ligne"
     done < "$fichier"
     return 0
@@ -437,7 +440,7 @@ INTERROMPU=0; EN_SAISIE=0
 C0=""; GRAS=""; ESTOMPE=""; COULEURS=0
 C_ACCENT=""; C_OK=""; C_KO=""; C_WARN=""; C_SIM=""; C_PROG=""; C_CMD=""
 C_BOUCLE=""; C_CLE=""; C_BOITE=""; C_TITRE=""; SORTIE_GRISE=""
-_LARGEUR=80
+_LARGEUR=80; _LARGEUR_TTY=80
 NOM_SCRIPT="${0##*/}"
 
 # Jamais de couleur de fond, jamais de gris fixe : « estompé » est
@@ -495,6 +498,7 @@ suivre_fenetre() {
         cols="${taille#* }"
     fi
     case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+    _LARGEUR_TTY="$cols"        # celle du terminal, avant la borne à 100 de la mise en page
     _LARGEUR="$cols"
     poser_largeur
     return 0
@@ -529,8 +533,19 @@ LARG_COUPE=0
 largeur_texte() {
     local t="$1" max="${2--1}" c cp l i=0
     POS_COUPE=-1; LARG_COUPE=0
-    if (( ! _UTF8_OK )); then t="${t//[$'\x80'-$'\xbf']/}"; LARG_TXT=${#t}
-        (( max >= 0 && LARG_TXT > max )) && { POS_COUPE=$max; LARG_COUPE=$max; }
+    if (( ! _UTF8_OK )); then
+        # ${#t} compte les octets : on retire ceux de continuation pour
+        # mesurer, et la coupe se cherche dans l'original, octet par octet.
+        c="${t//[$'\x80'-$'\xbf']/}"; LARG_TXT=${#c}
+        if (( max >= 0 && LARG_TXT > max )); then
+            LARG_COUPE=0
+            while (( LARG_COUPE < max )); do
+                i=$(( i + 1 ))
+                while [[ "${t:$i:1}" == [$'\x80'-$'\xbf'] ]]; do i=$(( i + 1 )); done
+                LARG_COUPE=$(( LARG_COUPE + 1 ))
+            done
+            POS_COUPE=$i
+        fi
         return 0
     fi
     if [[ "$t" != *[$'\x80'-$'\xff']* ]]; then LARG_TXT=${#t}
@@ -1226,7 +1241,7 @@ if (exec 3< /dev/tty) 2>/dev/null; then _ENTREE="/dev/tty"; _INTERACTIF="oui"
 else _ENTREE="/dev/stdin"; _INTERACTIF="non"; fi
 
 _LOG="/dev/null"
-journal() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$_LOG"; }
+journal() { printf '[%(%F %T)T] %s\n' -1 "$*" >> "$_LOG"; }
 
 # Une commande peut laisser le terminal inutilisable : un programme plein
 # écran interrompu par Ctrl-C au mauvais moment ne rend pas la main
@@ -1239,8 +1254,15 @@ TTY_ETAT=""
 # vaudrait un SIGTTOU : le script serait stoppé net. On ne le fait que si
 # l'on est au premier plan.
 en_avant_plan() {
-    local t p
-    t="$(ps -o tpgid= -p $$ 2>/dev/null)"; p="$(ps -o pgid= -p $$ 2>/dev/null)"
+    local stat t p
+    # /proc d'abord : c'est deux forks de ps en moins après chaque commande.
+    # Le nom du processus, entre parenthèses, peut contenir des espaces :
+    # on lit après la dernière. Champs : état ppid pgrp session tty tpgid.
+    if [[ -r /proc/$$/stat ]] && read -r stat < /proc/$$/stat; then
+        stat="${stat##*) }"; read -r _ _ p _ _ t _ <<< "$stat"
+    else
+        t="$(ps -o tpgid= -p $$ 2>/dev/null)"; p="$(ps -o pgid= -p $$ 2>/dev/null)"
+    fi
     [[ -n "${t// /}" && "${t// /}" == "${p// /}" ]]
 }
 restaurer_terminal() {
@@ -1422,6 +1444,9 @@ generer_liste() {
         # ou find rendent justement 1 ou 2 quand ils ne trouvent rien. C'est
         # une liste vide — la branche ne produit rien — et le journal garde
         # le code pour qui veut comprendre.
+        # Interrompue : ce qu'on a lu est tronqué, on ne le garde pas — la
+        # prochaine étape qui lit cette liste la relira en entier.
+        (( INTERROMPU )) && return 130
         if (( rc != 0 && ${#sortie} == 0 )); then journal "LISTE $nom : aucune valeur (code $rc)"; code_vide=$rc; fi
         CACHE_LISTE["$gen"]="${sortie:-$'\001'}"; CACHE_CODE["$gen"]="$code_vide"
     fi
@@ -1540,7 +1565,9 @@ oublier_valeurs() {
     while (( i < ${#afaire[@]} )); do
         courant="${afaire[$i]}"; i=$(( i + 1 ))
         while [[ "$courant" =~ $RE_SIMPLE ]]; do
-            unset "_REPONSES[${BASH_REMATCH[1]}]"; courant="${courant//\[\[${BASH_REMATCH[1]}\]\]/}"
+            nom="${BASH_REMATCH[1]}"; unset "_REPONSES[$nom]"; courant="${courant//\[\[$nom\]\]/}"
+            # un menu : les valeurs que son générateur demande sont oubliées aussi
+            [[ "$vus" == *" $nom "* || -z "${GENERATEUR[$nom]:-}" ]] || { vus+="$nom "; afaire+=("${GENERATEUR[$nom]}"); }
         done
         while [[ "$courant" =~ $RE_LISTE ]]; do
             nom="${BASH_REMATCH[1]}"; courant="${courant//\{\{$nom\}\}/}"; nom="$(liste_de "$nom")"
@@ -1558,6 +1585,9 @@ liste_a_parcourir() {
     while true; do
         [[ "$vus" != *" $nom "* ]] || { erreur "dépendance circulaire entre listes : $nom"; return 1; }
         vus+="$nom "
+        # Figée par --list : ses valeurs sont là, ce dont elle dépendait ne
+        # compte plus — sinon elle était rejouée pour chaque valeur du parent.
+        [[ -z "${LISTE_FIGEE[$nom]:-}" ]] || break
         gen="$(substituer_liaisons "${GENERATEUR[$nom]:-}")"
         [[ "$gen" =~ $RE_LISTE ]] || break
         nom="$(liste_de "${BASH_REMATCH[1]}")"
@@ -1606,6 +1636,8 @@ _expanser() {
     return 0
 }
 
+connu_dans() { local x n="$1"; shift; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
+
 # scanner_placeholders : inventaire pour --vars et le contrôle de --var,
 # en suivant les listes appelées indirectement.
 scanner_placeholders() {
@@ -1622,8 +1654,14 @@ scanner_placeholders() {
         while [[ "$cmd" =~ $RE_SIMPLE ]]; do nom="${BASH_REMATCH[1]}"; _noter PH_SIMPLES USAGE_SIMPLES "$nom" "$i"; cmd="${cmd//\[\[$nom\]\]/}"; done
         while [[ "$cmd" =~ $RE_LISTE ]];  do nom="${BASH_REMATCH[1]}"; cmd="${cmd//\{\{$nom\}\}/}"; _noter PH_LISTES USAGE_LISTES "$(liste_de "$nom")" "$i"; done
     done
-    while (( k < ${#PH_LISTES[@]} )); do
-        nom="${PH_LISTES[$k]}"; gen="${GENERATEUR[$nom]:-}"; k=$(( k + 1 ))
+    # Une question [[nom]] qui a une liste du même nom est un menu : son
+    # générateur peut demander d'autres valeurs, il faut le lire aussi.
+    local -a listes_vues=()
+    while (( k < ${#PH_LISTES[@]} + ${#PH_SIMPLES[@]} )); do
+        if (( k < ${#PH_LISTES[@]} )); then nom="${PH_LISTES[$k]}"; else nom="${PH_SIMPLES[$(( k - ${#PH_LISTES[@]} ))]}"; fi
+        k=$(( k + 1 )); gen="${GENERATEUR[$nom]:-}"
+        [[ -n "$gen" ]] || continue
+        connu_dans "$nom" ${listes_vues[@]+"${listes_vues[@]}"} && continue; listes_vues+=("$nom")
         while [[ "$gen" =~ $RE_SIMPLE ]]; do e="${BASH_REMATCH[1]}"; gen="${gen//\[\[$e\]\]/}"; _noter PH_SIMPLES USAGE_SIMPLES "$e" "et par la liste $nom"; done
         while [[ "$gen" =~ $RE_LISTE ]];  do e="${BASH_REMATCH[1]}"; gen="${gen//\{\{$e\}\}/}"; _noter PH_LISTES USAGE_LISTES "$(liste_de "$e")" "et par la liste $nom"; done
     done
@@ -1670,7 +1708,7 @@ executer_une() {
     # de la ligne, et le verdict venait s'y coller. On remplit la ligne
     # d'espaces : si le curseur était en cours de route, on passe à la
     # suivante ; s'il était au début, l'affichage d'après les recouvre.
-    [[ -t 1 ]] && printf '%*s\r' $(( _LARGEUR - 1 )) ''
+    [[ -t 1 ]] && printf '%*s\r' $(( _LARGEUR_TTY - 1 )) ''
     retablir_shell
     _DUREE_S=$(( SECONDS - _debut )); duree "$_DUREE_S"; journal "code $_rc en $DUREE_TXT"
     return "$_rc"
@@ -1832,12 +1870,12 @@ recap() {
     local TOTAL_TXT
     duree "$SECONDS"; TOTAL_TXT="$DUREE_TXT"
     local -a details=()
-    for l in "${_RECAP[@]}"; do d="${l#*|}"; d="${d#*|}"; details+=("${d%%|*}"); done
+    for l in ${_RECAP[@]+"${_RECAP[@]}"}; do d="${l#*|}"; d="${d#*|}"; details+=("${d%%|*}"); done
     poser_colonne ${details[@]+"${details[@]}"}
     printf '\n'; regle "$GRAS"
     printf ' %sRécapitulatif%s   %s%s%s\n' "$C_TITRE" "$C0" "$ESTOMPE" "$TK_SUJET" "$C0"
     regle "$GRAS"
-    for l in "${_RECAP[@]}"; do
+    for l in ${_RECAP[@]+"${_RECAP[@]}"}; do
         num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
         ligne_tache "$e" "$num" "$t" "$d"
         recap_enfants "$num"
@@ -1887,7 +1925,7 @@ ecrire_rapport() {
         printf '  par        %s%s sur %s\n' "$TK_OPERATEUR" "$( (( EUID == 0 )) && printf ' (root)')" "$(hostname 2>/dev/null || printf '?')"
         duree "$SECONDS"
         printf '  debut      %s\n  fin        %s\n  duree      %s\n\n' "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$DUREE_TXT"
-        for l in "${_RECAP[@]}"; do
+        for l in ${_RECAP[@]+"${_RECAP[@]}"}; do
             num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
             printf '  %2s  %-12s %-10s %s\n' "$num" "${GLYPHE_TXT[$e]:-?}" "$d" "$(titre_lisible "$t")"
             # Les itérations sont jointes par \x01 : il faut les redécouper,
@@ -1946,7 +1984,6 @@ if [[ "$_LISTER_VARS" == "true" ]]; then
     exit 0
 fi
 
-connu_dans() { local x n="$1"; shift; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
 for p in ${PRESETS[@]+"${PRESETS[@]}"}; do
     nom="${p%%=*}"; val="${p#*=}"
     [[ "$p" == *=* && "$nom" =~ ^[a-zA-Z0-9_]+$ ]] || { erreur "--var attend nom=valeur : $p"; exit 1; }
@@ -1968,7 +2005,7 @@ if [[ "$_LISTER_ETAPES" == "true" ]]; then plan_initial oui; printf '\n'; exit 0
 # En simulation, un contrôle qui échoue n'empêche pas de voir le plan.
 if ! verifier; then [[ "$_SIMULATION" == "true" ]] && attention "contrôles en échec — simulation quand même" || exit 1; fi
 [[ "$_INTERACTIF" == "non" && "$_SANS_QUESTION" != "true" ]] && attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
-MANQUANTS=""; for b in "${TK_REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
+MANQUANTS=""; for b in ${TK_REQUIS[@]+"${TK_REQUIS[@]}"}; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
 [[ -n "$MANQUANTS" ]] && attention "binaires absents :$MANQUANTS"
 
 # sudo demande son mot de passe sur le terminal, au moment où la commande
@@ -2116,7 +2153,7 @@ jouer_etape() {
                 if (( _REPETEE )); then
                     duree "$_G_DUREE"
                     if [[ "$_SIMULATION" == "true" ]]; then recap_ajouter sim "$_NB_ITER iter"
-                    elif (( _G_KO == 0 && _G_INT == 0 && _G_SKIP == 0 )); then
+                    elif (( _G_KO == 0 && _G_INT == 0 && _G_SKIP == 0 && _G_ARRET == 0 )); then
                         recap_ajouter ok "$_G_OK/$_NB_ITER$( (( _EXP_TRONQUE )) && printf ' tronq') $DUREE_TXT"
                     elif (( _G_KO > 0 )); then recap_ajouter ko "$_G_KO KO /$_NB_ITER"
                     else recap_ajouter int "$_G_OK/$_NB_ITER ok"; fi
