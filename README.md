@@ -384,6 +384,7 @@ jamais sur le chemin, comme `find -name`, et **distinguent les majuscules**.
 | `lister_fichiers /etc '*.conf' '*.cfg'` | plusieurs |
 | `lister_fichiers /etc '[!.]*'` | tout sauf les cachés |
 | `lister_fichiers -i /docs '*.pdf'` | `.pdf`, `.PDF`, `.Pdf` |
+| `lister_fichiers /etc "$MOTIF"` | `MOTIF` vide = pas de motif, donc tout |
 
 Trois précautions déjà prises : `lister_arbre` ne suit pas les liens vers
 des dossiers, donc aucune boucle ; un dossier illisible est signalé au
@@ -474,7 +475,10 @@ DOSSIER="/srv/autre"
 
 ## Ce que le script attend de vous
 
-Tout ce qui commence par `TK_` est à lui. Les autres noms sont à vous.
+Tout ce qui commence par `TK_` est à lui : à remplir, jamais à supprimer ni à
+renommer. Ce qui commence par `_` appartient à sa mécanique — vos commandes
+tournent dans son shell, alors laissez-lui ces noms-là. Tous les autres sont à
+vous.
 
 ### Les réglages — section 2, ou votre fichier `-c`
 
