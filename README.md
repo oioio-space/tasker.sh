@@ -660,7 +660,8 @@ empreintes.
 ## Limites
 
 * Les commandes passent par `eval`, dans le shell du script : n'y mettez
-  que les vôtres. `set -u` est actif : une variable non définie arrête
+  que les vôtres. Un `exit` y arrête le script — pour marquer un échec,
+  rendez un code non nul. `set -u` est actif : une variable non définie arrête
   l'étape. Un `cd` persiste jusqu'à la fin ; `set -e`, `set -x`, `IFS`, les
   options `shopt`, `LC_ALL` et les traps sont remis après chaque commande.
 * `head` derrière un `tee` ferme le tube : code 141. Utilisez `tail`.

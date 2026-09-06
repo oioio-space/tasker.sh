@@ -466,7 +466,18 @@ init_affichage() {
     # sont les étapes. Un programme qui pose ses propres couleurs reprend
     # la main, on ne lutte pas contre lui.
     SORTIE_GRISE="$ESTOMPE"
-    [[ -t 1 ]] && LARGEUR=$(tput cols 2>/dev/null || printf 80)
+    # tput demande la taille par un ioctl sur la sortie d'erreur : la
+    # rediriger vers /dev/null lui fait rendre la valeur du terminfo — 80,
+    # quelle que soit la fenêtre. On demande donc à stty, et COLUMNS passe
+    # devant quand il est posé, ce qui laisse forcer la largeur.
+    if [[ -t 1 ]]; then
+        local taille
+        LARGEUR="${COLUMNS:-}"
+        if [[ ! "$LARGEUR" =~ ^[0-9]+$ ]]; then
+            taille="$(stty size 2>/dev/null < /dev/tty)"
+            [[ "$taille" =~ ^[0-9]+[[:space:]]+([0-9]+)$ ]] && LARGEUR="${BASH_REMATCH[1]}"
+        fi
+    fi
     [[ "$LARGEUR" =~ ^[0-9]+$ ]] || LARGEUR=80
     (( LARGEUR < 40 )) && LARGEUR=40
     (( LARGEUR > 100 )) && LARGEUR=100
@@ -682,7 +693,8 @@ aide_etapes() {
     h_code "\"Boucle|true|for f in '\$DOSSIER'/*; do echo \\\$f; done\""
     h_vide
     h_ligne "Les commandes tournent dans le shell du script : vos fonctions"
-    h_ligne "sont appelables, un cd persiste, set -u est actif."
+    h_ligne "sont appelables, un cd persiste, set -u est actif. « exit » y"
+    h_ligne "arrête le script : pour marquer un échec, rendez un code non nul."
 }
 
 aide_valeurs() {
@@ -927,7 +939,7 @@ LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"; AIDE="false"; GA
 SUJET_AIDE=""
 SANS_QUESTION="false"; REPRENDRE="false"; FILTRE_ETAPES=""; DEPUIS=0
 
-exige_valeur() { [[ -n "${2:-}" ]] || { printf '%s attend une valeur.\n' "$1" >&2; exit 1; }; }
+exige_valeur() { [[ -n "${2:-}" ]] || { printf '✗  %s attend une valeur.\n' "$1" >&2; exit 1; }; }
 
 # Options courtes à la manière de getopt : -yn vaut -y -n, -o3 vaut -o 3,
 # -cFICHIER vaut -c FICHIER.
@@ -976,11 +988,12 @@ while (( $# > 0 )); do
                            if [[ -n "${2-}" && "$2" != -* ]]; then SUJET_AIDE="$2"; shift; fi
                            shift ;;
         --help=*)          AIDE="true"; SUJET_AIDE="${1#*=}";                     shift ;;
-        *) printf 'Option inconnue : %s   (-h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
+        -*) printf '✗  option inconnue : %s   (-h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
+        *)  printf '✗  argument inattendu : %s   (tout passe par des options, -h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
     esac
 done
 case "$COULEUR" in always|yes|oui) COULEUR="oui" ;; never|no|non) COULEUR="non" ;; auto) ;;
-    *) printf -- '--color attend auto, always ou never.\n' >&2; exit 1 ;; esac
+    *) printf -- '✗  --color attend auto, always ou never.\n' >&2; exit 1 ;; esac
 init_affichage
 if [[ "$AIDE" == "true" ]]; then
     if [[ -n "$SUJET_AIDE" ]]; then aide_sujet "$SUJET_AIDE"; exit $?; fi
@@ -1094,7 +1107,13 @@ restaurer_terminal() {
 # un trap casserait donc la suite : après chaque commande, on remet ce
 # dont la mécanique dépend.
 SHOPT_TK="$(shopt -p)"       # les options du shell au départ, remises après chaque commande
+# Une commande tourne dans ce shell : un « exec 1>&- » ou un « exec
+# 2>/tmp/x » emporterait la sortie du script avec elle, jusqu'au
+# récapitulatif. On garde une copie des deux descripteurs, remise après
+# chaque commande.
+exec {FD_SORTIE}>&1 {FD_ERREUR}>&2
 retablir_shell() {
+    exec 1>&"$FD_SORTIE" 2>&"$FD_ERREUR"
     set +e -u -o pipefail +x +v
     IFS=$' \t\n'
     eval "$SHOPT_TK"
