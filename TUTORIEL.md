@@ -279,8 +279,60 @@ Pas d'option `log` : `photorec` est plein écran et a besoin du terminal.
   fichiers de tous les profils.
 
 Une fonction de liste écrit **une valeur par ligne**, `valeur<TAB>libellé`.
-`lister_partitions` lit `mmls` et écrit `2048<TAB>NTFS — 40.0 Go` ;
-`lister_homes` lit `fls` et écrit `51-144-1<TAB>Users/alice`.
+Pour comprendre ce qui devient un menu ou une répétition, le plus simple est
+de lancer la fonction à la main : ce qu'elle affiche est exactement ce que le
+script reçoit.
+
+`lister_partitions` lit `mmls` :
+
+```
+$ mmls '/images/pc07.dd'
+DOS Partition Table
+Units are in 512-byte sectors
+
+      Slot      Start        End          Length       Description
+000:  Meta      0000000000   0000000000   0000000001   Primary Table (#0)
+001:  -------   0000000000   0000002047   0000002048   Unallocated
+002:  000:000   0000002048   0083884031   0083881984   NTFS / exFAT (0x07)
+```
+
+et n'en garde que deux colonnes, séparées par une tabulation :
+
+```
+$ lister_partitions '/images/pc07.dd'
+2048	NTFS / exFAT (0x07) — 40.0 Go
+```
+
+Une ligne, donc une entrée. Comme la liste s'appelle `offset` et qu'une
+commande écrit `[[offset]]`, cette ligne devient le menu de l'étape 2 :
+
+```
+    │   1  2048           NTFS / exFAT (0x07) — 40.0 Go
+```
+
+`2048` part dans la commande, `NTFS / exFAT (0x07) — 40.0 Go` ne sert qu'à
+lire le menu.
+
+`lister_homes` fonctionne pareil, mais elle est appelée en `{{home}}` :
+
+```
+$ lister_homes '/images/pc07.dd' 2048 windows
+51-144-1	Users/alice
+51-208-1	Users/bruno
+51-272-1	Users/celia
+```
+
+Trois lignes, donc trois itérations à l'étape 6 — et la différence
+valeur/libellé prend tout son sens : `{{home}}` vaut l'inode `51-144-1`, que
+seul `fls` sait lire, et `{{home_libelle}}` vaut `Users/alice`, qui nomme le
+fichier de sortie et s'affiche à l'écran.
+
+```
+  ↻  étape répétée — 3 itérations
+      1  home=Users/alice
+      2  home=Users/bruno
+      3  home=Users/celia
+```
 
 ---
 
@@ -296,17 +348,27 @@ Les deux lignes sont dans `forensic.conf`, en commentaire. Décommentez :
 "Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
 ```
 
-La liste `bashrc` dépend de `{{home}}` ; l'étape n'écrit que
-`{{bashrc}}`. Le script boucle sur les profils tout seul :
+La liste `bashrc` dépend de `{{home}}` ; l'étape n'écrit que `{{bashrc}}`.
+Le script résout donc `home` d'abord, puis relance `bashrc` **une fois par
+profil**, `{{home}}` remplacé par l'inode du profil en cours :
+
+```
+$ lister_fichiers_nommes '/images/pc07.dd' 2048 51-144-1 '^\.bashrc$'
+51-145-3	Users/alice/.bashrc
+$ lister_fichiers_nommes '/images/pc07.dd' 2048 51-208-1 '^\.bashrc$'
+                                                    ← rien, bruno n'en a pas
+$ lister_fichiers_nommes '/images/pc07.dd' 2048 51-272-1 '^\.bashrc$'
+51-273-3	Users/celia/.bashrc
+```
+
+Trois appels, deux résultats : la branche de bruno ne produit rien et
+disparaît, sans erreur ni itération vide.
 
 ```
   ↻  étape répétée — 2 itérations
       1  home=Users/alice · bashrc=Users/alice/.bashrc
       2  home=Users/celia · bashrc=Users/celia/.bashrc
 ```
-
-Bruno n'a pas de `.bashrc` : sa branche ne produit rien et disparaît,
-sans erreur.
 
 Pour un autre fichier : changez le motif. `'^\.ssh$'`, `'\.(bash|zsh)rc$'`.
 
@@ -443,14 +505,33 @@ ligne par ligne :
   ○  4  Historique de chaque home                          ↻ répétée
 ```
 
+Les deux listes lancées à la main — c'est ce que le script voit avant
+d'annoncer quoi que ce soit :
+
+```
+$ lister_dossiers /home
+/home/alice	alice
+/home/bruno	bruno
+/home/celia	celia
+
+$ lister_si_present /home/alice/.bash_history
+/home/alice/.bash_history	.bash_history
+$ lister_si_present /home/bruno/.bash_history
+                                          ← rien, le fichier n'existe pas
+$ lister_si_present /home/celia/.bash_history
+/home/celia/.bash_history	.bash_history
+```
+
+Trois homes, trois appels, deux résultats : bruno n'apparaît pas, et rien
+n'a échoué — c'est ce que faisait le `2>/dev/null` de l'ancien script, en
+silence.
+
 ```
   ◐ 4/4  ━━━━━━━━━━━━  Historique de chaque home
   ↻  étape répétée — 2 itérations
       1  home=alice · historique=.bash_history
       2  home=celia · historique=.bash_history
 ```
-
-Bruno n'a pas d'historique : il n'apparaît pas, et rien n'a échoué.
 
 ### Les règles quand on reprend une fonction d'un autre script
 

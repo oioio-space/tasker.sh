@@ -110,7 +110,24 @@ LISTES=(
 )
 ```
 
-Elle sert à deux choses, selon la façon dont une commande l'appelle :
+### D'abord : ce que la commande écrit
+
+Une commande de liste est une commande ordinaire. Lancez-la dans votre
+terminal : ce que vous voyez est exactement ce que le script recevra.
+
+```bash
+$ printf '%s\n' 1 7 30
+1
+7
+30
+```
+
+Trois lignes, donc trois valeurs — et rien d'autre. Les lignes vides sont
+ignorées ; ce qui part sur la sortie d'erreur n'est pas une valeur, ça va
+dans le journal.
+
+Ces trois valeurs deviennent ensuite l'une ou l'autre de deux choses, selon
+la façon dont une commande les appelle :
 
 | dans la commande | ce qui se passe |
 |---|---|
@@ -126,11 +143,8 @@ Sans liste, `[[jours]]` est une question libre :
     └─ valeur › 
 ```
 
-Ajoutez une liste **du même nom**, la question devient un menu :
-
-```bash
-"jours|printf '%s\n' 1 7 30"
-```
+Ajoutez une liste **du même nom** — `jours`, celle d'au-dessus — et la
+question devient un menu, une entrée par ligne écrite :
 
 ```
     ┌─ [[jours]]  — utilisé à l'étape 1
@@ -160,6 +174,24 @@ La valeur choisie est **mémorisée** : toutes les étapes qui contiennent
 `[[jours]]` l'utilisent sans redemander. Pour la fournir d'avance :
 `./tasker.sh -D jours=7`. Pour tout ressaisir sur une étape : `r`.
 
+### La même liste, en répétition
+
+Les trois mêmes lignes, appelées en `{{jours}}` : plus de menu, une
+itération par valeur.
+
+```bash
+"Fenêtre|true|journalctl --since '{{jours}} days ago'"
+```
+
+```
+  ↻  étape répétée — 3 itérations
+      1  jours=1
+      2  jours=7
+      3  jours=30
+```
+
+Le compte est annoncé **avant** d'exécuter quoi que ce soit.
+
 ### Les libellés : une valeur pour la commande, un texte pour vous
 
 Une ligne de liste peut s'écrire `valeur<TAB>libellé` :
@@ -167,6 +199,22 @@ Une ligne de liste peut s'écrire `valeur<TAB>libellé` :
 ```bash
 "jours|printf '%s\t%s\n' 1 'hier' 7 'cette semaine' 30 'ce mois'"
 ```
+
+Ce que la commande écrit, vérifié avec `cat -A` — `^I` est la tabulation,
+`$` la fin de ligne :
+
+```bash
+$ printf '%s\t%s\n' 1 'hier' 7 'cette semaine' 30 'ce mois' | cat -A
+1^Ihier$
+7^Icette semaine$
+30^Ice mois$
+```
+
+Ce contrôle vaut le coup : à l'œil, une tabulation et trois espaces se
+ressemblent, mais des espaces resteraient dans la valeur et il n'y aurait
+pas de libellé du tout.
+
+Le menu affiche alors les deux colonnes :
 
 ```
     │   1  1              hier
@@ -221,9 +269,41 @@ Sans tabulation, `{{nom_libelle}}` vaut simplement la valeur.
 "Chaque .bashrc|true|cat '{{bashrc}}'"     # boucle sur les profils toute seule
 ```
 
+L'étape n'écrit que `{{bashrc}}`, mais le script doit d'abord savoir ce que
+vaut `{{profil}}`. Il déroule donc dans cet ordre.
+
+**1.** La liste dont l'autre dépend :
+
+```bash
+$ lister_dossiers /home
+/home/alice	alice
+/home/bruno	bruno
+/home/carole	carole
 ```
-      1  profil=alice · bashrc=alice/.bashrc
-      2  profil=carole · bashrc=carole/.bashrc
+
+**2.** Puis `bashrc`, **une fois par profil**, `{{profil}}` remplacé :
+
+```bash
+$ lister_bashrc /home/alice      →  /home/alice/.bashrc
+$ lister_bashrc /home/bruno      →  (rien : pas de .bashrc)
+$ lister_bashrc /home/carole     →  /home/carole/.bashrc
+```
+
+À l'écran, ces appels défilent le temps de leur exécution :
+
+```
+  … lecture de la liste « profil »
+  … lecture de la liste « bashrc »
+  … lecture de la liste « bashrc »
+  … lecture de la liste « bashrc »
+```
+
+**3.** Ce qui reste devient les itérations — trois appels, deux résultats :
+
+```
+  ↻  étape répétée — 2 itérations
+      1  profil=alice · bashrc=/home/alice/.bashrc
+      2  profil=carole · bashrc=/home/carole/.bashrc
 ```
 
 Une liste vide n'est pas une erreur : la branche ne produit rien, les autres
@@ -254,6 +334,16 @@ lister_dossiers() {
     done
     return 0
 }
+```
+
+Avant de la brancher, lancez-la à la main : c'est le meilleur moyen de voir
+ce que le script recevra.
+
+```bash
+$ lister_dossiers /srv/data
+/srv/data/archives	archives
+/srv/data/photos	photos
+/srv/data/videos	videos
 ```
 
 Valeurs sur la sortie standard, messages sur `>&2`. Voir ce qui sera
