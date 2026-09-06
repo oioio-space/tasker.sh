@@ -473,6 +473,7 @@ DOSSIER="/srv/autre"
 |---|---|
 | `exemples/forensic.conf` | analyse d'une image disque : menus, listes emboîtées, fonctions |
 | `exemples/pc07.conf` | `source forensic.conf` + six variables |
+| `exemples/dd-windows.conf` | un dd Windows, sans aucune liste : fdisk puis l'offset tapé, testdisk puis la partition tapée |
 
 ---
 
