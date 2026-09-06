@@ -8,8 +8,9 @@
 #   6 CHEMINS ET CONTRÔLES · 7 BOÎTE À OUTILS · 8 MÉCANIQUE
 #
 #   Un nom qui commence par TK_ est lu par le script : remplissez-le, ne le
-#   supprimez pas, ne le renommez pas. Un nom qui commence par _ appartient
-#   à la mécanique : n'y touchez pas. Tous les autres noms sont à vous.
+#   supprimez pas, ne le renommez pas. Un nom qui commence par _ est un
+#   rouage : le script s'en sert entre deux étapes, laissez-le tranquille.
+#   Le reste des noms est à vous.
 #   Voir aussi TUTORIEL.md.
 #
 set -uo pipefail
@@ -426,7 +427,7 @@ lister_montages() {
 # =====================================================================
 
 # --- 8.1 Affichage ---------------------------------------------------
-COULEUR="auto"
+_COULEUR="auto"
 # Posé tôt : la boîte à outils le teste, et un fichier -c peut appeler une
 # de ses fonctions depuis calculer_variables, bien avant la boucle.
 INTERROMPU=0; EN_SAISIE=0
@@ -444,7 +445,7 @@ NOM_SCRIPT="${0##*/}"
 teinte() { (( COULEURS >= 256 )) && printf '\033[38;5;%dm' "$1" || printf '%s' "$2"; }
 init_affichage() {
     local actif="non"
-    case "$COULEUR" in
+    case "$_COULEUR" in
         oui)  actif="oui" ;;
         auto) [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]] && actif="oui" ;;
     esac
@@ -501,12 +502,12 @@ suivre_fenetre() {
 # colonnes se décalent et un repli peut couper un caractère en deux. On
 # essaie d'abord de passer bash lui-même en UTF-8 — LC_ALL n'est pas
 # exporté, vos commandes gardent leur locale — et sinon on mesure à la main.
-_SONDE="é"; UTF8_OK=0
+_SONDE="é"; _UTF8_OK=0
 for _loc in "" C.UTF-8 C.utf8 en_US.UTF-8 fr_FR.UTF-8; do
     [[ -n "$_loc" ]] && LC_ALL="$_loc"
-    (( ${#_SONDE} == 1 )) && { UTF8_OK=1; break; }
+    (( ${#_SONDE} == 1 )) && { _UTF8_OK=1; break; }
 done
-(( UTF8_OK )) || unset LC_ALL
+(( _UTF8_OK )) || unset LC_ALL
 LC_ALL_TK="${LC_ALL-__absent__}"   # pour la remettre si une commande la change
 unset _SONDE _loc
 # --- primitives d'affichage ------------------------------------------
@@ -516,14 +517,27 @@ unset _SONDE _loc
 # largeur_texte <texte> -> LARG_TXT, la place prise à l'écran.
 # Un idéogramme ou un emoji occupe deux colonnes, un accent combinant zéro.
 # Le chemin rapide sert au cas courant : du texte sans accent ni symbole.
+# Avec une limite, POS_COUPE dit où couper pour tenir dans ce nombre de
+# colonnes et LARG_COUPE la largeur atteinte là ; POS_COUPE vaut -1 quand le
+# texte tient déjà. C'est la même passe qui mesure et qui repère la coupe :
+# « couper » n'a pas à reparcourir le texte.
 LARG_TXT=0
+POS_COUPE=-1
+LARG_COUPE=0
 largeur_texte() {
-    local t="$1" c cp
-    if (( ! UTF8_OK )); then t="${t//[$'\x80'-$'\xbf']/}"; LARG_TXT=${#t}; return 0; fi
-    if [[ "$t" != *[$'\x80'-$'\xff']* ]]; then LARG_TXT=${#t}; return 0; fi
+    local t="$1" max="${2--1}" c cp l i=0
+    POS_COUPE=-1; LARG_COUPE=0
+    if (( ! _UTF8_OK )); then t="${t//[$'\x80'-$'\xbf']/}"; LARG_TXT=${#t}
+        (( max >= 0 && LARG_TXT > max )) && { POS_COUPE=$max; LARG_COUPE=$max; }
+        return 0
+    fi
+    if [[ "$t" != *[$'\x80'-$'\xff']* ]]; then LARG_TXT=${#t}
+        (( max >= 0 && LARG_TXT > max )) && { POS_COUPE=$max; LARG_COUPE=$max; }
+        return 0
+    fi
     LARG_TXT=0
     while [[ -n "$t" ]]; do
-        c="${t:0:1}"; t="${t:1}"
+        c="${t:0:1}"; t="${t:1}"; i=$(( i + 1 ))
         printf -v cp '%d' "'$c"
         if   (( cp >= 0x0300 && cp <= 0x036F )); then continue                     # accents combinants
         elif (( cp >= 0x1100 && cp <= 0x115F )) \
@@ -534,8 +548,10 @@ largeur_texte() {
           || (( cp >= 0xFF00 && cp <= 0xFF60 )) || (( cp >= 0xFFE0 && cp <= 0xFFE6 )) \
           || (( cp >= 0x1F300 && cp <= 0x1F9FF )) || (( cp >= 0x1FA70 && cp <= 0x1FAFF )) \
           || (( cp >= 0x20000 && cp <= 0x3FFFD ))
-        then LARG_TXT=$(( LARG_TXT + 2 ))
-        else LARG_TXT=$(( LARG_TXT + 1 )); fi
+        then l=2
+        else l=1; fi
+        (( max >= 0 && POS_COUPE < 0 && LARG_TXT + l > max )) && { POS_COUPE=$(( i - 1 )); LARG_COUPE=$LARG_TXT; }
+        LARG_TXT=$(( LARG_TXT + l ))
     done
     return 0
 }
@@ -548,35 +564,45 @@ repeter() {
     [[ "$1" == " " ]] || REPET="${REPET// /$1}"
     return 0
 }
-# couper <texte> <colonnes> -> COUPE, au plus <colonnes> de large
+# couper <texte> <colonnes> -> COUPE, au plus <colonnes> de large, et LARG_TXT
 # Un titre trop long poussait la colonne de droite hors de l'écran.
 COUPE=""
 couper() {
-    local t="$1" max="$2" out="" c larg=0
-    largeur_texte "$t"
-    (( LARG_TXT <= max )) && { COUPE="$t"; return 0; }
-    (( max < 2 )) && { COUPE=""; return 0; }
-    while [[ -n "$t" ]]; do
-        c="${t:0:1}"; t="${t:1}"
-        largeur_texte "$c"
-        (( larg + LARG_TXT > max - 1 )) && break
-        out+="$c"; larg=$(( larg + LARG_TXT ))
-    done
-    COUPE="$out…"
+    local max="$2"
+    largeur_texte "$1" $(( max - 1 ))
+    (( LARG_TXT <= max )) && { COUPE="$1"; return 0; }
+    (( max < 2 ))         && { COUPE=""; LARG_TXT=0; return 0; }
+    COUPE="${1:0:POS_COUPE}…"; LARG_TXT=$(( LARG_COUPE + 1 ))
     return 0
 }
 
-# pad_droite <texte> <largeur> -> PAD, complété à droite par des espaces
+# pad_droite <texte> <largeur> -> PAD, exactement <largeur> colonnes
+# Trop court on complète, trop long on coupe : une colonne reste une colonne,
+# et aucun texte ne pousse la colonne suivante hors de l'écran.
 PAD=""
 pad_droite() {
     local n
-    largeur_texte "$1"; n=$(( $2 - LARG_TXT )); (( n < 0 )) && n=0
-    printf -v PAD '%s%*s' "$1" "$n" ''
+    couper "$1" "$2"; n=$(( $2 - LARG_TXT )); (( n < 0 )) && n=0
+    printf -v PAD '%s%*s' "$COUPE" "$n" ''
     return 0
 }
+# _COL_BLOC : la colonne des titres du bloc qu'on affiche. Le détail de droite
+# est parfois plus large que d'habitude (« ↻ répétée · auto » au plan) : la
+# colonne recule alors d'un coup pour tout le bloc — ligne par ligne, elle
+# serait en escalier.
+_COL_BLOC=0
+poser_colonne() {   # <détail>...
+    local d max=0
+    for d in ${@+"$@"}; do largeur_texte "$d"; (( LARG_TXT > max )) && max=$LARG_TXT; done
+    _COL_BLOC=$(( _LARGEUR - _LARG_NUM - 8 - max ))
+    (( _COL_BLOC > _COL_TITRE )) && _COL_BLOC=$_COL_TITRE
+    (( _COL_BLOC < 12 )) && _COL_BLOC=12
+    return 0
+}
+
 # Le filet ne change qu'avec la largeur : il est calculé une fois.
-REGLE_TXT=""
-regle()   { printf '%s%s%s\n' "${1:-$ESTOMPE}" "$REGLE_TXT" "$C0"; }
+_REGLE_TXT=""
+regle()   { printf '%s%s%s\n' "${1:-$ESTOMPE}" "$_REGLE_TXT" "$C0"; }
 pluriel() { (( $1 > 1 )) && printf 's'; return 0; }
 entete()  { printf '  %s%-10s%s %s\n' "$ESTOMPE" "$1" "$C0" "$2"; }   # clé ASCII
 info()      { printf '  %s%s%s\n'     "$ESTOMPE" "$*" "$C0"; }
@@ -584,8 +610,9 @@ attention() { printf '  %s⚠  %s%s\n'  "$C_WARN"  "$*" "$C0"; }
 erreur()    { printf '%s✗  %s%s\n'    "$C_KO"    "$*" "$C0" >&2; }
 
 BARRE=""
+LARG_BARRE=12   # la barre d'avancement, en colonnes
 barre() {   # <fait> <total> -> BARRE
-    local larg=12 plein pleine
+    local larg=$LARG_BARRE plein pleine
     plein=$(( $1 * larg / ($2 > 0 ? $2 : 1) ))
     (( plein > larg )) && plein=$larg
     repeter '━' "$plein"; pleine="$REPET"
@@ -621,13 +648,14 @@ init_glyphes() {
 }
 
 # Recalculés à chaque changement de largeur, jamais dans une boucle.
-COL_TITRE=52
+_COL_TITRE=52
 poser_largeur() {
     (( _LARGEUR < 40 )) && _LARGEUR=40
     (( _LARGEUR > 100 )) && _LARGEUR=100
-    COL_TITRE=$(( _LARGEUR - 22 )); (( COL_TITRE < 24 )) && COL_TITRE=24
-    (( COL_TITRE > 52 )) && COL_TITRE=52
-    repeter '─' "$_LARGEUR"; REGLE_TXT="$REPET"
+    _COL_TITRE=$(( _LARGEUR - 22 )); (( _COL_TITRE < 24 )) && _COL_TITRE=24
+    (( _COL_TITRE > 52 )) && _COL_TITRE=52
+    _COL_BLOC=$_COL_TITRE          # par défaut : une ligne seule tient la colonne
+    repeter '─' "$_LARGEUR"; _REGLE_TXT="$REPET"
     return 0
 }
 
@@ -671,13 +699,7 @@ ligne_tache() {   # <état> <numéro> <titre> <détail>
         couper "$t" $(( _LARGEUR - _LARG_NUM - 6 ))
         printf '  %s %s%*s%s  %s%s%s\n' "${GLYPHE[$1]:- }" "$ESTOMPE" "$_LARG_NUM" "$2" "$C0" "$ct" "$COUPE" "$C0"
     else
-        # La colonne des titres recule si le détail est plus large que
-        # d'habitude — « ↻ répétée · auto » du plan, par exemple.
-        local col=$COL_TITRE
-        largeur_texte "$4"
-        (( _LARGEUR - _LARG_NUM - 8 - LARG_TXT < col )) && col=$(( _LARGEUR - _LARG_NUM - 8 - LARG_TXT ))
-        (( col < 12 )) && col=12
-        couper "$t" "$col"; pad_droite "$COUPE" "$col"
+        pad_droite "$t" "$_COL_BLOC"
         printf '  %s %s%*s%s  %s%s%s  %s%s%s\n' "${GLYPHE[$1]:- }" "$ESTOMPE" "$_LARG_NUM" "$2" "$C0" \
                "$ct" "$PAD" "$C0" "$ESTOMPE" "$4" "$C0"
     fi
@@ -687,9 +709,8 @@ titre_etape() {   # <numéro> <total> <titre>
     local rang
     printf '\n'; regle
     barre "$(( $1 - 1 ))" "$2"
-    # 20 colonnes de décor : marge, glyphe, espaces et les 12 de la barre.
     printf -v rang '%d/%d' "$1" "$2"
-    couper "$(titre_lisible "$3")" $(( _LARGEUR - 20 - ${#rang} ))
+    couper "$(titre_lisible "$3")" $(( _LARGEUR - 8 - LARG_BARRE - ${#rang} ))
     printf '  %s %s%s%s  %s  %s%s%s\n' "${GLYPHE[cours]}" "$GRAS$C_ACCENT" "$rang" "$C0" \
            "$BARRE" "$GRAS" "$COUPE" "$C0"
     regle
@@ -721,7 +742,7 @@ replier() {
             else LIGNES+=("$ligne"); ligne="$mot"; large=$lmot; fi
             # un mot seul plus large que l'écran : coupé net si l'on sait le
             # faire par caractères, sinon laissé déborder plutôt qu'abîmé
-            while (( UTF8_OK && ${#ligne} > larg )); do
+            while (( _UTF8_OK && ${#ligne} > larg )); do
                 LIGNES+=("${ligne:0:larg}"); ligne="${ligne:larg}"
                 largeur_texte "$ligne"; large=$LARG_TXT
             done
@@ -750,7 +771,7 @@ afficher_commande() {   # <commande> [indentation]
 
 menu() {   # clé=texte ... — la première clé est celle de la touche Entrée
     local e ligne=""
-    [[ "$SANS_QUESTION" == "true" ]] && return 0
+    [[ "$_SANS_QUESTION" == "true" ]] && return 0
     for e in "$@"; do
         ligne+="${ligne:+$ESTOMPE · $C0}${C_CLE}${e%%=*}${C0} ${ESTOMPE}${e#*=}${C0}"
     done
@@ -893,8 +914,8 @@ aide_outils() {
 aide_config() {
     h_titre "Le fichier -c"
     h_ligne "Un nom en TK_ appartient au script : à remplir, jamais à supprimer"
-    h_ligne "ni à renommer. Un nom en _ appartient à la mécanique. Les autres"
-    h_ligne "noms sont à vous."
+    h_ligne "ni à renommer. Un nom en _ est un rouage : le script s'en sert"
+    h_ligne "entre deux étapes. Le reste des noms est à vous."
     h_vide
     h_ligne "Du shell, chargé après le script : il peut fixer les variables et"
     h_ligne "redéfinir les trois fonctions. Un squelette prêt à remplir :"
@@ -908,8 +929,8 @@ aide_config() {
     h_opt "verifier"           "contrôles de départ ; return 1 pour arrêter"
     h_opt "definir_commandes"  "remplit TK_COMMANDES et TK_LISTES"
     h_titre "Les noms que le script lit   tout ce qui commence par TK_"
-    h_ligne "Vos commandes tournent dans le shell du script : les noms en _ lui"
-    h_ligne "appartiennent, les vôtres sont libres."
+    h_ligne "Vos commandes tournent dans le shell du script : un « NUM=1 » chez"
+    h_ligne "vous ne peut rien casser chez lui, ses noms à lui sont en _."
     h_opt "TK_SUJET"    "titre court, en tête et au récapitulatif"
     h_opt "TK_DETAILS"  "lignes du bandeau, « clé=valeur » (clé sans accent)"
     h_opt "TK_PREFIX"   "préfixe des fichiers écrits"
@@ -1028,8 +1049,8 @@ gabarit() {
     printf '# definir_commandes : voir exemples/.\n\n'
     # Généré depuis un fichier -c : on en hérite, et ce sont SES variables
     # qui sont proposées — celles du script ne le concernent pas.
-    if [[ -n "$CONF" ]]; then
-        printf 'source "%s"\n\n' "$(readlink -f "$CONF" 2>/dev/null || printf '%s' "$CONF")"
+    if [[ -n "$_CONF" ]]; then
+        printf 'source "%s"\n\n' "$(readlink -f "$_CONF" 2>/dev/null || printf '%s' "$_CONF")"
     fi
     while IFS= read -r ligne; do
         [[ "$ligne" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
@@ -1047,18 +1068,18 @@ gabarit() {
         fi
         [[ -z "${deja[$nom]:-}" ]] || continue; deja[$nom]=1
         if [[ -n "$com" ]]; then printf '%-30s # %s\n' "$nom=$val" "$com"; else printf '%s=%s\n' "$nom" "$val"; fi
-    done < <(if [[ -n "$CONF" ]]; then sed '/^[a-zA-Z_][a-zA-Z0-9_]*() *{/,$d' "$CONF" | grep -E '^[A-Za-z_][A-Za-z0-9_]*='
+    done < <(if [[ -n "$_CONF" ]]; then sed '/^[a-zA-Z_][a-zA-Z0-9_]*() *{/,$d' "$_CONF" | grep -E '^[A-Za-z_][A-Za-z0-9_]*='
              else sed -n '/^# 1\. VARIABLES/,/^# 3\./p' "$src"; fi)
-    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre les bandeaux « # 1. » et « # 3. » de $src}"
+    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${_CONF:+dans $_CONF}${_CONF:-entre les bandeaux « # 1. » et « # 3. » de $src}"
 }
 
 
 # --- 8.3 Arguments et configuration ----------------------------------
 PRESETS=(); PRESETS_LISTE=(); SETS=()
-CONF=""; TK_INTRO=""
-LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"; AIDE="false"; GABARIT="false"
+_CONF=""; TK_INTRO=""
+_LISTER_VARS="false"; _LISTER_ETAPES="false"; _SIMULATION="false"; _AIDE="false"; _GABARIT="false"
 SUJET_AIDE=""
-SANS_QUESTION="false"; REPRENDRE="false"; FILTRE_ETAPES=""; DEPUIS=0
+_SANS_QUESTION="false"; _REPRENDRE="false"; _FILTRE_ETAPES=""; _DEPUIS=0
 
 exige_valeur() { [[ -n "${2:-}" ]] || { printf '✗  %s attend une valeur.\n' "$1" >&2; exit 1; }; }
 
@@ -1082,64 +1103,64 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 while (( $# > 0 )); do
     case "$1" in
         -a|--ask)          TK_TOUT_VALIDER="true";  shift ;;
-        -y|--yes)          SANS_QUESTION="true"; shift ;;
-        -n|--dry-run)      SIMULATION="true";    shift ;;
-        -l|--plan)         LISTER_ETAPES="true"; shift ;;
-        -r|--resume)       REPRENDRE="true";     shift ;;
-        --vars)            LISTER_VARS="true";   shift ;;
-        --no-color)        COULEUR="non";        shift ;;
+        -y|--yes)          _SANS_QUESTION="true"; shift ;;
+        -n|--dry-run)      _SIMULATION="true";    shift ;;
+        -l|--plan)         _LISTER_ETAPES="true"; shift ;;
+        -r|--resume)       _REPRENDRE="true";     shift ;;
+        --vars)            _LISTER_VARS="true";   shift ;;
+        --no-color)        _COULEUR="non";        shift ;;
         -D|--var)          exige_valeur "$1" "${2:-}"; PRESETS+=("$2");       shift 2 ;;
         --var=*)           PRESETS+=("${1#*=}");                              shift ;;
         --list)            exige_valeur "$1" "${2:-}"; PRESETS_LISTE+=("$2"); shift 2 ;;
         --list=*)          PRESETS_LISTE+=("${1#*=}");                        shift ;;
         -s|--set)          exige_valeur "$1" "${2:-}"; SETS+=("$2");          shift 2 ;;
         --set=*)           SETS+=("${1#*=}");                                 shift ;;
-        -o|--only)         exige_valeur "$1" "${2:-}"; FILTRE_ETAPES="$2";    shift 2 ;;
-        --only=*)          FILTRE_ETAPES="${1#*=}";                           shift ;;
-        -f|--from)         exige_valeur "$1" "${2:-}"; DEPUIS="$2";           shift 2 ;;
-        --from=*)          DEPUIS="${1#*=}";                                  shift ;;
-        -c|--config)       exige_valeur "$1" "${2:-}"; CONF="$2";             shift 2 ;;
-        --config=*)        CONF="${1#*=}";                                    shift ;;
-        --color)           exige_valeur "$1" "${2:-}"; COULEUR="$2";          shift 2 ;;
-        --color=*)         COULEUR="${1#*=}";                                 shift ;;
-        -t|--template)     GABARIT="true";       shift ;;
-        -h|--help)         AIDE="true"
+        -o|--only)         exige_valeur "$1" "${2:-}"; _FILTRE_ETAPES="$2";    shift 2 ;;
+        --only=*)          _FILTRE_ETAPES="${1#*=}";                           shift ;;
+        -f|--from)         exige_valeur "$1" "${2:-}"; _DEPUIS="$2";           shift 2 ;;
+        --from=*)          _DEPUIS="${1#*=}";                                  shift ;;
+        -c|--config)       exige_valeur "$1" "${2:-}"; _CONF="$2";             shift 2 ;;
+        --config=*)        _CONF="${1#*=}";                                    shift ;;
+        --color)           exige_valeur "$1" "${2:-}"; _COULEUR="$2";          shift 2 ;;
+        --color=*)         _COULEUR="${1#*=}";                                 shift ;;
+        -t|--template)     _GABARIT="true";       shift ;;
+        -h|--help)         _AIDE="true"
                            # « -h listes » : le mot qui suit est un sujet,
                            # sauf si c'est une autre option.
                            if [[ -n "${2-}" && "$2" != -* ]]; then SUJET_AIDE="$2"; shift; fi
                            shift ;;
-        --help=*)          AIDE="true"; SUJET_AIDE="${1#*=}";                     shift ;;
+        --help=*)          _AIDE="true"; SUJET_AIDE="${1#*=}";                     shift ;;
         -*) printf '✗  option inconnue : %s   (-h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
         *)  printf '✗  argument inattendu : %s   (tout passe par des options, -h pour l'"'"'aide)\n' "$1" >&2; exit 1 ;;
     esac
 done
-case "$COULEUR" in always|yes|oui) COULEUR="oui" ;; never|no|non) COULEUR="non" ;; auto) ;;
+case "$_COULEUR" in always|yes|oui) _COULEUR="oui" ;; never|no|non) _COULEUR="non" ;; auto) ;;
     *) printf -- '✗  --color attend auto, always ou never.\n' >&2; exit 1 ;; esac
 init_affichage
-if [[ "$AIDE" == "true" ]]; then
+if [[ "$_AIDE" == "true" ]]; then
     if [[ -n "$SUJET_AIDE" ]]; then aide_sujet "$SUJET_AIDE"; exit $?; fi
     aide; exit 0
 fi
 
 # Le fichier -c est du shell : il peut fixer les variables, mais aussi
 # redéfinir definir_commandes et ajouter des fonctions (voir exemples/).
-if [[ -n "$CONF" ]]; then
-    [[ -e "$CONF" ]] || { erreur "configuration introuvable : $CONF"; exit 1; }
-    [[ -f "$CONF" ]] || { erreur "configuration : pas un fichier : $CONF"; exit 1; }
-    [[ -r "$CONF" ]] || { erreur "configuration illisible : $CONF"; exit 1; }
-    if ! bash -n "$CONF" 2>/dev/null; then
-        erreur "erreur de syntaxe dans $CONF"
+if [[ -n "$_CONF" ]]; then
+    [[ -e "$_CONF" ]] || { erreur "configuration introuvable : $_CONF"; exit 1; }
+    [[ -f "$_CONF" ]] || { erreur "configuration : pas un fichier : $_CONF"; exit 1; }
+    [[ -r "$_CONF" ]] || { erreur "configuration illisible : $_CONF"; exit 1; }
+    if ! bash -n "$_CONF" 2>/dev/null; then
+        erreur "erreur de syntaxe dans $_CONF"
         # Un fichier écrit sous Windows finit ses lignes par CR : bash le
         # signale comme une fin de fichier inattendue, ce qui n'aide personne.
-        grep -q $'\r' "$CONF" 2>/dev/null && info "le fichier contient des retours chariot (Windows) : dos2unix ou sed -i 's/\r\$//'"
-        bash -n "$CONF"; exit 1
+        grep -q $'\r' "$_CONF" 2>/dev/null && info "le fichier contient des retours chariot (Windows) : dos2unix ou sed -i 's/\r\$//'"
+        bash -n "$_CONF"; exit 1
     fi
     # Un « exit » dans le fichier tuerait le script sans un mot : on le
     # charge d'abord dans un sous-shell pour le voir venir.
     # shellcheck disable=SC1090
-    ( source "$CONF" >/dev/null 2>&1 ) || { erreur "$CONF s'est terminé tout seul (code $?) : un « exit » dedans ? Utilisez return."; exit 1; }
+    ( source "$_CONF" >/dev/null 2>&1 ) || { erreur "$_CONF s'est terminé tout seul (code $?) : un « exit » dedans ? Utilisez return."; exit 1; }
     # shellcheck disable=SC1090
-    source "$CONF" || { erreur "échec du chargement de $CONF"; exit 1; }
+    source "$_CONF" || { erreur "échec du chargement de $_CONF"; exit 1; }
 fi
 # --set NOM=valeur : n'importe quelle variable des sections 1 et 2. On exige
 # qu'elle existe déjà, sinon une faute de frappe passerait inaperçue.
@@ -1154,11 +1175,11 @@ done
 case "${TK_TOUT_VALIDER,,}" in true|oui|1) TK_TOUT_VALIDER="true" ;; *) TK_TOUT_VALIDER="false" ;; esac
 [[ "$TK_MAX_ITERATIONS" =~ ^[0-9]+$ ]] && (( TK_MAX_ITERATIONS >= 1 )) \
     || { erreur "TK_MAX_ITERATIONS doit être un entier positif : $TK_MAX_ITERATIONS"; exit 1; }
-[[ "$DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--from attend un numéro d'étape"; exit 1; }
-DEPUIS=$(( 10#$DEPUIS ))
-FILTRE_ETAPES="${FILTRE_ETAPES//[[:space:]]/}"
-if [[ -n "$FILTRE_ETAPES" ]]; then
-    IFS=, read -r -a _morceaux <<< "$FILTRE_ETAPES"
+[[ "$_DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--from attend un numéro d'étape"; exit 1; }
+_DEPUIS=$(( 10#$_DEPUIS ))
+_FILTRE_ETAPES="${_FILTRE_ETAPES//[[:space:]]/}"
+if [[ -n "$_FILTRE_ETAPES" ]]; then
+    IFS=, read -r -a _morceaux <<< "$_FILTRE_ETAPES"
     for m in "${_morceaux[@]}"; do
         [[ "$m" =~ ^[0-9]+(-[0-9]+)?$ ]] || { erreur "--only : « $m » n'est ni un numéro ni un intervalle"; exit 1; }
         [[ "$m" != *-* ]] || (( 10#${m%-*} <= 10#${m#*-} )) || { erreur "--only : intervalle inversé « $m »"; exit 1; }
@@ -1174,26 +1195,24 @@ for v in TK_SUJET TK_PREFIX TK_DIR_LOGS; do
 done
 [[ "$TK_PREFIX" != */* ]] || { erreur "TK_PREFIX ne peut pas contenir de / : $TK_PREFIX"; exit 1; }
 
-[[ "$GABARIT" == "true" ]] && { gabarit; exit 0; }
+[[ "$_GABARIT" == "true" ]] && { gabarit; exit 0; }
 
 # Un fichier -c peut écrire TK_COMMANDES et TK_LISTES directement, sans passer
 # par definir_commandes : on les prend tels quels. Sinon on appelle la
 # fonction — d'abord dans un sous-shell, pour transformer un
 # « TK_DIR_BODY: unbound variable » en explication.
-if declare -p TK_COMMANDES >/dev/null 2>&1; then
-    declare -p TK_LISTES >/dev/null 2>&1 || TK_LISTES=()
-else
+if ! declare -p TK_COMMANDES >/dev/null 2>&1; then
     if ! _err="$( (definir_commandes) 2>&1 )"; then
         erreur "impossible de construire TK_COMMANDES : ${_err##*: }"
         info "une variable utilisée en section 3 ou 4 n'existe pas — votre fichier -c redéfinit calculer_variables sans definir_commandes ?"
         exit 1
     fi
+    # Des tableaux vides d'abord : une definir_commandes qui ne remplit rien
+    # sortait un « TK_COMMANDES: unbound variable » au lieu du message d'à côté.
+    TK_COMMANDES=(); TK_LISTES=()
     definir_commandes
 fi
-# definir_commandes redéfinie et vide : sans ce contrôle, set -u sortait
-# un « TK_COMMANDES: unbound variable » qui n'apprend rien à personne.
-declare -p TK_COMMANDES >/dev/null 2>&1 || { erreur "definir_commandes n'a pas rempli TK_COMMANDES (section 3, ou votre fichier -c)"; exit 1; }
-declare -p TK_LISTES    >/dev/null 2>&1 || TK_LISTES=()
+declare -p TK_LISTES >/dev/null 2>&1 || TK_LISTES=()
 _TOTAL=${#TK_COMMANDES[@]}
 _LARG_NUM=${#_TOTAL}; (( _LARG_NUM < 2 )) && _LARG_NUM=2
 
@@ -1201,8 +1220,8 @@ _LARG_NUM=${#_TOTAL}; (( _LARG_NUM < 2 )) && _LARG_NUM=2
 # --- 8.4 Saisies et signaux ------------------------------------------
 # Les questions se lisent sur /dev/tty : l'entrée standard peut être
 # prise par une commande.
-if (exec 3< /dev/tty) 2>/dev/null; then ENTREE="/dev/tty"; INTERACTIF="oui"
-else ENTREE="/dev/stdin"; INTERACTIF="non"; fi
+if (exec 3< /dev/tty) 2>/dev/null; then _ENTREE="/dev/tty"; _INTERACTIF="oui"
+else _ENTREE="/dev/stdin"; _INTERACTIF="non"; fi
 
 _LOG="/dev/null"
 journal() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$_LOG"; }
@@ -1272,10 +1291,10 @@ trap 'journal "ARRÊT : SIGTERM"; exit 143' TERM
 # lire <invite> <variable> : Entrée vide = défaut ; Ctrl-D = arrêt.
 lire() {
     local rc
-    [[ "$SANS_QUESTION" == "true" ]] && { printf -v "$2" '%s' ""; return 0; }
+    [[ "$_SANS_QUESTION" == "true" ]] && { printf -v "$2" '%s' ""; return 0; }
     EN_SAISIE=1
     # shellcheck disable=SC2229
-    read -r -p "$1" "$2" < "$ENTREE"; rc=$?
+    read -r -p "$1" "$2" < "$_ENTREE"; rc=$?
     EN_SAISIE=0
     if (( rc != 0 )); then
         printf '\n'; erreur "fin de l'entrée clavier (Ctrl-D) — arrêt."
@@ -1285,7 +1304,7 @@ lire() {
 }
 lire_edit() {   # <valeur initiale> <variable>
     EN_SAISIE=1
-    read -r -e -i "$1" -p "  ${CYAN}\$${C0} " "$2" < "$ENTREE" || true
+    read -r -e -i "$1" -p "  ${CYAN}\$${C0} " "$2" < "$_ENTREE" || true
     EN_SAISIE=0
 }
 demander_oui_non() {   # vrai sauf n / q
@@ -1421,7 +1440,7 @@ CODE_LISTE_VIDE=0
 # demander_valeur <nom> -> _VALEUR ; 1 si l'utilisateur passe l'étape.
 _VALEUR=""
 demander_valeur() {
-    local nom="$1" i n choix ou libre=0
+    local nom="$1" i n choix ou libre=0 ecart
     local -a v=() l=()
 
     if [[ -n "${GENERATEUR[$nom]:-}${LISTE_FIGEE[$nom]:-}" ]]; then
@@ -1439,12 +1458,17 @@ demander_valeur() {
         printf '    %s│%s\n' "$C_BOITE" "$C0"
         for i in "${!v[@]}"; do
             printf '    %s│%s  %s%2d%s  %s%s%s' "$C_BOITE" "$C0" "$C_CLE" $(( i + 1 )) "$C0" "$GRAS$C_OK" "${v[$i]}" "$C0"
-            [[ -n "${l[$i]}" ]] && { largeur_texte "${v[$i]}"; pad_droite '' $(( 14 - LARG_TXT ))
-                                     printf '%s  %s%s' "$PAD" "$ESTOMPE${l[$i]}" "$C0"; }
+            # La valeur est ce qui sert à choisir : elle reste entière et
+            # c'est le libellé qui est coupé s'il ne reste plus la place.
+            if [[ -n "${l[$i]}" ]]; then
+                largeur_texte "${v[$i]}"; ecart=$(( 14 - LARG_TXT )); (( ecart < 0 )) && ecart=0
+                couper "${l[$i]}" $(( _LARGEUR - 13 - LARG_TXT - ecart ))
+                printf '%*s  %s%s%s' "$ecart" '' "$ESTOMPE" "$COUPE" "$C0"
+            fi
             printf '\n'
         done
         printf '    %s│%s\n' "$C_BOITE" "$C0"
-        if [[ "$SANS_QUESTION" != "true" ]]; then
+        if [[ "$_SANS_QUESTION" != "true" ]]; then
             printf '    %s│%s  %s a%s  %ssaisir une autre valeur%s\n' "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
             printf '    %s│%s  %s p%s  %spasser cette étape%s\n'       "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
             printf '    %s│%s  %s q%s  %squitter le script%s\n'        "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
@@ -1469,7 +1493,7 @@ demander_valeur() {
         printf '    %s│%s  %s p%s  %spasser cette étape%s   %s q%s  %squitter%s\n' "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
     fi
 
-    if [[ "$SANS_QUESTION" == "true" ]]; then
+    if [[ "$_SANS_QUESTION" == "true" ]]; then
         erreur "[[$nom]] n'a pas de valeur et -y interdit de la demander : --var $nom=…"; exit 1
     fi
     # Après « a », p et q sont des valeurs comme les autres.
@@ -1605,19 +1629,19 @@ scanner_placeholders() {
 
 
 # --- 8.6 Exécution ---------------------------------------------------
-analyser_validation() {   # "true,log" -> F_VALIDER F_LOG F_STOP F_CONTINU ; 1 si invalide
-    local o; F_VALIDER=""; F_LOG=0; F_STOP=0; F_CONTINU=0; MSG_VALIDATION=""
+analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ; 1 si invalide
+    local o; _F_VALIDER=""; _F_LOG=0; _F_STOP=0; _F_CONTINU=0; _MSG_VALIDATION=""
     IFS=, read -r -a _opts <<< "${1,,}"
     for o in "${_opts[@]}"; do
         o="${o//[[:space:]]/}"
         case "$o" in
-            true|vrai|oui|1) F_VALIDER="true" ;;  false|faux|non|0) F_VALIDER="false" ;;
-            log) F_LOG=1 ;;  stop) F_STOP=1 ;;  continu|continue) F_CONTINU=1 ;;  "") ;;
-            *) MSG_VALIDATION="option inconnue « $o »"; return 1 ;;
+            true|vrai|oui|1) _F_VALIDER="true" ;;  false|faux|non|0) _F_VALIDER="false" ;;
+            log) _F_LOG=1 ;;  stop) _F_STOP=1 ;;  continu|continue) _F_CONTINU=1 ;;  "") ;;
+            *) _MSG_VALIDATION="option inconnue « $o »"; return 1 ;;
         esac
     done
-    [[ -n "$F_VALIDER" ]] || { MSG_VALIDATION="il manque true ou false"; return 1; }
-    (( F_STOP && F_CONTINU )) && { MSG_VALIDATION="stop et continu s'excluent"; return 1; }
+    [[ -n "$_F_VALIDER" ]] || { _MSG_VALIDATION="il manque true ou false"; return 1; }
+    (( _F_STOP && _F_CONTINU )) && { _MSG_VALIDATION="stop et continu s'excluent"; return 1; }
     return 0
 }
 
@@ -1626,7 +1650,7 @@ _DUREE_S=0
 executer_une() {
     local _debut=$SECONDS _rc
     INTERROMPU=0; journal "$1"
-    [[ "$SIMULATION" == "true" ]] && { _DUREE_S=0; return 0; }
+    [[ "$_SIMULATION" == "true" ]] && { _DUREE_S=0; return 0; }
     printf '%s' "$SORTIE_GRISE"
     if (( $2 )); then
         # Un tube et non une substitution de processus : le shell attend tee,
@@ -1658,7 +1682,7 @@ executer_groupe() {
     for _i in "${!_EXP_CMDS[@]}"; do
         if (( _rep )); then
             printf -v _rang '%d/%d' $(( _i + 1 )) "$_n"
-            couper "${_EXP_LABELS[$_i]}" $(( _LARGEUR - 12 - ${#_rang} ))
+            couper "${_EXP_LABELS[$_i]}" $(( _LARGEUR - 9 - ${#_rang} ))
             printf '\n  %s──%s %s%s%s %s──%s %s%s%s\n' "$ESTOMPE" "$C0" "$GRAS" "$_rang" "$C0" \
                    "$ESTOMPE" "$C0" "$C_BOUCLE" "$COUPE" "$C0"
             afficher_commande "${_EXP_CMDS[$_i]}" "     "
@@ -1673,7 +1697,7 @@ executer_groupe() {
             esac
         fi
 
-        executer_une "${_EXP_CMDS[$_i]}" "$F_LOG"; _rc=$?
+        executer_une "${_EXP_CMDS[$_i]}" "$_F_LOG"; _rc=$?
 
         if (( INTERROMPU )); then
             INTERROMPU=0
@@ -1685,7 +1709,7 @@ executer_groupe() {
             _G_ARRET=1; break
         fi
         if (( _rc == 0 )); then
-            if [[ "$SIMULATION" == "true" ]]; then
+            if [[ "$_SIMULATION" == "true" ]]; then
                 printf '  %s◌  simulée%s\n' "$C_SIM" "$C0"; _ITERS+=("sim|simulee|${_EXP_LABELS[$_i]}")
             else
                 duree "$_DUREE_S"
@@ -1697,8 +1721,8 @@ executer_groupe() {
         duree "$_DUREE_S"
         printf '  %s✗  échec%s %s— code %d, %s%s\n' "$C_KO" "$C0" "$ESTOMPE" "$_rc" "$DUREE_TXT" "$C0"
         _G_KO=$(( _G_KO + 1 )); _G_RC=$_rc; _ITERS+=("ko|code $_rc|${_EXP_LABELS[$_i]}")
-        (( F_CONTINU )) && { info "(étape marquée « continu » : on poursuit)"; continue; }
-        (( F_STOP ))    && { erreur "étape marquée « stop » : arrêt du script."; _G_ARRET=2; break; }
+        (( _F_CONTINU )) && { info "(étape marquée « continu » : on poursuit)"; continue; }
+        (( _F_STOP ))    && { erreur "étape marquée « stop » : arrêt du script."; _G_ARRET=2; break; }
         (( _ign ))   && continue
         if (( _rep )); then
             menu "Entrée=continuer" "t=continuer sans redemander" "n=arrêter la boucle" "q=quitter"
@@ -1742,20 +1766,26 @@ DEBUT_HORODATE="$(date '+%F %T %z')"
 
 plan_initial() {   # [oui] = avec les commandes
     local i=0 e reste m
-    printf '\n'; regle "$GRAS"
-    printf ' %sPlan%s   %s%d étape%s%s\n' "$C_TITRE" "$C0" "$ESTOMPE" "$_TOTAL" "$(pluriel "$_TOTAL")" "$C0"
-    regle "$GRAS"
+    local -a etats=() marques=()
     for e in "${TK_COMMANDES[@]}"; do
         i=$(( i + 1 )); reste="${e#*|}"; analyser_validation "${reste%%|*}"
         m=""   # seul l'inhabituel est signalé : « auto » plutôt que « confirmation »
         [[ "${reste#*|}" == *"{{"* ]] && m+="${m:+ · }↻ répétée"
-        [[ "$F_VALIDER" == "false" && "$TK_TOUT_VALIDER" != "true" ]] && m+="${m:+ · }auto"
-        (( F_LOG ))     && m+="${m:+ · }log"
-        (( F_STOP ))    && m+="${m:+ · }stop"
-        (( F_CONTINU )) && m+="${m:+ · }continu"
-        if etape_retenue "$i"; then ligne_tache todo "$i" "${e%%|*}" "$m"
-        else ligne_tache skip "$i" "${e%%|*}" "hors filtre"; fi
-        [[ "${1:-}" == "oui" ]] && afficher_commande "${reste#*|}" "        "
+        [[ "$_F_VALIDER" == "false" && "$TK_TOUT_VALIDER" != "true" ]] && m+="${m:+ · }auto"
+        (( _F_LOG ))     && m+="${m:+ · }log"
+        (( _F_STOP ))    && m+="${m:+ · }stop"
+        (( _F_CONTINU )) && m+="${m:+ · }continu"
+        if etape_retenue "$i"; then etats+=(todo); marques+=("$m")
+        else etats+=(skip); marques+=("hors filtre"); fi
+    done
+    poser_colonne ${marques[@]+"${marques[@]}"}
+    printf '\n'; regle "$GRAS"
+    printf ' %sPlan%s   %s%d étape%s%s\n' "$C_TITRE" "$C0" "$ESTOMPE" "$_TOTAL" "$(pluriel "$_TOTAL")" "$C0"
+    regle "$GRAS"
+    for i in "${!TK_COMMANDES[@]}"; do
+        e="${TK_COMMANDES[$i]}"
+        ligne_tache "${etats[$i]}" $(( i + 1 )) "${e%%|*}" "${marques[$i]}"
+        [[ "${1:-}" == "oui" ]] && { reste="${e#*|}"; afficher_commande "${reste#*|}" "        "; }
     done
     [[ "${1:-}" == "oui" ]] && regle
     return 0
@@ -1797,6 +1827,9 @@ recap() {
     local l num e d t
     local TOTAL_TXT
     duree "$SECONDS"; TOTAL_TXT="$DUREE_TXT"
+    local -a details=()
+    for l in "${_RECAP[@]}"; do d="${l#*|}"; d="${d#*|}"; details+=("${d%%|*}"); done
+    poser_colonne ${details[@]+"${details[@]}"}
     printf '\n'; regle "$GRAS"
     printf ' %sRécapitulatif%s   %s%s%s\n' "$C_TITRE" "$C0" "$ESTOMPE" "$TK_SUJET" "$C0"
     regle "$GRAS"
@@ -1830,7 +1863,7 @@ recap_enfants() {
     for i in "${!montrees[@]}"; do
         e="${montrees[$i]%%|*}"; d="${montrees[$i]#*|}"; t="${d#*|}"; d="${d%%|*}"
         repeter ' ' $(( _LARG_NUM + 4 )); marge="$REPET"
-        couper "$t" $(( COL_TITRE - 3 )); pad_droite "$COUPE" $(( COL_TITRE - 3 ))
+        pad_droite "$t" $(( _COL_BLOC - 3 ))
         printf '%s%s%s%s %s %s  %s%s%s\n' "$marge" "$ESTOMPE" "$( (( i == n - 1 && caches == 0 )) && printf '└─' || printf '├─')" "$C0" \
                "${GLYPHE[$e]:- }" "$PAD" "$ESTOMPE" "$d" "$C0"
     done
@@ -1869,7 +1902,7 @@ ecrire_rapport() {
 
 
 # --- 8.8 Contrôles de départ -----------------------------------------
-(( _TOTAL > 0 )) || { erreur "le tableau TK_COMMANDES est vide."; exit 1; }
+(( _TOTAL > 0 )) || { erreur "le tableau TK_COMMANDES est vide (section 3, ou votre fichier -c)."; exit 1; }
 for e in "${TK_COMMANDES[@]}"; do
     reste="${e#*|}"
     [[ "$e" == *"|"* && "$reste" == *"|"* ]] || { erreur "format attendu Titre|validation|commande :"; printf '  %s\n' "$e" >&2; exit 1; }
@@ -1879,15 +1912,15 @@ for e in "${TK_COMMANDES[@]}"; do
     [[ -n "$cmd_nue" ]] || { erreur "commande vide :"; printf '  %s\n' "$e" >&2; exit 1; }
     titre_nu="${e%%|*}"; titre_nu="${titre_nu//[[:space:]]/}"
     [[ -n "$titre_nu" ]] || { erreur "titre vide :"; printf '  %s\n' "$e" >&2; exit 1; }
-    analyser_validation "${reste%%|*}" || { erreur "validation « ${reste%%|*} » : $MSG_VALIDATION"; printf '  %s\n' "$e" >&2; exit 1; }
+    analyser_validation "${reste%%|*}" || { erreur "validation « ${reste%%|*} » : $_MSG_VALIDATION"; printf '  %s\n' "$e" >&2; exit 1; }
 done
 charger_listes
 scanner_placeholders
 
 etape_retenue() {   # <n> : passe --only et --from ?
     local m
-    (( DEPUIS > 0 && $1 < DEPUIS )) && return 1
-    [[ -n "$FILTRE_ETAPES" ]] || return 0
+    (( _DEPUIS > 0 && $1 < _DEPUIS )) && return 1
+    [[ -n "$_FILTRE_ETAPES" ]] || return 0
     for m in "${_morceaux[@]}"; do
         if [[ "$m" == *-* ]]; then (( $1 >= 10#${m%-*} && $1 <= 10#${m#*-} )) && return 0
         else (( $1 == 10#$m )) && return 0; fi
@@ -1895,7 +1928,7 @@ etape_retenue() {   # <n> : passe --only et --from ?
     return 1
 }
 
-if [[ "$LISTER_VARS" == "true" ]]; then
+if [[ "$_LISTER_VARS" == "true" ]]; then
     printf '\n'
     (( ${#PH_SIMPLES[@]} + ${#PH_LISTES[@]} > 0 )) || info "aucune valeur à fournir."
     for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do
@@ -1924,11 +1957,11 @@ for p in ${PRESETS_LISTE[@]+"${PRESETS_LISTE[@]}"}; do
     LISTE_FIGEE["$nom"]="${val//,/$'\n'}"
 done
 
-if [[ "$LISTER_ETAPES" == "true" ]]; then plan_initial oui; printf '\n'; exit 0; fi
+if [[ "$_LISTER_ETAPES" == "true" ]]; then plan_initial oui; printf '\n'; exit 0; fi
 
 # En simulation, un contrôle qui échoue n'empêche pas de voir le plan.
-if ! verifier; then [[ "$SIMULATION" == "true" ]] && attention "contrôles en échec — simulation quand même" || exit 1; fi
-[[ "$INTERACTIF" == "non" && "$SANS_QUESTION" != "true" ]] && attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
+if ! verifier; then [[ "$_SIMULATION" == "true" ]] && attention "contrôles en échec — simulation quand même" || exit 1; fi
+[[ "$_INTERACTIF" == "non" && "$_SANS_QUESTION" != "true" ]] && attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
 MANQUANTS=""; for b in "${TK_REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
 [[ -n "$MANQUANTS" ]] && attention "binaires absents :$MANQUANTS"
 
@@ -1936,7 +1969,7 @@ MANQUANTS=""; for b in "${TK_REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || 
 # part — donc au milieu du déroulé. Avec -y, personne n'est là pour
 # répondre et le script attendrait indéfiniment.
 if (( EUID != 0 )) && printf '%s\n' "${TK_COMMANDES[@]}" ${TK_LISTES[@]+"${TK_LISTES[@]}"} | grep -qw sudo; then
-    if [[ "$SANS_QUESTION" == "true" ]]; then
+    if [[ "$_SANS_QUESTION" == "true" ]]; then
         attention "des étapes utilisent sudo : lancez « sudo -v » avant, sinon -y restera bloqué sur la demande de mot de passe"
     else
         info "des étapes utilisent sudo : le mot de passe sera demandé au moment voulu"
@@ -1947,12 +1980,15 @@ CREES=0
 for nom in ${!TK_DIR_@}; do
     d="${!nom}"
     [[ -n "$d" ]] || { erreur "$nom est vide."; exit 1; }
-    if [[ ! -d "$d" && "$SIMULATION" != "true" ]]; then
+    if [[ ! -d "$d" && "$_SIMULATION" != "true" ]]; then
         mkdir -p "$d" || { erreur "création impossible : $d"; exit 1; }; CREES=$(( CREES + 1 ))
     fi
-    [[ "$SIMULATION" == "true" || -w "$d" ]] || attention "dossier non inscriptible : $d"
+    [[ "$_SIMULATION" == "true" || -w "$d" ]] || attention "dossier non inscriptible : $d"
 done
-[[ "$SIMULATION" == "true" ]] || { _LOG="$TK_DIR_LOGS/${TK_PREFIX}_script.log"; : 2>/dev/null >> "$_LOG" || { erreur "journal non inscriptible : $_LOG"; exit 1; }; }
+# Le 2>/dev/null vient AVANT la redirection qu'il fait taire : bash les pose
+# de gauche à droite, et c'est l'ouverture du fichier qui échoue. Dans l'autre
+# sens, l'erreur de bash s'affiche avant la nôtre. Idem pour le rapport.
+[[ "$_SIMULATION" == "true" ]] || { _LOG="$TK_DIR_LOGS/${TK_PREFIX}_script.log"; : 2>/dev/null >> "$_LOG" || { erreur "journal non inscriptible : $_LOG"; exit 1; }; }
 
 # Reprise : empreinte du titre ET de la commande, une par étape réussie.
 _ETAT="$TK_DIR_LOGS/${TK_PREFIX}_etat.txt"
@@ -1961,8 +1997,8 @@ empreinte() {
     elif command -v shasum >/dev/null 2>&1; then printf '%s' "$1" | shasum | cut -d' ' -f1
     else printf '%s' "$1" | cksum | tr -d ' '; fi
 }
-deja_faite()   { [[ "$REPRENDRE" == "true" && -r "$_ETAT" ]] && grep -qxF "$1" "$_ETAT" 2>/dev/null; }
-marquer_faite() { [[ "$SIMULATION" == "true" ]] || printf '%s\n' "$1" >> "$_ETAT" 2>/dev/null || true; }
+deja_faite()   { [[ "$_REPRENDRE" == "true" && -r "$_ETAT" ]] && grep -qxF "$1" "$_ETAT" 2>/dev/null; }
+marquer_faite() { [[ "$_SIMULATION" == "true" ]] || printf '%s\n' "$1" >> "$_ETAT" 2>/dev/null || true; }
 
 printf '\n'; regle "$GRAS"
 printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$C_ACCENT" "$TK_SUJET" "$C0"
@@ -1973,13 +2009,13 @@ done
 entete "sortie"   "${TK_DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
 entete "par"      "$TK_OPERATEUR$( (( EUID == 0 )) && printf ' (root)')"
 entete "journal"  "$_LOG"
-[[ -n "$CONF" ]]                 && entete "config"     "$CONF"
-[[ "$SIMULATION" == "true" ]]    && entete "dry-run"    "rien ne sera exécuté"
-[[ "$SANS_QUESTION" == "true" ]] && entete "-y"         "aucune question ne sera posée"
+[[ -n "$_CONF" ]]                 && entete "config"     "$_CONF"
+[[ "$_SIMULATION" == "true" ]]    && entete "dry-run"    "rien ne sera exécuté"
+[[ "$_SANS_QUESTION" == "true" ]] && entete "-y"         "aucune question ne sera posée"
 [[ "$TK_TOUT_VALIDER" == "true" ]]  && entete "-a"         "chaque étape sera confirmée"
-[[ "$REPRENDRE" == "true" ]]     && entete "resume"     "les étapes déjà réussies seront sautées"
-[[ -n "$FILTRE_ETAPES" ]]        && entete "only"       "étapes $FILTRE_ETAPES"
-(( DEPUIS > 0 ))                 && entete "from"       "étape $DEPUIS"
+[[ "$_REPRENDRE" == "true" ]]     && entete "resume"     "les étapes déjà réussies seront sautées"
+[[ -n "$_FILTRE_ETAPES" ]]        && entete "only"       "étapes $_FILTRE_ETAPES"
+(( _DEPUIS > 0 ))                 && entete "from"       "étape $_DEPUIS"
 [[ -n "$TK_INTRO" ]] && printf '\n%s\n' "$TK_INTRO"
 journal "=== démarrage — $TK_SUJET — par $TK_OPERATEUR"
 plan_initial
@@ -2032,7 +2068,7 @@ jouer_etape() {
                 erreur "les listes de cette étape n'ont rien donné : rien à exécuter."
                 info "vérifiez la commande de liste (--vars), ou figez-la avec --list"
                 recap_ajouter ko "liste vide"
-                if [[ "$SANS_QUESTION" != "true" ]]; then
+                if [[ "$_SANS_QUESTION" != "true" ]]; then
                     menu "Entrée=passer à la suite" "r=ressaisir les valeurs" "q=quitter"
                     _CHOIX=""; lire "$(invite)" _CHOIX
                     case "${_CHOIX,,}" in
@@ -2050,12 +2086,12 @@ jouer_etape() {
         _NB_ITER=${#_EXP_CMDS[@]}; _REPETEE=0
         [[ $_NB_ITER -gt 1 || -n "${_EXP_LABELS[0]}" ]] && _REPETEE=1
         if (( _REPETEE )); then resume_iterations; else afficher_commande "${_EXP_CMDS[0]}"; fi
-        (( F_LOG ))     && info "la sortie est recopiée dans le journal"
-        (( F_STOP ))    && info "un échec ici arrête le script"
-        (( F_CONTINU )) && info "un échec ici est ignoré, sans question"
+        (( _F_LOG ))     && info "la sortie est recopiée dans le journal"
+        (( _F_STOP ))    && info "un échec ici arrête le script"
+        (( _F_CONTINU )) && info "un échec ici est ignoré, sans question"
 
         _CHOIX=""   # vide = exécuter : les étapes « false » partent seules
-        if [[ "$F_VALIDER" == "true" || "$TK_TOUT_VALIDER" == "true" ]]; then
+        if [[ "$_F_VALIDER" == "true" || "$TK_TOUT_VALIDER" == "true" ]]; then
             if (( _REPETEE )); then menu "Entrée=tout exécuter" "u=une par une" "l=lister" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
             else menu "Entrée=exécuter" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"; fi
             lire "$(invite)" _CHOIX
@@ -2069,7 +2105,7 @@ jouer_etape() {
 
                 if (( _REPETEE )); then
                     duree "$_G_DUREE"
-                    if [[ "$SIMULATION" == "true" ]]; then recap_ajouter sim "$_NB_ITER iter"
+                    if [[ "$_SIMULATION" == "true" ]]; then recap_ajouter sim "$_NB_ITER iter"
                     elif (( _G_KO == 0 && _G_INT == 0 && _G_SKIP == 0 )); then
                         recap_ajouter ok "$_G_OK/$_NB_ITER$( (( _EXP_TRONQUE )) && printf ' tronq') $DUREE_TXT"
                     elif (( _G_KO > 0 )); then recap_ajouter ko "$_G_KO KO /$_NB_ITER"
@@ -2083,7 +2119,7 @@ jouer_etape() {
                     duree "$_G_DUREE"; recap_ajouter int "$DUREE_TXT"
                     (( _G_ARRET )) || demander_oui_non "  Passer à l'étape suivante ? ${ESTOMPE}[O/n]${C0} " || quitter 130
                 elif (( _G_KO )); then recap_ajouter ko "code $_G_RC"
-                elif [[ "$SIMULATION" == "true" ]]; then recap_ajouter sim simulee
+                elif [[ "$_SIMULATION" == "true" ]]; then recap_ajouter sim simulee
                 else duree "$_G_DUREE"; recap_ajouter ok "$DUREE_TXT"; fi
                 (( _G_ARRET == 2 )) && quitter 1
                 break ;;

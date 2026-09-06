@@ -476,9 +476,9 @@ DOSSIER="/srv/autre"
 ## Ce que le script attend de vous
 
 Tout ce qui commence par `TK_` est à lui : à remplir, jamais à supprimer ni à
-renommer. Ce qui commence par `_` appartient à sa mécanique — vos commandes
-tournent dans son shell, alors laissez-lui ces noms-là. Tous les autres sont à
-vous.
+renommer. Ce qui commence par `_` est un rouage : vos commandes tournent dans
+son shell, et c'est ce qu'il garde d'une étape à l'autre — un `NUM=1` chez vous
+ne peut rien casser chez lui. Le reste des noms est à vous.
 
 ### Les réglages — section 2, ou votre fichier `-c`
 
