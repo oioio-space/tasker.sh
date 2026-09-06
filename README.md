@@ -475,7 +475,7 @@ DOSSIER="/srv/autre"
 | `exemples/pc07.conf` | `source forensic.conf` + six variables |
 | `exemples/dd-windows.conf` | un dd Windows, sans aucune liste : fdisk puis l'offset tapé, testdisk puis la partition tapée |
 | `exemples/dd-linux.conf` | un dd Linux, même organisation : hostname, fuseau, le `.bashrc` de chaque compte par une liste emboîtée, timeline, `/var/log`, photorec |
-| `exemples/dd-linux-monte.conf` | le même, l'image **montée** en lecture seule : `cat` et `cp` au lieu de la Sleuth Kit, les listes toutes faites avec leurs jokers, et `nettoyer()` qui démonte même si l'on quitte en route |
+| `exemples/dd-linux-monte.conf` | le même, sur une image **déjà montée** en lecture seule — le montage reste votre geste : `cat` et `cp` au lieu de la Sleuth Kit, et les listes toutes faites avec leurs jokers |
 
 ---
 
