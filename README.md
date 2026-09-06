@@ -617,6 +617,18 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
       └─ ✗ sousdossier=projets                        code 1
 ```
 
+Les couleurs suivent une règle simple : **l'étape en cours est le seul
+élément en couleur chaude** — son cercle, son numéro, sa barre. Le reste est
+en retrait : les filets et la sortie des commandes sont estompés, les états
+gardent leur teinte (vert réussi, rouge échoué, ambre interrompu). Une
+commande qui pose ses propres couleurs reprend la main, on ne lutte pas
+contre elle.
+
+Sur un terminal 256 couleurs la palette est adoucie ; ailleurs elle retombe
+sur les huit couleurs de base. Jamais de fond, jamais de gris fixe : le
+retrait est l'attribut *faint*, qui suit le thème du terminal, clair ou
+sombre. `--no-color`, `--color never` et `NO_COLOR` coupent tout.
+
 ---
 
 ## Ce qui est écrit

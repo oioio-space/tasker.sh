@@ -415,29 +415,51 @@ lister_montages() {
 
 # --- 8.1 Affichage ---------------------------------------------------
 COULEUR="auto"
+# Valeurs sûres tant que init_affichage n'a pas tourné.
+C0=""; GRAS=""; ESTOMPE=""; COULEURS=0
+C_ACCENT=""; C_OK=""; C_KO=""; C_WARN=""; C_SIM=""; C_PROG=""; C_CMD=""
+C_BOUCLE=""; C_CLE=""; C_BOITE=""; C_TITRE=""; SORTIE_GRISE=""
 LARGEUR=80
 NOM_SCRIPT="${0##*/}"
 
+# Jamais de couleur de fond, jamais de gris fixe : « estompé » est
+# l'attribut faint, qui suit le thème du terminal, clair ou sombre. Sur un
+# terminal 256 couleurs la palette est adoucie — une accent chaude pour
+# l'étape en cours, des teintes calmes pour les états.
+teinte() { (( COULEURS >= 256 )) && printf '\033[38;5;%dm' "$1" || printf '%s' "$2"; }
 init_affichage() {
     local actif="non"
     case "$COULEUR" in
         oui)  actif="oui" ;;
         auto) [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]] && actif="oui" ;;
     esac
+    COULEURS=8
     if [[ "$actif" == "oui" ]]; then
         C0=$'\033[0m'; GRAS=$'\033[1m'; ESTOMPE=$'\033[2m'
         ROUGE=$'\033[31m'; VERT=$'\033[32m'; JAUNE=$'\033[33m'
         BLEU=$'\033[34m'; MAGENTA=$'\033[35m'; CYAN=$'\033[36m'
+        COULEURS="$(tput colors 2>/dev/null || printf 8)"
+        [[ "$COULEURS" =~ ^[0-9]+$ ]] || COULEURS=8
     else
         C0=""; GRAS=""; ESTOMPE=""; ROUGE=""; VERT=""; JAUNE=""; BLEU=""; MAGENTA=""; CYAN=""
+        COULEURS=0
     fi
-    # Palette : une couleur par rôle, jamais de fond (lisible sur thème clair et sombre).
-    C_PROG="$GRAS$CYAN"      # le programme lancé
-    C_CMD="$GRAS"            # ses arguments
-    C_OK="$VERT"; C_KO="$GRAS$ROUGE"; C_WARN="$JAUNE"; C_SIM="$BLEU"
-    C_BOUCLE="$MAGENTA"      # étiquettes d'itération  agent=alice
-    C_CLE="$GRAS"            # touches des menus
-    C_BOITE="$BLEU"          # cadre des questions
+    # Une couleur par rôle.
+    C_ACCENT="$(teinte 173 "$JAUNE")"  # l'étape en cours : le fil conducteur
+    C_OK="$(teinte 108 "$VERT")"
+    C_KO="$GRAS$(teinte 167 "$ROUGE")"
+    C_WARN="$(teinte 179 "$JAUNE")"
+    C_SIM="$(teinte 109 "$BLEU")"
+    C_PROG="$GRAS$(teinte 109 "$CYAN")" # le programme lancé
+    C_CMD=""                            # ses arguments : rien, la sobriété
+    C_BOUCLE="$(teinte 139 "$MAGENTA")" # étiquettes d'itération  agent=alice
+    C_CLE="$GRAS"                       # touches des menus
+    C_BOITE="$(teinte 109 "$BLEU")"     # cadre des questions
+    C_TITRE="$GRAS$C_ACCENT"            # bandeaux Plan / Récapitulatif
+    # La sortie d'une commande est estompée : ce qui compte à l'écran, ce
+    # sont les étapes. Un programme qui pose ses propres couleurs reprend
+    # la main, on ne lutte pas contre lui.
+    SORTIE_GRISE="$ESTOMPE"
     [[ -t 1 ]] && LARGEUR=$(tput cols 2>/dev/null || printf 80)
     [[ "$LARGEUR" =~ ^[0-9]+$ ]] || LARGEUR=80
     (( LARGEUR < 40 )) && LARGEUR=40
@@ -470,14 +492,14 @@ regle()   { printf '%s%s%s\n' "${1:-$ESTOMPE}" "$(repeter '─' "$LARGEUR")" "$C
 pluriel() { (( $1 > 1 )) && printf 's'; return 0; }
 entete()  { printf '  %s%-10s%s %s\n' "$ESTOMPE" "$1" "$C0" "$2"; }   # clé ASCII
 info()      { printf '  %s%s%s\n'     "$ESTOMPE" "$*" "$C0"; }
-attention() { printf '  %s⚠  %s%s\n'  "$JAUNE"   "$*" "$C0"; }
-erreur()    { printf '%s✗  %s%s\n'    "$ROUGE"   "$*" "$C0" >&2; }
+attention() { printf '  %s⚠  %s%s\n'  "$C_WARN"  "$*" "$C0"; }
+erreur()    { printf '%s✗  %s%s\n'    "$C_KO"    "$*" "$C0" >&2; }
 
 barre() {   # <fait> <total>
     local larg=12 plein
     plein=$(( $1 * larg / ($2 > 0 ? $2 : 1) ))
     (( plein > larg )) && plein=$larg
-    printf '%s%s%s%s%s' "$VERT" "$(repeter '━' "$plein")" "$ESTOMPE" "$(repeter '━' $(( larg - plein )))" "$C0"
+    printf '%s%s%s%s%s' "$C_ACCENT" "$(repeter '━' "$plein")" "$ESTOMPE" "$(repeter '━' $(( larg - plein )))" "$C0"
 }
 
 duree() {   # <secondes>
@@ -490,10 +512,10 @@ duree() {   # <secondes>
 # Une colonne chacun, jamais d'emoji : ils en prennent deux et cassent l'alignement.
 glyphe() {
     case "$1" in
-        todo)  printf '%s○%s' "$ESTOMPE" "$C0" ;;  cours) printf '%s◐%s' "$CYAN"  "$C0" ;;
+        todo)  printf '%s○%s' "$ESTOMPE" "$C0" ;;  cours) printf '%s◐%s' "$C_ACCENT" "$C0" ;;
         ok)    printf '%s●%s' "$C_OK"    "$C0" ;;  ko)    printf '%s✗%s' "$C_KO"  "$C0" ;;
-        skip)  printf '%s⊘%s' "$ESTOMPE" "$C0" ;;  int)   printf '%s⊗%s' "$JAUNE" "$C0" ;;
-        sim)   printf '%s◌%s' "$BLEU"    "$C0" ;;  *)     printf ' ' ;;
+        skip)  printf '%s⊘%s' "$ESTOMPE" "$C0" ;;  int)   printf '%s⊗%s' "$C_WARN" "$C0" ;;
+        sim)   printf '%s◌%s' "$C_SIM"   "$C0" ;;  *)     printf ' ' ;;
     esac
 }
 glyphe_texte() {
@@ -551,7 +573,7 @@ ligne_tache() {   # <état> <numéro> <titre> <détail>
 
 titre_etape() {   # <numéro> <total> <titre>
     printf '\n'; regle
-    printf '  %s %s%s%d/%d%s  %s  %s%s%s\n' "$(glyphe cours)" "$GRAS" "$CYAN" "$1" "$2" "$C0" \
+    printf '  %s %s%d/%d%s  %s  %s%s%s\n' "$(glyphe cours)" "$GRAS$C_ACCENT" "$1" "$2" "$C0" \
            "$(barre "$(( $1 - 1 ))" "$2")" "$GRAS" "$(titre_lisible "$3")" "$C0"
     regle
 }
@@ -1160,9 +1182,9 @@ liste_de() {   # {{home_libelle}} désigne la liste « home »
 }
 
 valeur_valide() {
-    [[ -n "$1" ]] || { printf '    %svaleur vide refusée%s\n' "$JAUNE" "$C0"; return 1; }
-    [[ "$1" != *$'\n'* ]] || { printf '    %sune valeur tient sur une ligne%s\n' "$JAUNE" "$C0"; return 1; }
-    [[ "$1" != *'[['* && "$1" != *'{{'* ]] || { printf '    %s[[ et {{ sont interdits dans une valeur%s\n' "$JAUNE" "$C0"; return 1; }
+    [[ -n "$1" ]] || { printf '    %svaleur vide refusée%s\n' "$C_WARN" "$C0"; return 1; }
+    [[ "$1" != *$'\n'* ]] || { printf '    %sune valeur tient sur une ligne%s\n' "$C_WARN" "$C0"; return 1; }
+    [[ "$1" != *'[['* && "$1" != *'{{'* ]] || { printf '    %s[[ et {{ sont interdits dans une valeur%s\n' "$C_WARN" "$C0"; return 1; }
     return 0
 }
 
@@ -1266,7 +1288,7 @@ demander_valeur() {
             printf '    %s│%s  %s q%s  %squitter le script%s\n'        "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
         fi
         while true; do
-            choix=""; lire "    $BLEU└─$C0 votre choix ${ESTOMPE}[1]${C0} ${GRAS}›${C0} " choix
+            choix=""; lire "    $C_BOITE└─$C0 votre choix ${ESTOMPE}[1]${C0} ${GRAS}›${C0} " choix
             [[ -z "$choix" ]] && choix=1
             case "${choix,,}" in
                 a) libre=1; break ;;
@@ -1278,7 +1300,7 @@ demander_valeur() {
                 VALEUR="${v[$(( choix - 1 ))]}"
                 printf '    %s→ %s%s\n\n' "$C_OK" "${v[$(( choix - 1 ))]}" "$C0"; return 0
             fi
-            printf '    %s« %s » n'"'"'est pas dans la liste%s\n' "$JAUNE" "$choix" "$C0"
+            printf '    %s« %s » n'"'"'est pas dans la liste%s\n' "$C_WARN" "$choix" "$C0"
         done
     else
         printf '    %s│%s  %sla valeur sera réutilisée partout où [[%s]] apparaît%s\n' "$C_BOITE" "$C0" "$ESTOMPE" "$nom" "$C0"
@@ -1291,7 +1313,7 @@ demander_valeur() {
     # Après « a », p et q sont des valeurs comme les autres.
     VALEUR=""
     while true; do
-        lire "    $BLEU└─$C0 valeur ${GRAS}›${C0} " VALEUR
+        lire "    $C_BOITE└─$C0 valeur ${GRAS}›${C0} " VALEUR
         if (( ! libre )); then
             case "${VALEUR,,}" in
                 p) ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
@@ -1443,14 +1465,17 @@ executer_une() {
     local _debut=$SECONDS _rc
     INTERROMPU=0; journal "$1"
     [[ "$SIMULATION" == "true" ]] && { DUREE_S=0; return 0; }
+    printf '%s' "$SORTIE_GRISE"
     if (( $2 )); then
         # Un tube et non une substitution de processus : le shell attend tee,
         # et PIPESTATUS donne le vrai code. La commande perd son terminal :
-        # d'où l'option explicite.
+        # d'où l'option explicite. L'estompage est écrit avant le tube : il
+        # va au terminal, pas dans le journal.
         eval "$1" 2>&1 | tee -a "$LOG"; _rc=${PIPESTATUS[0]}
     else
         eval "$1"; _rc=$?
     fi
+    printf '%s' "$C0"
     retablir_shell
     DUREE_S=$(( SECONDS - _debut )); journal "code $_rc en $(duree "$DUREE_S")"
     return "$_rc"
@@ -1474,7 +1499,7 @@ executer_groupe() {
             _choix=""; lire "$(invite)" _choix
             case "${_choix,,}" in
                 p) printf '     %s⊘  passée%s\n' "$ESTOMPE" "$C0"; G_SKIP=$(( G_SKIP + 1 )); ITERS+=("skip|passee|${EXP_LABELS[$_i]}"); continue ;;
-                q) printf '     %sboucle arrêtée%s\n' "$JAUNE" "$C0"; G_ARRET=1; break ;;
+                q) printf '     %sboucle arrêtée%s\n' "$C_WARN" "$C0"; G_ARRET=1; break ;;
                 t) _upu=0 ;;
             esac
         fi
@@ -1542,7 +1567,7 @@ DEBUT_HORODATE="$(date '+%F %T %z')"
 plan_initial() {   # [oui] = avec les commandes
     local i=0 e reste m
     printf '\n'; regle "$GRAS"
-    printf ' %sPlan%s   %s%d étape%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$TOTAL" "$(pluriel "$TOTAL")" "$C0"
+    printf ' %sPlan%s   %s%d étape%s%s\n' "$C_TITRE" "$C0" "$ESTOMPE" "$TOTAL" "$(pluriel "$TOTAL")" "$C0"
     regle "$GRAS"
     for e in "${TK_COMMANDES[@]}"; do
         i=$(( i + 1 )); reste="${e#*|}"; analyser_validation "${reste%%|*}"
@@ -1569,7 +1594,7 @@ recap() {
     (( ${#RECAP[@]} == 0 && DEMARRE == 0 )) && return
     local l num e d t
     printf '\n'; regle "$GRAS"
-    printf ' %sRécapitulatif%s   %s%s%s\n' "$GRAS" "$C0" "$ESTOMPE" "$TK_SUJET" "$C0"
+    printf ' %sRécapitulatif%s   %s%s%s\n' "$C_TITRE" "$C0" "$ESTOMPE" "$TK_SUJET" "$C0"
     regle "$GRAS"
     for l in "${RECAP[@]}"; do
         num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
@@ -1662,11 +1687,11 @@ if [[ "$LISTER_VARS" == "true" ]]; then
     printf '\n'
     (( ${#PH_SIMPLES[@]} + ${#PH_LISTES[@]} > 0 )) || info "aucune valeur à fournir."
     for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do
-        printf '  %s[[%s]]%s  %s%s · %s %s%s\n' "$CYAN" "${PH_SIMPLES[$i]}" "$C0" "$ESTOMPE" \
+        printf '  %s[[%s]]%s  %s%s · %s %s%s\n' "$C_PROG" "${PH_SIMPLES[$i]}" "$C0" "$ESTOMPE" \
                "$( [[ -n "${GENERATEUR[${PH_SIMPLES[$i]}]:-}" ]] && printf menu || printf saisie)" "$(etapes_mot "${USAGE_SIMPLES[$i]}")" "$(sans_et "${USAGE_SIMPLES[$i]}")" "$C0"
     done
     for i in ${PH_LISTES[@]+"${!PH_LISTES[@]}"}; do
-        printf '  %s{{%s}}%s  %s%s %s%s\n         %s\n' "$MAGENTA" "${PH_LISTES[$i]}" "$C0" "$ESTOMPE" "$(etapes_mot "${USAGE_LISTES[$i]}")" "$(sans_et "${USAGE_LISTES[$i]}")" "$C0" "${GENERATEUR[${PH_LISTES[$i]}]:-(figée)}"
+        printf '  %s{{%s}}%s  %s%s %s%s\n         %s\n' "$C_BOUCLE" "${PH_LISTES[$i]}" "$C0" "$ESTOMPE" "$(etapes_mot "${USAGE_LISTES[$i]}")" "$(sans_et "${USAGE_LISTES[$i]}")" "$C0" "${GENERATEUR[${PH_LISTES[$i]}]:-(figée)}"
     done
     printf '\n  %s--var nom=valeur répond à une [[question]], --list nom=a,b fige une {{liste}}%s\n\n' "$ESTOMPE" "$C0"
     exit 0
@@ -1728,7 +1753,7 @@ deja_faite()   { [[ "$REPRENDRE" == "true" && -r "$ETAT" ]] && grep -qxF "$1" "$
 marquer_faite() { [[ "$SIMULATION" == "true" ]] || printf '%s\n' "$1" >> "$ETAT" 2>/dev/null || true; }
 
 printf '\n'; regle "$GRAS"
-printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$CYAN" "$TK_SUJET" "$C0"
+printf ' %s%s%s  %s%s%s\n' "$GRAS" "$NOM_SCRIPT" "$C0" "$C_ACCENT" "$TK_SUJET" "$C0"
 regle "$GRAS"
 for l in ${TK_DETAILS[@]+"${TK_DETAILS[@]}"}; do
     if [[ "$l" == *=* ]]; then entete "${l%%=*}" "${l#*=}"; else info "$l"; fi
@@ -1857,7 +1882,7 @@ for entree in "${TK_COMMANDES[@]}"; do
                 if resoudre_simples "$BRUTE"; then CMDBASE="$CMD"; BESOIN_EXP=1; info "valeurs ressaisies"
                 else RECAP+=("$NUM|skip|passee|$(titre_lisible "$TITRE")"); NB_PASSEES=$(( NB_PASSEES + 1 )); break; fi ;;
             q) quitter ;;
-            *) printf '  %s« %s » n'"'"'est pas une réponse attendue%s\n' "$JAUNE" "$CHOIX" "$C0" ;;
+            *) printf '  %s« %s » n'"'"'est pas une réponse attendue%s\n' "$C_WARN" "$CHOIX" "$C0" ;;
         esac
     done
 done
