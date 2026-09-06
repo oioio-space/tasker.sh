@@ -27,7 +27,7 @@ PC="PC07"
 SALLE="B204"
 OS="windows"
 BASE="/cases"
-OPERATEUR="M. Bachmann"
+OPERATEUR="M. Dupont"
 TZ_MACTIME="Europe/Paris"
 ```
 
@@ -51,7 +51,7 @@ Pour un nouveau poste, on ne réécrit rien :
   image      /images/pc07.dd
   fuseau     Europe/Paris
   sortie     /cases/B204/windows/PC07  (4 dossiers créés)
-  par        M. Bachmann
+  par        M. Dupont
   journal    /cases/B204/windows/PC07/logs/PC07_B204_windows_script.log
 
  Plan   8 étapes

@@ -324,25 +324,31 @@ tourné sont détaillées, suivies de « … et N itérations réussies ».
 
 ### Les listes toutes faites
 
-Six fonctions sont livrées avec le script (section 7). Elles écrivent déjà
+Dix fonctions sont livrées avec le script (section 7). Elles écrivent déjà
 `valeur<TAB>libellé`, encaissent les noms avec espaces, apostrophes, `$` ou
 `*`, laissent Ctrl-C sortir, et ne prennent jamais « rien trouvé » pour une
 erreur.
 
 | fonction | valeur · libellé |
 |---|---|
-| `lister_dossiers <racine> [motif...]` | chemin · nom du dossier |
-| `lister_fichiers <racine> [motif...]` | chemin · nom du fichier |
-| `lister_arbre <racine> [motif...]` | chemin · chemin relatif à la racine |
+| `lister_dossiers [-i] <racine> [motif...]` | chemin · nom du dossier |
+| `lister_fichiers [-i] <racine> [motif...]` | chemin · nom du fichier |
+| `lister_arbre [-i] <racine> [motif...]` | chemin · chemin relatif à la racine |
+| `lister_recents [-i] <racine> <jours> [motif...]` | modifiés depuis N jours |
+| `lister_gros [-i] <racine> <Mo> [motif...]` | fichiers de plus de N Mo |
 | `lister_si_present <chemin>...` | chemin · nom, si ça existe |
-| `lister_lignes <fichier> [motif...]` | une ligne utile du fichier |
+| `lister_lignes [-i] <fichier> [motif...]` | une ligne utile du fichier |
+| `lister_colonne <fichier> <n> [séparateur]` | colonne n · ligne entière |
 | `lister_utilisateurs [uid_mini]` | dossier personnel · nom du compte |
+| `lister_montages [-i] [motif...]` | point de montage · type et périphérique |
 
 ```bash
 LISTES=(
 "journal|lister_fichiers /var/log '*.log' '*.log.1'"
+"recent|lister_recents /var/log 2"
 "config|lister_arbre /etc '*.conf'"
-"serveur|lister_lignes ./serveurs.txt"
+"poste|lister_colonne ./postes.csv 2"
+"disque|lister_montages"
 )
 ```
 
@@ -356,21 +362,25 @@ LISTES=(
 )
 ```
 
-**Les motifs sont facultatifs** : sans motif, tout est pris. On peut en
-mettre plusieurs, ils portent sur le **nom** et jamais sur le chemin, comme
-`find -name`.
+**Les motifs sont facultatifs, et multiples.** Ils portent sur le **nom** et
+jamais sur le chemin, comme `find -name`, et **distinguent les majuscules**.
 
 | | |
 |---|---|
-| `lister_fichiers /etc` | tout, y compris les fichiers cachés |
+| `lister_fichiers /etc` | tout, fichiers cachés compris |
 | `lister_fichiers /etc '*.conf'` | un motif |
 | `lister_fichiers /etc '*.conf' '*.cfg'` | plusieurs |
 | `lister_fichiers /etc '[!.]*'` | tout sauf les cachés |
+| `lister_fichiers -i /docs '*.pdf'` | `.pdf`, `.PDF`, `.Pdf` |
 
 Trois précautions déjà prises : `lister_arbre` ne suit pas les liens vers
 des dossiers, donc aucune boucle ; un dossier illisible est signalé au
 journal et sauté, sans arrêter le reste ; un nom impossible à écrire sur une
 ligne (tabulation, retour à la ligne) est écarté avec un mot au journal.
+
+Deux dépendances, et c'est tout : `lister_recents` et `lister_gros` appellent
+`find` ; `lister_montages` lit `/proc/mounts`, donc Linux. Chacune le dit et
+rend une liste vide si ce n'est pas là.
 
 ### Écrire la vôtre
 

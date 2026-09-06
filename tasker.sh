@@ -141,7 +141,11 @@ verifier() {
 # Toutes les fonctions ci-dessous suivent le même contrat : une valeur par
 # ligne sur la sortie standard, « valeur<TAB>libellé », les messages sur
 # >&2 (ils vont au journal), et rien n'est une erreur quand il n'y a
-# simplement rien à lister. Les motifs sont facultatifs : sans motif, tout.
+# simplement rien à lister.
+#
+# Les motifs sont facultatifs et multiples. Ils portent sur le NOM seul,
+# jamais sur le chemin, comme find -name, et distinguent les majuscules ;
+# -i juste avant les arguments les ignore.
 
 # emettre <valeur> [libellé]
 # Le seul endroit qui écrit une ligne. Écarte ce que la mécanique ne
@@ -161,9 +165,28 @@ emettre() {
     else                     printf '%s\n'     "$val"; fi
 }
 
-# _entrees <d|f> <racine> [motif...]     interne : lister_dossiers/fichiers
-# Le motif porte sur le nom seul, jamais sur le chemin. Les entrées
-# cachées sont incluses ; pour ne garder que le visible : motif '[!.]*'.
+# _opts <args...>    interne : lit les options de tête, pose _I et _OPTN
+# L'appelant déclare « local _I _OPTN » puis fait « shift "$_OPTN" ».
+_opts() {
+    _I=0; _OPTN=0
+    while [[ "${1-}" == -? || "${1-}" == "--" ]]; do
+        case "$1" in
+            -i) _I=1 ;;
+            --) _OPTN=$(( _OPTN + 1 )); return 0 ;;
+            *)  printf '%s : option inconnue : %s\n' "${FUNCNAME[1]}" "$1" >&2; return 1 ;;
+        esac
+        shift; _OPTN=$(( _OPTN + 1 ))
+    done
+    return 0
+}
+
+# _colle <nom> <motif>   interne : le nom correspond-il au motif ?
+_colle() {
+    # shellcheck disable=SC2053  # motif volontairement non protégé
+    if (( ${_I:-0} )); then [[ "${1,,}" == ${2,,} ]]; else [[ "$1" == $2 ]]; fi
+}
+
+# _entrees <d|f> <racine> [motif...]    interne : lister_dossiers/fichiers
 _entrees() {
     local genre="${1-}" qui="${FUNCNAME[1]}" brut="${2-}" racine="${2-}"
     local e nom m
@@ -184,27 +207,26 @@ _entrees() {
             f) [[ -f "$e" ]] || continue ;;
         esac
         for m in "${motifs[@]}"; do
-            # shellcheck disable=SC2053  # motif volontairement non protégé
-            [[ "$nom" == $m ]] && { emettre "$e" "$nom"; break; }
+            _colle "$nom" "$m" && { emettre "$e" "$nom"; break; }
         done
     done
     return 0
 }
 
-# lister_dossiers <racine> [motif...]   les sous-dossiers directs
-#   lister_dossiers /srv
-#   lister_dossiers /srv 'prod-*' 'test-*'
-lister_dossiers() { _entrees d "$@"; }
+# lister_dossiers [-i] <racine> [motif...]   les sous-dossiers directs
+#   lister_dossiers /srv            lister_dossiers /srv 'prod-*' 'test-*'
+lister_dossiers() { local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"; _entrees d "$@"; }
 
-# lister_fichiers <racine> [motif...]   les fichiers directs, sans descendre
-#   lister_fichiers /var/log '*.log'
-lister_fichiers() { _entrees f "$@"; }
+# lister_fichiers [-i] <racine> [motif...]   les fichiers directs
+#   lister_fichiers /var/log '*.log'         lister_fichiers -i /docs '*.PDF'
+lister_fichiers() { local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"; _entrees f "$@"; }
 
-# lister_arbre <racine> [motif...]   les fichiers de toute l'arborescence
-# Valeur = chemin complet, libellé = chemin relatif à la racine. Ne suit
-# pas les liens vers des dossiers : aucune boucle possible.
+# lister_arbre [-i] <racine> [motif...]   les fichiers de toute l'arborescence
+# Libellé = chemin relatif à la racine. Ne suit pas les liens vers des
+# dossiers : aucune boucle possible.
 #   lister_arbre /etc '*.conf'
 lister_arbre() {
+    local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"
     local brut="${1-}" racine="${1-}"
     [[ -n "$brut" ]] || { printf 'lister_arbre : il faut un dossier en argument\n' >&2; return 1; }
     racine="${racine%/}" ; shift
@@ -225,18 +247,61 @@ _arbre() {
             _arbre "$racine" "$e" "$@" || return $?
         elif [[ -f "$e" ]]; then
             for m in "$@"; do
-                # shellcheck disable=SC2053
-                [[ "$nom" == $m ]] && { emettre "$e" "${e#"$racine"/}"; break; }
+                _colle "$nom" "$m" && { emettre "$e" "${e#"$racine"/}"; break; }
             done
         fi
     done
     return 0
 }
 
+# _trouver <critère...> -- <racine> [motif...]   interne : lister_recents/gros
+_trouver() {
+    local qui="${FUNCNAME[1]}"
+    local -a crit=()
+    while (( $# )) && [[ "$1" != "--" ]]; do crit+=( "$1" ); shift; done
+    shift
+    local brut="${1-}" racine="${1-}"
+    racine="${racine%/}" ; shift
+    local -a motifs=( ${@+"$@"} ) ; (( ${#motifs[@]} )) || motifs=( '*' )
+    local f nom m
+    [[ -d "$racine" ]] || { printf '%s : pas un dossier, ignoré : %s\n' "$qui" "$brut" >&2; return 0; }
+    command -v find >/dev/null 2>&1 || { printf '%s : find introuvable\n' "$qui" >&2; return 0; }
+    while IFS= read -r -d '' f; do
+        (( INTERROMPU )) && return 130
+        nom="${f##*/}"
+        for m in "${motifs[@]}"; do
+            _colle "$nom" "$m" && { emettre "$f" "${f#"$racine"/}"; break; }
+        done
+    done < <(find "$racine" -type f "${crit[@]}" -print0 2>/dev/null)
+    return 0
+}
+
+# lister_recents [-i] <racine> <jours> [motif...]   modifiés depuis N jours
+#   lister_recents /var/log 2 '*.log'
+lister_recents() {
+    local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"
+    local racine="${1-}" jours="${2-}"
+    [[ -n "$racine" && -n "$jours" ]] || { printf 'lister_recents : il faut <racine> <jours>\n' >&2; return 1; }
+    [[ "$jours" =~ ^[0-9]+$ ]] || { printf 'lister_recents : jours doit être un entier : %s\n' "$jours" >&2; return 1; }
+    shift 2
+    _trouver -mtime "-$(( 10#$jours ))" -- "$racine" "$@"
+}
+
+# lister_gros [-i] <racine> <Mo> [motif...]   fichiers de plus de N Mo
+#   lister_gros /home 100
+lister_gros() {
+    local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"
+    local racine="${1-}" mo="${2-}"
+    [[ -n "$racine" && -n "$mo" ]] || { printf 'lister_gros : il faut <racine> <Mo>\n' >&2; return 1; }
+    [[ "$mo" =~ ^[0-9]+$ ]] || { printf 'lister_gros : Mo doit être un entier : %s\n' "$mo" >&2; return 1; }
+    shift 2
+    _trouver -size "+$(( 10#$mo * 1048576 ))c" -- "$racine" "$@"
+}
+
 # lister_si_present <chemin>...   ne garde que ce qui existe
-# Le compagnon des listes emboîtées : un profil sans le fichier cherché
-# ne produit aucune itération, au lieu d'une commande qui échoue.
-#   lister_si_present '{{home}}/.bash_history'
+# Le compagnon des listes emboîtées : un profil sans le fichier cherché ne
+# produit aucune itération, au lieu d'une commande qui échoue.
+#   lister_si_present '{{compte}}/.bash_history'
 lister_si_present() {
     local c
     for c in ${@+"$@"}; do
@@ -246,12 +311,13 @@ lister_si_present() {
     return 0
 }
 
-# lister_lignes <fichier> [motif...]   une valeur par ligne d'un fichier
-# Saute les lignes vides et celles qui commencent par #, retire les
-# espaces autour et le retour chariot des fichiers Windows. Une ligne
+# lister_lignes [-i] <fichier> [motif...]   une valeur par ligne d'un fichier
+# Saute les lignes vides et celles qui commencent par #, retire les espaces
+# autour et le retour chariot des fichiers Windows. Une ligne
 # « valeur<TAB>libellé » garde son libellé.
 #   lister_lignes ./serveurs.txt
 lister_lignes() {
+    local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"
     local fichier="${1-}" ligne val lib m
     [[ -n "$fichier" ]] || { printf 'lister_lignes : il faut un fichier en argument\n' >&2; return 1; }
     shift
@@ -266,9 +332,32 @@ lister_lignes() {
         val="${ligne%%$'\t'*}" ; lib=""
         [[ "$ligne" == *$'\t'* ]] && lib="${ligne#*$'\t'}"
         for m in "${motifs[@]}"; do
-            # shellcheck disable=SC2053
-            [[ "$val" == $m ]] && { emettre "$val" "$lib"; break; }
+            _colle "$val" "$m" && { emettre "$val" "$lib"; break; }
         done
+    done < "$fichier"
+    return 0
+}
+
+# lister_colonne <fichier> <n> [séparateur]   la colonne n d'un CSV
+# Valeur = la colonne demandée, libellé = la ligne entière, pour voir le
+# contexte dans le menu. Séparateur : la virgule par défaut, $'\t' pour un
+# TSV, ':' pour /etc/passwd. Une ligne d'en-tête est une valeur comme les
+# autres : mettez un # devant dans le fichier.
+#   lister_colonne ./postes.csv 2
+lister_colonne() {
+    local fichier="${1-}" n="${2-}" sep="${3-,}"
+    local ligne val ; local -a champs
+    [[ -n "$fichier" && -n "$n" ]] || { printf 'lister_colonne : il faut <fichier> <n>\n' >&2; return 1; }
+    [[ "$n" =~ ^[0-9]+$ ]] && (( 10#$n >= 1 )) || { printf 'lister_colonne : n doit être un entier ≥ 1 : %s\n' "$n" >&2; return 1; }
+    [[ -n "$sep" ]] || { printf 'lister_colonne : séparateur vide\n' >&2; return 1; }
+    [[ -f "$fichier" && -r "$fichier" ]] || { printf 'lister_colonne : fichier illisible, ignoré : %s\n' "$fichier" >&2; return 0; }
+    while IFS= read -r ligne || [[ -n "$ligne" ]]; do
+        (( INTERROMPU )) && return 130
+        ligne="${ligne%$'\r'}"
+        [[ -z "$ligne" || "$ligne" == '#'* ]] && continue
+        IFS="$sep" read -r -a champs <<< "$ligne"
+        val="${champs[$(( 10#$n - 1 ))]-}"
+        [[ -n "$val" ]] && emettre "$val" "$ligne"
     done < "$fichier"
     return 0
 }
@@ -291,6 +380,28 @@ lister_utilisateurs() {
         case "$shell" in */nologin|*/false|*/sync) continue ;; esac
         emettre "$home" "$nom"
     done < /etc/passwd
+    return 0
+}
+
+# lister_montages [-i] [motif...]   les systèmes de fichiers montés
+# Seulement ceux qui viennent d'un périphérique — les montages internes du
+# noyau (proc, sysfs, cgroup, tmpfs) sont écartés. Valeur = le point de
+# montage, libellé = type et périphérique. Lit /proc/mounts, donc Linux.
+#   lister_montages            lister_montages '/mnt/*'
+lister_montages() {
+    local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"
+    local -a motifs=( ${@+"$@"} ) ; (( ${#motifs[@]} )) || motifs=( '*' )
+    local dev pt type m
+    [[ -r /proc/mounts ]] || { printf 'lister_montages : /proc/mounts illisible, Linux seulement\n' >&2; return 0; }
+    while read -r dev pt type _; do
+        (( INTERROMPU )) && return 130
+        [[ "$dev" == /* ]] || continue
+        # /proc/mounts échappe l'espace en \040 : %b le relit.
+        dev="$(printf '%b' "$dev")" ; pt="$(printf '%b' "$pt")"
+        for m in "${motifs[@]}"; do
+            _colle "$pt" "$m" && { emettre "$pt" "$type · $dev"; break; }
+        done
+    done < /proc/mounts
     return 0
 }
 
@@ -501,10 +612,11 @@ aide() {
     printf '  %s"Titre|true|commande"%s   true = demander avant, false = lancer direct\n' "$C_PROG" "$C0"
     printf '  %s[[nom]]%s  une valeur demandée une fois       %s{{nom}}%s  l%sétape rejouée par valeur\n' "$C_PROG" "$C0" "$C_PROG" "$C0" "'"
     h_titre "Listes toutes faites   section 7 du script, à appeler dans la section 4"
-    printf '  %slister_dossiers%s · %slister_fichiers%s · %slister_arbre%s  <racine> [motif...]\n' \
-           "$C_PROG" "$C0" "$C_PROG" "$C0" "$C_PROG" "$C0"
-    printf '  %slister_si_present%s <chemin...>   %slister_lignes%s <fichier>   %slister_utilisateurs%s\n' \
-           "$C_PROG" "$C0" "$C_PROG" "$C0" "$C_PROG" "$C0"
+    h_opt "[-i] <racine> [motif...]"     "lister_dossiers · lister_fichiers · lister_arbre"
+    h_opt "[-i] <racine> <n> [motif]"    "lister_recents (jours) · lister_gros (Mo)"
+    h_opt "<fichier>, <chemin>..."       "lister_lignes · lister_colonne · lister_si_present"
+    h_opt ""                             "lister_utilisateurs · lister_montages"
+    printf '  motif : sur le nom, sensible à la casse (-i pour ignorer) ; sans motif, tout\n'
     printf '\n  Exemples et détails : TUTORIEL.md            Code de sortie : 1 s%sil reste un échec\n\n' "'"
 }
 
