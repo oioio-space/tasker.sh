@@ -33,7 +33,7 @@ jamais :
 | 3 | commandes | les étapes |
 | 4 | listes | les valeurs sur lesquelles une étape se répète |
 | 5 | fonctions | les vôtres, appelées par 3 et 4 |
-| 6 | chemins et contrôles | `calculer_variables`, `verifier` |
+| 6 | chemins et contrôles | `calculer_variables`, `verifier`, `nettoyer` |
 | 7 | boîte à outils | dix listes toutes faites : à appeler, pas à modifier |
 | 8 | mécanique | à ne pas toucher |
 
@@ -475,6 +475,7 @@ DOSSIER="/srv/autre"
 | `exemples/pc07.conf` | `source forensic.conf` + six variables |
 | `exemples/dd-windows.conf` | un dd Windows, sans aucune liste : fdisk puis l'offset tapé, testdisk puis la partition tapée |
 | `exemples/dd-linux.conf` | un dd Linux, même organisation : hostname, fuseau, le `.bashrc` de chaque compte par une liste emboîtée, timeline, `/var/log`, photorec |
+| `exemples/dd-linux-monte.conf` | le même, l'image **montée** en lecture seule : `cat` et `cp` au lieu de la Sleuth Kit, les listes toutes faites avec leurs jokers, et `nettoyer()` qui démonte même si l'on quitte en route |
 
 ---
 
@@ -510,16 +511,24 @@ Recalculée après `-c` et `--set`, pour que tout suive la dernière valeur.
 `TK_SUJET`, `TK_PREFIX` et `TK_DIR_LOGS` sont obligatoires : le script refuse de
 partir sans.
 
-### Les trois fonctions appelées par le script
+### Les quatre fonctions appelées par le script
 
 | fonction | quand | ce qu'elle doit faire |
 |---|---|---|
 | `calculer_variables` | après `-c` et `--set` | poser les variables ci-dessus |
 | `verifier` | avant la première étape | vos contrôles ; `return 1` arrête tout |
 | `definir_commandes` | après `calculer_variables` | remplir `TK_COMMANDES` et `TK_LISTES` |
+| `nettoyer` | **en sortant, quelle que soit la sortie** | défaire ce qu'une étape a mis en place |
 
-Un fichier `-c` peut remplacer n'importe laquelle des trois. S'il écrit
+Un fichier `-c` peut remplacer n'importe laquelle des quatre. S'il écrit
 `TK_COMMANDES=(…)` directement, `definir_commandes` n'est pas appelée.
+
+`nettoyer` est appelée à la fin normale, sur `q`, sur Ctrl-C et sur un `kill` :
+c'est là qu'on démonte une image ou qu'on retire un fichier temporaire. Elle
+doit supporter d'être appelée alors que rien n'a été fait — testez avant
+d'agir. Un fichier `-c` ne peut pas poser son propre trap `EXIT` : la
+mécanique remet les siens après chaque commande, et ce crochet lui en tient
+lieu.
 
 ### Ce que vous pouvez utiliser dans vos fonctions
 

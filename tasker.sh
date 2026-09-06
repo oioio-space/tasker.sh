@@ -133,6 +133,15 @@ calculer_variables() {
     TK_DIR_LOGS="$SORTIE/logs"
 }
 
+# Défaire ce qu'une étape a mis en place — démonter une image, retirer un
+# fichier temporaire. Appelée en sortant, QUELLE QUE SOIT la sortie : fin
+# normale, « q », Ctrl-C, kill, erreur de configuration. Elle doit donc
+# supporter d'être appelée alors que rien n'a été fait : testez avant
+# d'agir. Un fichier -c ne peut pas poser son propre trap EXIT — la
+# mécanique remet les siens après chaque commande — c'est ce crochet qui
+# lui en tient lieu.
+nettoyer() { :; }
+
 # Contrôles avant de commencer : renvoyez 1 pour arrêter. Les dossiers et
 # les binaires de TK_REQUIS sont déjà vérifiés par ailleurs.
 verifier() {
@@ -941,16 +950,17 @@ aide_config() {
     h_ligne "entre deux étapes. Le reste des noms est à vous."
     h_vide
     h_ligne "Du shell, chargé après le script : il peut fixer les variables et"
-    h_ligne "redéfinir les trois fonctions. Un squelette prêt à remplir :"
+    h_ligne "redéfinir les quatre fonctions. Un squelette prêt à remplir :"
     h_code "./$NOM_SCRIPT -t > mon-cas.conf"
     h_code "./$NOM_SCRIPT -c mon-cas.conf"
     h_vide
     h_ligne "Priorité : valeurs du script < fichier -c < --set."
     h_ligne "Dans le fichier : return, jamais exit."
-    h_titre "Les trois fonctions   sections 3, 4 et 6 du script"
+    h_titre "Les quatre fonctions   sections 3, 4 et 6 du script"
     h_opt "calculer_variables" "appelée après -c et --set ; pose les noms ci-dessous"
     h_opt "verifier"           "contrôles de départ ; return 1 pour arrêter"
     h_opt "definir_commandes"  "remplit TK_COMMANDES et TK_LISTES"
+    h_opt "nettoyer"           "appelée en sortant, quelle que soit la sortie"
     h_titre "Les noms que le script lit   tout ce qui commence par TK_"
     h_ligne "Vos commandes tournent dans le shell du script : un « NUM=1 » chez"
     h_ligne "vous ne peut rien casser chez lui, ses noms à lui sont en _."
@@ -1893,7 +1903,7 @@ recap() {
     printf '  %sjournal  %s%s\n' "$ESTOMPE" "$_LOG" "$C0"
     ecrire_rapport
 }
-au_revoir() { restaurer_terminal; recap; }
+au_revoir() { restaurer_terminal; nettoyer; recap; }
 trap au_revoir EXIT
 
 # Au-delà de dix itérations, seules celles qui ont mal tourné sont montrées.
