@@ -92,15 +92,12 @@ Une variable qui naît **pendant** la commande s'échappe :
 
 Fournie d'avance : `./tasker.sh -D jours=7`.
 
-Un `[[nom]]` écrit dans le **titre** s'affiche avec la valeur dès qu'elle est
-connue — « Purge de plus de 30 jours » plutôt que « … de plus de [[jours]]
-jours » — au plan si `-D` l'a fournie, sinon à partir de la question. Il faut
-que la commande de l'étape emploie le même `[[nom]]` : c'est elle qui
-déclenche la question.
+Le même `[[nom]]` dans le **titre** s'affiche avec la valeur dès qu'elle est
+connue : « Purge de plus de 30 jours ». C'est la commande qui déclenche la
+question, jamais le titre seul.
 
-Entre apostrophes de préférence : `'[[nom]]'`. Une valeur qui en contient une
-est protégée à l'entrée dans la commande, quelle que soit son origine — menu,
-saisie ou `-D`.
+Entre apostrophes de préférence : `'[[nom]]'` — une valeur qui en contient
+une est protégée à l'entrée dans la commande, d'où qu'elle vienne.
 
 ### `{{nom}}` — l'étape est rejouée pour chaque valeur
 
@@ -605,7 +602,8 @@ barre. Le reste est en retrait : filets et sortie des commandes estompés,
 commande qui pose ses propres couleurs reprend la main.
 
 `--no-color`, `--color never` et `NO_COLOR` coupent tout. La largeur suit
-celle du terminal, entre 40 et 100 colonnes ; `COLUMNS=60` la force.
+celle du terminal, entre 40 et 100 colonnes, et un redimensionnement en cours
+de route ; `COLUMNS=60` la force.
 
 ---
 
