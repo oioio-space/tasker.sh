@@ -226,14 +226,14 @@ Vos contrôles de départ. `return 1` arrête tout avant la première étape.
 `log` : la table est recopiée au journal, on la retrouvera.
 
 ```bash
-"Fichiers alloués et supprimés|true|fls -r -p -m / -o [[offset]] '$IMAGE' > '$TK_DIR_BODY/${TK_PREFIX}_fls.body'"
+"Fichiers alloués et supprimés|true|fls -r -p -m / -o '[[offset]]' '$IMAGE' > '$TK_DIR_BODY/${TK_PREFIX}_fls.body'"
 ```
 `-r` récursif, `-p` chemins complets, `-m /` format *body* pour
 `mactime`. `[[offset]]` : demandé ici, réutilisé ensuite. `'$IMAGE'`
 entre apostrophes : le chemin peut contenir des espaces.
 
 ```bash
-"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$TK_DIR_BODY/${TK_PREFIX}_ils.body'"
+"Inodes non alloués|true,continu|ils -m -o '[[offset]]' '$IMAGE' > '$TK_DIR_BODY/${TK_PREFIX}_ils.body'"
 ```
 `continu` : `ils` échoue souvent sur NTFS ; on ne veut pas de question.
 
@@ -256,7 +256,7 @@ est une fonction du fichier : `cat` échouerait sur le body absent d'`ils`.
 produit).
 
 ```bash
-"Carving|true|photorec /log /logname '$TK_DIR_LOGS/${TK_PREFIX}_photorec.log' /d '$TK_DIR_CARVING/recup_' /cmd '$IMAGE' [[index_testdisk]],fileopt,everything,enable,freespace,search"
+"Carving|true|photorec /log /logname '$TK_DIR_LOGS/${TK_PREFIX}_photorec.log' /d '$TK_DIR_CARVING/recup_' /cmd '$IMAGE' '[[index_testdisk]]',fileopt,everything,enable,freespace,search"
 ```
 `photorec` veut le **numéro** de partition selon `testdisk`, pas l'offset :
 d'où une seconde valeur, `[[index_testdisk]]`, avec son propre menu.
@@ -347,7 +347,7 @@ Les deux lignes sont dans `forensic.conf`, en commentaire. Décommentez :
 ```
 
 ```bash
-"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
+"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o '[[offset]]' '$IMAGE' '{{bashrc}}'"
 ```
 
 La liste `bashrc` dépend de `{{home}}` ; l'étape n'écrit que `{{bashrc}}`.

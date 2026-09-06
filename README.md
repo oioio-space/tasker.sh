@@ -83,8 +83,8 @@ Une variable qui naît **pendant** la commande s'échappe :
 ### `[[nom]]` — demandée une fois, réutilisée
 
 ```bash
-"Fichiers récents|true|find '$DOSSIER' -mtime -[[jours]]"
-"Leur taille|true|find '$DOSSIER' -mtime -[[jours]] -ls"
+"Fichiers récents|true|find '$DOSSIER' -mtime -'[[jours]]'"
+"Leur taille|true|find '$DOSSIER' -mtime -'[[jours]]' -ls"
 ```
 
 ```
@@ -98,8 +98,11 @@ Le même `[[nom]]` dans le **titre** s'affiche avec la valeur dès qu'elle est
 connue : « Purge de plus de 30 jours ». C'est la commande qui déclenche la
 question, jamais le titre seul.
 
-Entre apostrophes de préférence : `'[[nom]]'` — une valeur qui en contient
-une est protégée à l'entrée dans la commande, d'où qu'elle vienne.
+**Toujours entre apostrophes** : `'[[nom]]'`, même collé à une option —
+`-o '[[offset]]'`, `-mtime -'[[jours]]'`, le shell recolle. C'est la seule
+chose qui rend une valeur inoffensive quoi qu'elle contienne : un nom de
+fichier lu sur un disque suspect, par exemple. Nue, une valeur comme
+`0; rm -rf /` serait exécutée telle quelle.
 
 ### `{{nom}}` — l'étape est rejouée pour chaque valeur
 
@@ -540,7 +543,7 @@ valeurs.
 | `-c`, `--config` | fichier | variables et commandes lues dans un fichier |
 | `-s`, `--set` | `NOM=valeur` | fixer une variable des sections 1 et 2 |
 | `-D`, `--var` | `nom=valeur` | répondre d'avance à `[[nom]]` |
-| `--list` | `nom=a,b,c` | figer `{{nom}}` sur ces valeurs |
+| `--list` | `nom=a,b,c` | figer `{{nom}}` sur ces valeurs — mêmes règles qu'une valeur tapée ; figée, une liste n'est plus régénérée par celles dont elle dépendait |
 | `--vars` | | montrer les `[[ ]]` et `{{ }}` attendus |
 | `-h`, `--help` | `SUJET` | l'aide ; `etapes` `valeurs` `outils` `config` `exemple` `tout` |
 | `-t`, `--template` | | écrire un fichier `-c` sur la sortie standard |

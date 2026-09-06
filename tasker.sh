@@ -47,8 +47,10 @@ TK_MAX_ITERATIONS=500          # au-delà, une étape répétée est tronquée
 #   $VAR        remplacée maintenant ; \$ pour qu'elle survive jusqu'à
 #               l'exécution :  for f in *; do echo \$f; done
 #   [[nom]]     une valeur demandée une fois, réutilisée partout
-#   {{nom}}     l'étape est rejouée pour chaque valeur de la liste « nom »,
-#               toujours entre apostrophes : '{{nom}}'
+#   {{nom}}     l'étape est rejouée pour chaque valeur de la liste « nom »
+#               Les deux TOUJOURS entre apostrophes : '[[nom]]' '{{nom}}'.
+#               C'est ce qui rend une valeur inoffensive quoi qu'elle
+#               contienne — un nom de fichier lu sur un disque, par exemple.
 #   Pas de | dans le titre ; ceux de la commande sont libres.
 #   Le tout est dans une fonction pour que $DOSSIER etc. suivent -c et --set.
 #
@@ -61,7 +63,7 @@ TK_COMMANDES=(
 "Espace disponible|false|df -h '$DOSSIER'"
 "Contenu du dossier|true|ls -la '$DOSSIER'"
 "Taille de chaque sous-dossier|true|du -sh '{{sousdossier}}'"
-"Fichiers plus gros que [[taille]]|true,log|find '$DOSSIER' -type f -size +[[taille]] 2>/dev/null | head -n 20"
+"Fichiers plus gros que [[taille]]|true,log|find '$DOSSIER' -type f -size +'[[taille]]' 2>/dev/null | tail -n 20"
 )
 
 
@@ -857,8 +859,10 @@ aide_valeurs() {
     h_code '"Récents|true|find / -mtime -[[jours]]"'
     h_ligne "Fournie d'avance : --var jours=7   ·   la ressaisir : touche r"
     h_ligne "Le même [[nom]] dans le titre s'affiche avec la valeur, une fois"
-    h_ligne "connue. Entre apostrophes de préférence : '[[nom]]' — une valeur"
-    h_ligne "qui en contient une est protégée à l'entrée dans la commande."
+    h_ligne "connue. TOUJOURS entre apostrophes : '[[nom]]', même collé à une"
+    h_ligne "option : -o '[[offset]]' ou -mtime -'[[jours]]'. C'est ce qui rend"
+    h_ligne "une valeur inoffensive quoi qu'elle contienne — un nom lu sur un"
+    h_ligne "disque, par exemple. Nue, elle serait exécutée telle quelle."
     h_titre "Répéter une étape   {{nom}}"
     h_ligne "L'étape est rejouée pour chaque valeur de la liste « nom »."
     h_ex "\"Taille|true|du -sh '{{dossier}}'\"" "toujours entre apostrophes"
@@ -884,6 +888,8 @@ aide_valeurs() {
     h_vide
     h_ligne "Voir ce qui sera demandé et d'où ça vient : --vars"
     h_ligne "Figer une liste sans l'interroger : --list dossier=/a,/b"
+    h_ligne "Mêmes règles qu'une valeur tapée ; figée, une liste n'est plus"
+    h_ligne "régénérée par celles dont elle dépendait."
 }
 
 aide_outils() {
