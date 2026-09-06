@@ -329,6 +329,19 @@ script, et le terminal est rendu tel qu'il était :
   Passer à l'étape suivante ? [O/n]
 ```
 
+**Aucun profil n'a de `.bashrc`** — plus rien à faire pour l'étape :
+
+```
+  ⚠  la liste « bashrc » n'a renvoyé aucune valeur (code 1)
+✗  les listes de cette étape n'ont rien donné : rien à exécuter.
+```
+
+Le code entre parenthèses est celui de la commande de la liste : `ls`,
+`grep` et `find` rendent 1 ou 2 quand ils ne trouvent rien, et le script le
+lit comme « aucune valeur », pas comme une panne. Vérifiez d'abord l'offset.
+Un seul profil sans `.bashrc` ne fait pas ça — seule sa branche disparaît,
+comme au § 4.
+
 **La session SSH tombe au milieu du carving** — le rapport et le journal
 sont quand même écrits, avec la raison. Le lendemain :
 

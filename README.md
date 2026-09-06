@@ -214,7 +214,11 @@ Sans tabulation, `{{nom_libelle}}` vaut simplement la valeur.
       2  profil=carole · bashrc=carole/.bashrc
 ```
 
-Une liste vide n'est pas une erreur : la branche ne produit rien.
+Une liste vide n'est pas une erreur : la branche ne produit rien, les autres
+continuent. Une commande qui rend un code non nul sans rien écrire compte
+comme vide — `ls`, `grep` et `find` le font quand ils ne trouvent rien ; le
+code est rappelé dans le message et dans le journal. Si toute l'étape se
+retrouve sans itération, elle est marquée `liste vide` au récapitulatif.
 
 ### Figer une liste, voir ce qui sera demandé
 
@@ -464,8 +468,8 @@ empreintes.
 
 * Les commandes passent par `eval`, dans le shell du script : n'y mettez
   que les vôtres. `set -u` est actif : une variable non définie arrête
-  l'étape. Un `cd` persiste jusqu'à la fin ; `set -e`, `IFS` et les traps
-  sont remis après chaque commande.
+  l'étape. Un `cd` persiste jusqu'à la fin ; `set -e`, `set -x`, `IFS`, les
+  options `shopt`, `LC_ALL` et les traps sont remis après chaque commande.
 * `head` derrière un `tee` ferme le tube : code 141. Utilisez `tail`.
 * Pas de commande interactive avec `log`.
 * Une commande de `LISTES` ne lit pas le clavier.
