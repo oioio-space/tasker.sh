@@ -178,9 +178,10 @@ TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ
 TK_REQUIS=(mmls fls ils icat mactime testdisk photorec)
 ```
 
-Les noms sont libres : le script ne connaît aucun d'eux. `TK_REQUIS` est
-vérifié au départ ; un binaire absent n'est qu'un avertissement, car on
-peut vouloir ne jouer qu'une partie des étapes.
+`IMAGE`, `PC`, `SALLE`, `OS`, `BASE`, `TZ_MACTIME` sont des noms choisis
+ici : le script ne les connaît pas. Ceux qui commencent par `TK_` sont à
+lui — `TK_REQUIS` est vérifié au départ ; un binaire absent n'est qu'un
+avertissement, car on peut ne jouer qu'une partie des étapes.
 
 `TZ_MACTIME` : le fuseau du poste analysé, pas le vôtre, sinon la
 timeline ne correspondra ni aux journaux applicatifs ni aux témoignages.
@@ -202,8 +203,9 @@ calculer_variables() {
 }
 ```
 
-Quatre noms sont obligatoires : `TK_SUJET`, `TK_DETAILS`, `TK_PREFIX`, `TK_DIR_LOGS`.
-Tout `TK_DIR_xxx` est vérifié et créé. C'est une fonction, et pas des
+Trois noms sont obligatoires : `TK_SUJET`, `TK_PREFIX`, `TK_DIR_LOGS` — le
+script refuse de partir sans. `TK_DETAILS` est facultative. Tout
+`TK_DIR_xxx` est vérifié et créé. C'est une fonction, et pas des
 affectations en vrac, pour être **recalculée après** `-c` et `--set`.
 
 ```bash
@@ -553,3 +555,7 @@ sauvegarde, une batterie de tests, une installation. Ce qu'il faut :
 
 `./tasker.sh -t > mon-cas.conf` écrit le squelette des variables ; le § 3
 montre le reste sur un cas complet.
+
+Et sur une machine où ce tutoriel n'est pas installé, le script se raconte
+tout seul : `-h etapes`, `-h valeurs`, `-h outils`, `-h config`,
+`-h exemple`, ou `-h tout`.

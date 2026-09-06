@@ -30,9 +30,10 @@ jamais :
 | 2 | réglages | posés une fois : `TK_REQUIS`, `TK_OPERATEUR`, `TK_TOUT_VALIDER`, `TK_MAX_ITERATIONS` |
 | 3 | commandes | les étapes |
 | 4 | listes | les valeurs sur lesquelles une étape se répète |
-| 5 | fonctions | ce que 3 et 4 appellent |
+| 5 | fonctions | les vôtres, appelées par 3 et 4 |
 | 6 | chemins et contrôles | `calculer_variables`, `verifier` |
-| 7 | mécanique | à ne pas toucher |
+| 7 | boîte à outils | dix listes toutes faites : à appeler, pas à modifier |
+| 8 | mécanique | à ne pas toucher |
 
 ---
 
@@ -229,11 +230,9 @@ $ printf '%s\t%s\n' 1 'hier' 7 'cette semaine' 30 'ce mois' | cat -A
 30^Ice mois$
 ```
 
-Ce contrôle vaut le coup : à l'œil, une tabulation et trois espaces se
-ressemblent, mais des espaces resteraient dans la valeur et il n'y aurait
-pas de libellé du tout.
-
-Le menu affiche alors les deux colonnes :
+À l'œil, une tabulation et trois espaces se ressemblent — mais des espaces
+resteraient dans la valeur, sans aucun libellé. Le menu affiche alors les
+deux colonnes :
 
 ```
     │   1  1              hier
@@ -268,11 +267,6 @@ dans un nom de fichier :
 ```bash
 "Inventaire|true|fls '$IMAGE' '{{home}}' > '$TK_DIR_OUT/{{home_libelle}}.txt'"
 #                                  ↑ 51-144-1              ↑ Users/alice
-```
-
-```bash
-"Contenu de chaque home|true|ls -la '{{home}}' > '$TK_DIR_OUT/ls_{{home_libelle}}.txt'"
-#                                      ↑ /home/alice              ↑ alice
 ```
 
 Sans tabulation, `{{nom_libelle}}` vaut simplement la valeur.
@@ -500,7 +494,7 @@ Recalculée après `-c` et `--set`, pour que tout suive la dernière valeur.
 | variable | rôle | exemple |
 |---|---|---|
 | `TK_SUJET` | titre court, en tête et au récapitulatif | `"$PC · $SALLE"` |
-| `TK_DETAILS` | lignes du bandeau de départ | `("image=$IMAGE" "fuseau=$TZ")` — clé sans accent |
+| `TK_DETAILS` | lignes du bandeau de départ (facultative) | `("image=$IMAGE" "fuseau=$TZ")` — clé sans accent |
 | `TK_PREFIX` | préfixe des fichiers écrits, sans `/` | `"${PC}_${SALLE}"` |
 | `TK_DIR_LOGS` | dossier du journal, du rapport et de l'état de reprise | `"$DEST/logs"` |
 | `TK_DIR_xxx` | tout autre dossier de travail : vérifié, créé au besoin | `TK_DIR_BODY`, `TK_DIR_SORTIE`… |
@@ -570,38 +564,26 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 
 | à une étape | |
 |---|---|
-| `Entrée` | exécuter |
-| `p` | passer |
-| `e` | éditer la commande, pour cette fois |
-| `r` | ressaisir les `[[valeurs]]` |
-| `q` | quitter |
-| `u` | *(étape répétée)* une itération à la fois |
-| `l` | *(étape répétée)* lister les itérations |
+| `Entrée` | exécuter — sur une étape répétée, toutes les itérations |
+| `p` `e` `r` `q` | passer · éditer la commande pour cette fois · ressaisir les `[[valeurs]]` · quitter |
+| `u` `l` | *(étape répétée)* une itération à la fois · lister les itérations |
+| `t` | *(pendant un `u`)* enchaîner le reste sans redemander |
 
 | à une question | |
 |---|---|
-| `1` `2` `3` | choisir |
-| `Entrée` | la proposition 1 |
-| `a` | autre valeur |
-| `p` | passer l'étape |
-| `q` | quitter |
+| `1` `2` `3` | choisir ; `Entrée` prend la première |
+| `a` `p` `q` | saisir une autre valeur · passer l'étape · quitter |
 
-| dans une étape répétée | |
+| quand ça bute | |
 |---|---|
-| `t` | *(après `u`)* enchaîner le reste sans redemander |
-| `q` | *(après `u`)* arrêter la boucle, passer à l'étape suivante |
-| `Entrée` / `t` / `n` / `q` | *(après un échec)* continuer · continuer sans redemander · arrêter la boucle · quitter |
-
-| après un échec ou une interruption | |
-|---|---|
-| `Continuer quand même ? [O/n]` | `Entrée` continue, `n` arrête le script |
-| `Passer à l'étape suivante ? [O/n]` | après un Ctrl-C sur la commande |
-
-| Ctrl-C, Ctrl-D | |
-|---|---|
-| Ctrl-C pendant une commande | l'interrompt ; le script demande si l'on continue |
-| Ctrl-C pendant une question | arrête le script, avec le récapitulatif |
+| une étape échoue | `Continuer quand même ? [O/n]` — `n` arrête le script |
+| une itération échoue | `Entrée` continuer · `t` continuer sans redemander · `n` arrêter la boucle · `q` quitter |
+| Ctrl-C sur la commande | l'interrompt, puis `Passer à l'étape suivante ?` — dans une boucle, `Continuer la boucle ?` |
+| les listes n'ont rien donné | `Entrée` passer · `r` ressaisir les valeurs · `q` quitter |
+| Ctrl-C à une question | arrête le script, en écrivant le récapitulatif |
 | Ctrl-D à une question | arrête le script : plus personne au clavier |
+
+Les étapes marquées `,continu` et `,stop` ne posent aucune de ces questions.
 
 ---
 
@@ -617,17 +599,13 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
       └─ ✗ sousdossier=projets                        code 1
 ```
 
-Les couleurs suivent une règle simple : **l'étape en cours est le seul
-élément en couleur chaude** — son cercle, son numéro, sa barre. Le reste est
-en retrait : les filets et la sortie des commandes sont estompés, les états
-gardent leur teinte (vert réussi, rouge échoué, ambre interrompu). Une
-commande qui pose ses propres couleurs reprend la main, on ne lutte pas
-contre elle.
+Une seule couleur chaude, pour l'étape en cours — son cercle, son numéro, sa
+barre. Le reste est en retrait : filets et sortie des commandes estompés,
+états à leur teinte (vert réussi, rouge échoué, ambre interrompu). Une
+commande qui pose ses propres couleurs reprend la main.
 
-Sur un terminal 256 couleurs la palette est adoucie ; ailleurs elle retombe
-sur les huit couleurs de base. Jamais de fond, jamais de gris fixe : le
-retrait est l'attribut *faint*, qui suit le thème du terminal, clair ou
-sombre. `--no-color`, `--color never` et `NO_COLOR` coupent tout.
+`--no-color`, `--color never` et `NO_COLOR` coupent tout. La largeur suit
+celle du terminal, entre 40 et 100 colonnes ; `COLUMNS=60` la force.
 
 ---
 
@@ -663,7 +641,8 @@ empreintes.
   que les vôtres. Un `exit` y arrête le script — pour marquer un échec,
   rendez un code non nul. `set -u` est actif : une variable non définie arrête
   l'étape. Un `cd` persiste jusqu'à la fin ; `set -e`, `set -x`, `IFS`, les
-  options `shopt`, `LC_ALL` et les traps sont remis après chaque commande.
+  options `shopt`, `LC_ALL`, les traps, la sortie standard et la sortie
+  d'erreur sont remis après chaque commande.
 * `head` derrière un `tee` ferme le tube : code 141. Utilisez `tail`.
 * Pas de commande interactive avec `log`.
 * Une commande de `TK_LISTES` ne lit pas le clavier.
