@@ -267,7 +267,7 @@ inode, un identifiant, un chemin complet), le libellé ce qu'on veut voir
 dans un nom de fichier :
 
 ```bash
-"Inventaire|true|fls '$IMAGE' '{{home}}' > '$TK_DIR_OUT/{{home_libelle}}.txt'"
+"Inventaire|true|fls '$IMAGE' '{{home}}' > '$DIR_OUT/{{home_libelle}}.txt'"
 #                                  ↑ 51-144-1              ↑ Users/alice
 ```
 
@@ -481,10 +481,20 @@ DOSSIER="/srv/autre"
 
 ## Ce que le script attend de vous
 
-Tout ce qui commence par `TK_` est à lui : à remplir, jamais à supprimer ni à
-renommer. Ce qui commence par `_` est un rouage : vos commandes tournent dans
-son shell, et c'est ce qu'il garde d'une étape à l'autre — un `NUM=1` chez vous
-ne peut rien casser chez lui. Le reste des noms est à vous.
+Trois préfixes, trois sens :
+
+| préfixe | à qui | ce que ça veut dire |
+|---|---|---|
+| `TK_` | au script | il attend ce nom-là, exactement : à remplir, jamais à supprimer ni à renommer |
+| `DIR_` | **à vous** | un dossier de travail : vous nommez la suite, le script le crée et le vérifie |
+| `_` | à la mécanique | ce qu'elle garde d'une étape à l'autre — un `NUM=1` chez vous ne peut rien casser chez lui |
+
+Le reste des noms est à vous. `DIR_` n'a pas de `TK_` devant justement parce que
+ces dossiers ne sont pas au script : rien ne vous impose `DIR_TIMELINE` ni
+`DIR_STRINGS`, vous les inventez. Seul `DIR_LOGS` est obligatoire — c'est là que
+vont le journal, le rapport et l'état de reprise. Un `DIR_` venu de votre
+environnement est ignoré : seules les variables du script et du fichier `-c`
+comptent.
 
 ### Les réglages — section 2, ou votre fichier `-c`
 
@@ -505,10 +515,10 @@ Recalculée après `-c` et `--set`, pour que tout suive la dernière valeur.
 | `TK_SUJET` | titre court, en tête et au récapitulatif | `"$PC · $SALLE"` |
 | `TK_DETAILS` | lignes du bandeau de départ (facultative) | `("image=$IMAGE" "fuseau=$TZ")` — clé sans accent |
 | `TK_PREFIX` | préfixe des fichiers écrits, sans `/` | `"${PC}_${SALLE}"` |
-| `TK_DIR_LOGS` | dossier du journal, du rapport et de l'état de reprise | `"$DEST/logs"` |
-| `TK_DIR_xxx` | tout autre dossier de travail : vérifié, créé au besoin | `TK_DIR_BODY`, `TK_DIR_SORTIE`… |
+| `DIR_LOGS` | dossier du journal, du rapport et de l'état de reprise | `"$DEST/logs"` |
+| `DIR_xxx` | tout autre dossier de travail : vérifié, créé au besoin | `DIR_BODY`, `DIR_SORTIE`… |
 
-`TK_SUJET`, `TK_PREFIX` et `TK_DIR_LOGS` sont obligatoires : le script refuse de
+`TK_SUJET`, `TK_PREFIX` et `DIR_LOGS` sont obligatoires : le script refuse de
 partir sans.
 
 ### Les quatre fonctions appelées par le script
@@ -636,9 +646,9 @@ de route ; `COLUMNS=60` la force.
 ## Ce qui est écrit
 
 ```
-<TK_DIR_LOGS>/<TK_PREFIX>_script.log     chaque commande, code, durée ; s'allonge à chaque exécution
-<TK_DIR_LOGS>/<TK_PREFIX>_rapport.txt    le récapitulatif, réécrit à chaque exécution
-<TK_DIR_LOGS>/<TK_PREFIX>_etat.txt       les étapes réussies de la dernière exécution (pour -r)
+<DIR_LOGS>/<TK_PREFIX>_script.log     chaque commande, code, durée ; s'allonge à chaque exécution
+<DIR_LOGS>/<TK_PREFIX>_rapport.txt    le récapitulatif, réécrit à chaque exécution
+<DIR_LOGS>/<TK_PREFIX>_etat.txt       les étapes réussies de la dernière exécution (pour -r)
 ```
 
 Le journal reçoit les commandes **résolues**, valeurs comprises : une valeur

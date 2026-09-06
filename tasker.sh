@@ -7,10 +7,12 @@
 #   1 VARIABLES · 2 RÉGLAGES · 3 COMMANDES · 4 LISTES · 5 FONCTIONS
 #   6 CHEMINS ET CONTRÔLES · 7 BOÎTE À OUTILS · 8 MÉCANIQUE
 #
-#   Un nom qui commence par TK_ est lu par le script : remplissez-le, ne le
-#   supprimez pas, ne le renommez pas. Un nom qui commence par _ est un
-#   rouage : le script s'en sert entre deux étapes, laissez-le tranquille.
-#   Le reste des noms est à vous.
+#   Un nom qui commence par TK_ est attendu par le script sous ce nom-là :
+#   remplissez-le, ne le supprimez pas, ne le renommez pas. Un nom qui
+#   commence par _ est un rouage : le script s'en sert entre deux étapes,
+#   laissez-le tranquille. Un nom qui commence par DIR_ est un dossier de
+#   travail À VOUS : vous choisissez la suite du nom, le script le crée et
+#   vérifie qu'il est inscriptible. Le reste des noms est à vous aussi.
 #   Voir aussi TUTORIEL.md.
 #
 set -uo pipefail
@@ -124,13 +126,14 @@ lister_gros_dossiers() {          # <racine> [Mo mini, 100 par défaut]
 #   TK_SUJET    titre court, en tête et au récapitulatif
 #   TK_DETAILS  lignes du bandeau de départ, "clé=valeur" (clé sans accent)
 #   TK_PREFIX   préfixe des fichiers écrits
-#   TK_DIR_xxx  dossiers de travail, vérifiés et créés au besoin.
-#            TK_DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
+#   DIR_xxx     vos dossiers de travail : vous nommez le xxx, chacun est
+#            créé et vérifié. DIR_LOGS est le seul obligatoire de la
+#            famille : il reçoit le journal, le rapport et l'état de reprise.
 calculer_variables() {
     TK_SUJET="${DOSSIER##*/}"
     TK_DETAILS=("dossier=$DOSSIER" "sortie=$SORTIE")
     TK_PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
-    TK_DIR_LOGS="$SORTIE/logs"
+    DIR_LOGS="$SORTIE/logs"
 }
 
 # Défaire ce qu'une étape a mis en place — démonter une image, retirer un
@@ -961,13 +964,18 @@ aide_config() {
     h_opt "verifier"           "contrôles de départ ; return 1 pour arrêter"
     h_opt "definir_commandes"  "remplit TK_COMMANDES et TK_LISTES"
     h_opt "nettoyer"           "appelée en sortant, quelle que soit la sortie"
-    h_titre "Les noms que le script lit   tout ce qui commence par TK_"
+    h_titre "Vos dossiers de travail   tout ce qui commence par DIR_"
+    h_ligne "DIR_SORTIE, DIR_RAPPORTS, DIR_CE_QUE_VOUS_VOULEZ : vous nommez la"
+    h_ligne "suite, le script crée le dossier et vérifie qu'il est inscriptible."
+    h_ligne "Ils sont à vous — d'où l'absence de TK_ : rien ne les impose, sauf"
+    h_ligne "DIR_LOGS, où vont le journal, le rapport et l'état de reprise."
+    h_titre "Les noms que le script exige   tout ce qui commence par TK_"
     h_ligne "Vos commandes tournent dans le shell du script : un « NUM=1 » chez"
     h_ligne "vous ne peut rien casser chez lui, ses noms à lui sont en _."
     h_opt "TK_SUJET"    "titre court, en tête et au récapitulatif"
     h_opt "TK_DETAILS"  "lignes du bandeau, « clé=valeur » (clé sans accent)"
     h_opt "TK_PREFIX"   "préfixe des fichiers écrits"
-    h_opt "TK_DIR_LOGS" "journal, rapport, état de reprise ; tout TK_DIR_xxx est créé"
+    h_opt "DIR_LOGS"   "journal, rapport, état ; obligatoire — voir DIR_xxx plus bas"
     h_opt "TK_INTRO"    "texte affiché après le bandeau (facultatif)"
     h_titre "Les réglages   section 2"
     h_opt "TK_REQUIS"         "binaires attendus, absents = avertissement : (du df)"
@@ -987,8 +995,8 @@ aide_exemple() {
     h_code "    TK_SUJET=\"sauvegarde \$(hostname)\""
     h_code "    TK_DETAILS=(\"sortie=\$RACINE\")"
     h_code "    TK_PREFIX=\"sauve\""
-    h_code "    TK_DIR_OUT=\"\$RACINE\"              # créé au besoin"
-    h_code "    TK_DIR_LOGS=\"\$RACINE/logs\""
+    h_code "    DIR_OUT=\"\$RACINE\"              # créé au besoin"
+    h_code "    DIR_LOGS=\"\$RACINE/logs\""
     h_code "}"
     h_code ""
     h_code "verifier() { [[ -w /sauve ]] || { erreur \"/sauve non inscriptible\"; return 1; }; }"
@@ -997,8 +1005,8 @@ aide_exemple() {
     h_code "TK_COMMANDES=("
     h_code "\"Place disponible|false|df -h /sauve\""
     h_code "\"Taille de chaque compte|false|du -sh '{{compte}}'\""
-    h_code "\"Archive de chaque compte|true,log|tar czf '\$TK_DIR_OUT/{{compte_libelle}}.tgz' '{{compte}}'\""
-    h_code "\"Purge des archives anciennes|true|find '\$TK_DIR_OUT' -name '*.tgz' -mtime +[[jours]] -delete\""
+    h_code "\"Archive de chaque compte|true,log|tar czf '\$DIR_OUT/{{compte_libelle}}.tgz' '{{compte}}'\""
+    h_code "\"Purge des archives anciennes|true|find '\$DIR_OUT' -name '*.tgz' -mtime +[[jours]] -delete\""
     h_code ")"
     h_code "TK_LISTES=("
     h_code "\"compte|lister_utilisateurs\""
@@ -1223,7 +1231,17 @@ calculer_variables
 # Sans ces trois-là, la mécanique casserait bien plus loin, sur une
 # variable non définie, à un endroit qui n'aiderait personne. Le cas se
 # produit dès qu'un fichier -c redéfinit calculer_variables.
-for v in TK_SUJET TK_PREFIX TK_DIR_LOGS; do
+# Les dossiers de travail s'appelaient TK_DIR_xxx : le préfixe TK_ est
+# réservé aux noms que le script exige, or ceux-là sont les vôtres — vous
+# les nommez, vous pouvez les retirer. Un fichier -c d'avant le changement
+# le lit ici, plutôt que par un « DIR_LOGS manquant » qui n'explique rien.
+_vieux=""
+for v in ${!TK_DIR_@}; do _vieux+=" ${v} -> ${v#TK_}"; done
+[[ -z "$_vieux" ]] || { erreur "les dossiers de travail ont perdu leur TK_ :$_vieux"
+    info "TK_ ne désigne plus que ce que le script exige ; un DIR_xxx est à vous."
+    exit 1; }
+
+for v in TK_SUJET TK_PREFIX DIR_LOGS; do
     [[ -n "${!v:-}" ]] || { erreur "calculer_variables doit définir $v (section 6, ou votre fichier -c)"; exit 1; }
 done
 [[ "$TK_PREFIX" != */* ]] || { erreur "TK_PREFIX ne peut pas contenir de / : $TK_PREFIX"; exit 1; }
@@ -1233,7 +1251,7 @@ done
 # Un fichier -c peut écrire TK_COMMANDES et TK_LISTES directement, sans passer
 # par definir_commandes : on les prend tels quels. Sinon on appelle la
 # fonction — d'abord dans un sous-shell, pour transformer un
-# « TK_DIR_BODY: unbound variable » en explication.
+# « DIR_BODY: unbound variable » en explication.
 if ! declare -p TK_COMMANDES >/dev/null 2>&1; then
     if ! _err="$( (definir_commandes) 2>&1 )"; then
         erreur "impossible de construire TK_COMMANDES : ${_err##*: }"
@@ -1931,8 +1949,8 @@ recap_enfants() {
 }
 
 ecrire_rapport() {
-    [[ -d "${TK_DIR_LOGS:-}" ]] || return 0
-    local f="$TK_DIR_LOGS/${TK_PREFIX}_rapport.txt" l num e d t ligne enfants
+    [[ -d "${DIR_LOGS:-}" ]] || return 0
+    local f="$DIR_LOGS/${TK_PREFIX}_rapport.txt" l num e d t ligne enfants
     {
         printf 'Rapport %s\n  sujet      %s\n' "$NOM_SCRIPT" "$TK_SUJET"
         for l in ${TK_DETAILS[@]+"${TK_DETAILS[@]}"}; do
@@ -2036,7 +2054,10 @@ if (( EUID != 0 )) && printf '%s\n' "${TK_COMMANDES[@]}" ${TK_LISTES[@]+"${TK_LI
 fi
 
 CREES=0
-for nom in ${!TK_DIR_@}; do
+for nom in ${!DIR_@}; do
+    # Un DIR_ venu de l'environnement n'est pas un de vos dossiers de travail :
+    # ceux du script et du fichier -c sont de simples variables du shell.
+    [[ "$(declare -p "$nom")" != "declare -x"* ]] || continue
     d="${!nom}"
     [[ -n "$d" ]] || { erreur "$nom est vide."; exit 1; }
     if [[ ! -d "$d" && "$_SIMULATION" != "true" ]]; then
@@ -2047,13 +2068,13 @@ done
 # Le 2>/dev/null vient AVANT la redirection qu'il fait taire : bash les pose
 # de gauche à droite, et c'est l'ouverture du fichier qui échoue. Dans l'autre
 # sens, l'erreur de bash s'affiche avant la nôtre. Idem pour le rapport.
-[[ "$_SIMULATION" == "true" ]] || { _LOG="$TK_DIR_LOGS/${TK_PREFIX}_script.log"; : 2>/dev/null >> "$_LOG" || { erreur "journal non inscriptible : $_LOG"; exit 1; }; }
+[[ "$_SIMULATION" == "true" ]] || { _LOG="$DIR_LOGS/${TK_PREFIX}_script.log"; : 2>/dev/null >> "$_LOG" || { erreur "journal non inscriptible : $_LOG"; exit 1; }; }
 
 # Reprise : empreinte du titre ET de la commande, une par étape réussie.
 # Sans -r on repart de zéro : l'état est celui de la dernière exécution, pas
 # le cumul de toutes — une étape réussie la semaine dernière et ratée hier
 # ne doit pas être sautée aujourd'hui.
-_ETAT="$TK_DIR_LOGS/${TK_PREFIX}_etat.txt"
+_ETAT="$DIR_LOGS/${TK_PREFIX}_etat.txt"
 [[ "$_REPRENDRE" == "true" || "$_SIMULATION" == "true" ]] || : 2>/dev/null > "$_ETAT"
 empreinte() {
     if command -v sha1sum >/dev/null 2>&1; then printf '%s' "$1" | sha1sum | cut -d' ' -f1
