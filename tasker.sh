@@ -128,7 +128,7 @@ lister_gros_dossiers() {          # <racine> [Mo mini, 100 par défaut]
 #            TK_DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
 calculer_variables() {
     TK_SUJET="${DOSSIER##*/}"
-    TK_DETAILS=("dossier=$DOSSIER")
+    TK_DETAILS=("dossier=$DOSSIER" "sortie=$SORTIE")
     TK_PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
     TK_DIR_LOGS="$SORTIE/logs"
 }
@@ -975,7 +975,7 @@ aide_exemple() {
     h_code ""
     h_code "calculer_variables() {"
     h_code "    TK_SUJET=\"sauvegarde \$(hostname)\""
-    h_code "    TK_DETAILS=(\"racine=\$RACINE\")"
+    h_code "    TK_DETAILS=(\"sortie=\$RACINE\")"
     h_code "    TK_PREFIX=\"sauve\""
     h_code "    TK_DIR_OUT=\"\$RACINE\"              # créé au besoin"
     h_code "    TK_DIR_LOGS=\"\$RACINE/logs\""
@@ -2059,9 +2059,9 @@ regle "$GRAS"
 for l in ${TK_DETAILS[@]+"${TK_DETAILS[@]}"}; do
     if [[ "$l" == *=* ]]; then entete "${l%%=*}" "${l#*=}"; else info "$l"; fi
 done
-entete "sortie"   "${TK_DIR_LOGS%/*}$( (( CREES > 0 )) && printf '  (%d dossier%s créé%s)' "$CREES" "$(pluriel "$CREES")" "$(pluriel "$CREES")")"
 entete "par"      "$TK_OPERATEUR$( (( EUID == 0 )) && printf ' (root)')"
 entete "journal"  "$_LOG"
+(( CREES > 0 )) && info "$CREES dossier$(pluriel "$CREES") créé$(pluriel "$CREES")"
 [[ -n "$_CONF" ]]                 && entete "config"     "$_CONF"
 [[ "$_SIMULATION" == "true" ]]    && entete "dry-run"    "rien ne sera exécuté"
 [[ "$_SANS_QUESTION" == "true" ]] && entete "-y"         "aucune question ne sera posée"

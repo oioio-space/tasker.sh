@@ -49,8 +49,8 @@ Pour un nouveau poste, on ne réécrit rien :
  tasker.sh  PC07 · B204 · windows
 ────────────────────────────────────────────────────────────
   image      /images/pc07.dd
+  sortie     /cases/B204/windows/PC07
   fuseau     Europe/Paris
-  sortie     /cases/B204/windows/PC07  (4 dossiers créés)
   par        M. Dupont
   journal    /cases/B204/windows/PC07/logs/PC07_B204_windows_script.log
 
