@@ -194,13 +194,14 @@ _entrees() {
     local genre="${1-}" qui="${FUNCNAME[1]}" brut="${2-}" racine="${2-}"
     local e nom m
     [[ -n "$brut" ]] || { printf '%s : il faut un dossier en argument\n' "$qui" >&2; return 1; }
-    racine="${racine%/}" ; shift 2
+    racine="${racine%/}" ; [[ -n "$racine" ]] || racine="/"   # « / » reste « / »
+    shift 2
     local -a motifs=( ${@+"$@"} ) ; (( ${#motifs[@]} )) || motifs=( '*' )
     [[ -d "$racine" ]] || { printf '%s : pas un dossier, ignoré : %s\n' "$qui" "$brut" >&2; return 0; }
     [[ -r "$racine" && -x "$racine" ]] || { printf '%s : dossier illisible, ignoré : %s\n' "$qui" "$brut" >&2; return 0; }
     # Aucun shopt à poser : un motif qui ne trouve rien reste tel quel et
     # le test -e l'écarte. L'état du shell n'est pas touché.
-    for e in "$racine"/* "$racine"/.*; do
+    for e in "${racine%/}"/* "${racine%/}"/.*; do
         (( INTERROMPU )) && return 130
         [[ -e "$e" || -L "$e" ]] || continue
         nom="${e##*/}"
@@ -232,7 +233,8 @@ lister_arbre() {
     local _I _OPTN; _opts "$@" || return 1; shift "$_OPTN"
     local brut="${1-}" racine="${1-}"
     [[ -n "$brut" ]] || { printf 'lister_arbre : il faut un dossier en argument\n' >&2; return 1; }
-    racine="${racine%/}" ; shift
+    racine="${racine%/}" ; [[ -n "$racine" ]] || racine="/"   # « / » reste « / »
+    shift
     [[ -d "$racine" ]] || { printf 'lister_arbre : pas un dossier, ignoré : %s\n' "$brut" >&2; return 0; }
     (( $# )) || set -- '*'
     _arbre "$racine" "$racine" "$@"
@@ -241,7 +243,7 @@ _arbre() {
     local racine="$1" dir="$2" ; shift 2
     local e nom m
     [[ -r "$dir" && -x "$dir" ]] || { printf 'lister_arbre : dossier illisible, ignoré : %s\n' "$dir" >&2; return 0; }
-    for e in "$dir"/* "$dir"/.*; do
+    for e in "${dir%/}"/* "${dir%/}"/.*; do
         (( INTERROMPU )) && return 130
         [[ -e "$e" || -L "$e" ]] || continue
         nom="${e##*/}"
@@ -250,7 +252,7 @@ _arbre() {
             _arbre "$racine" "$e" "$@" || return $?
         elif [[ -f "$e" ]]; then
             for m in "$@"; do
-                _colle "$nom" "$m" && { emettre "$e" "${e#"$racine"/}"; break; }
+                _colle "$nom" "$m" && { emettre "$e" "${e#"${racine%/}/"}"; break; }
             done
         fi
     done
@@ -264,7 +266,8 @@ _trouver() {
     while (( $# )) && [[ "$1" != "--" ]]; do crit+=( "$1" ); shift; done
     shift
     local brut="${1-}" racine="${1-}"
-    racine="${racine%/}" ; shift
+    racine="${racine%/}" ; [[ -n "$racine" ]] || racine="/"   # « / » reste « / »
+    shift
     local -a motifs=( ${@+"$@"} ) ; (( ${#motifs[@]} )) || motifs=( '*' )
     local f nom m
     [[ -d "$racine" ]] || { printf '%s : pas un dossier, ignoré : %s\n' "$qui" "$brut" >&2; return 0; }
@@ -273,7 +276,7 @@ _trouver() {
         (( INTERROMPU )) && return 130
         nom="${f##*/}"
         for m in "${motifs[@]}"; do
-            _colle "$nom" "$m" && { emettre "$f" "${f#"$racine"/}"; break; }
+            _colle "$nom" "$m" && { emettre "$f" "${f#"${racine%/}/"}"; break; }
         done
     done < <(find "$racine" -type f "${crit[@]}" -print0 2>/dev/null)
     return 0
@@ -415,6 +418,9 @@ lister_montages() {
 
 # --- 8.1 Affichage ---------------------------------------------------
 COULEUR="auto"
+# Posé tôt : la boîte à outils le teste, et un fichier -c peut appeler une
+# de ses fonctions depuis calculer_variables, bien avant la boucle.
+INTERROMPU=0; EN_SAISIE=0
 # Valeurs sûres tant que init_affichage n'a pas tourné.
 C0=""; GRAS=""; ESTOMPE=""; COULEURS=0
 C_ACCENT=""; C_OK=""; C_KO=""; C_WARN=""; C_SIM=""; C_PROG=""; C_CMD=""
@@ -584,21 +590,28 @@ titre_etape() {   # <numéro> <total> <titre>
 # coupe un « é » en deux.
 LIGNES=()
 replier() {
-    local larg="$2" ligne="" mot
+    local larg="$2" ligne="" mot brut
     local -a mots=()
     LIGNES=()
-    read -r -a mots <<< "$1"
-    for mot in ${mots[@]+"${mots[@]}"}; do
-        if [[ -z "$ligne" ]]; then ligne="$mot"
-        elif (( $(largeur_texte "$ligne $mot") <= larg )); then ligne+=" $mot"
-        else LIGNES+=("$ligne"); ligne="$mot"; fi
-        # un mot seul plus large que l'écran : coupé net si l'on sait le
-        # faire par caractères, sinon laissé déborder plutôt qu'abîmé
-        while (( UTF8_OK && ${#ligne} > larg )); do
-            LIGNES+=("${ligne:0:larg}"); ligne="${ligne:larg}"
+    # Une commande peut tenir sur plusieurs lignes : chacune est repliée
+    # pour elle-même, aucune n'est perdue. Montrer la première seulement
+    # ferait valider une commande dont on n'a pas vu la suite.
+    while IFS= read -r brut || [[ -n "$brut" ]]; do
+        if [[ -z "${brut//[[:space:]]/}" ]]; then LIGNES+=(""); continue; fi
+        ligne=""; mots=()
+        read -r -a mots <<< "$brut"
+        for mot in ${mots[@]+"${mots[@]}"}; do
+            if [[ -z "$ligne" ]]; then ligne="$mot"
+            elif (( $(largeur_texte "$ligne $mot") <= larg )); then ligne+=" $mot"
+            else LIGNES+=("$ligne"); ligne="$mot"; fi
+            # un mot seul plus large que l'écran : coupé net si l'on sait le
+            # faire par caractères, sinon laissé déborder plutôt qu'abîmé
+            while (( UTF8_OK && ${#ligne} > larg )); do
+                LIGNES+=("${ligne:0:larg}"); ligne="${ligne:larg}"
+            done
         done
-    done
-    [[ -n "$ligne" ]] && LIGNES+=("$ligne")
+        [[ -n "$ligne" ]] && LIGNES+=("$ligne")
+    done <<< "$1"
     return 0
 }
 
@@ -847,7 +860,7 @@ aide() {
     h_opt "-a, --ask"            "confirmer chaque étape, même les « false »"
     h_opt "-y, --yes"            "ne rien demander (sudo ? faites « sudo -v » avant)"
     h_opt "    --color MODE"     "auto, always ou never  ·  --no-color"
-    h_opt "-h, --help [TK_SUJET]"   "cette aide ; TK_SUJET = un chapitre, voir plus bas"
+    h_opt "-h, --help [SUJET]"      "cette aide ; SUJET = un chapitre, voir plus bas"
     h_titre "Pendant l'exécution"
     h_cle "à une étape"     "Entrée=exécuter" "p=passer" "e=éditer" "r=ressaisir" "q=quitter"
     h_cle "étape répétée"   "u=une par une" "l=lister les itérations"
@@ -858,7 +871,7 @@ aide() {
     h_titre "Dans le script   1 variables · 2 réglages · 3 commandes · 4 listes · 5 fonctions"
     printf '  %s"Titre|true|commande"%s   true = demander avant, false = lancer direct\n' "$C_PROG" "$C0"
     printf '  %s[[nom]]%s  une valeur demandée une fois       %s{{nom}}%s  l%sétape rejouée par valeur\n' "$C_PROG" "$C0" "$C_PROG" "$C0" "'"
-    h_titre "En savoir plus   -h TK_SUJET"
+    h_titre "En savoir plus   -h SUJET"
     h_opt "-h etapes"   "la ligne « Titre|validation|commande », les variables"
     h_opt "-h valeurs"  "[[demandée]], {{répétée}}, menus, libellés, emboîtement"
     h_opt "-h outils"   "les dix listes toutes faites, et écrire la vôtre"
@@ -902,8 +915,8 @@ gabarit() {
         [[ -z "${deja[$nom]:-}" ]] || continue; deja[$nom]=1
         if [[ -n "$com" ]]; then printf '%-30s # %s\n' "$nom=$val" "$com"; else printf '%s=%s\n' "$nom" "$val"; fi
     done < <(if [[ -n "$CONF" ]]; then sed '/^[a-zA-Z_][a-zA-Z0-9_]*() *{/,$d' "$CONF" | grep -E '^[A-Za-z_][A-Za-z0-9_]*='
-             else sed -n '/^# 1\. VARIABLES/,/^# 3\. TK_COMMANDES/p' "$src"; fi)
-    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre « # 1. VARIABLES » et « # 3. TK_COMMANDES » dans $src}"
+             else sed -n '/^# 1\. VARIABLES/,/^# 3\./p' "$src"; fi)
+    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre les bandeaux « # 1. » et « # 3. » de $src}"
 }
 
 
@@ -1149,6 +1162,7 @@ RE_LISTE='\{\{([a-zA-Z0-9_]+)\}\}'
 declare -A REPONSES=()      # [[nom]] -> valeur
 declare -A GENERATEUR=()    # liste   -> commande
 declare -A CACHE_LISTE=()   # commande résolue -> lignes
+declare -A CACHE_CODE=()    # commande résolue -> code quand elle n'a rien rendu
 declare -A LISTE_FIGEE=()   # --list nom=a,b
 declare -A BINDINGS=()      # {{nom}} liés dans la boucle en cours (échappés)
 PH_SIMPLES=(); USAGE_SIMPLES=(); PH_LISTES=(); USAGE_LISTES=()
@@ -1206,7 +1220,9 @@ ou_sert() {   # <nom> : « 2, 3 et par la liste home »
 # il doit seulement ne produire aucune itération.
 VALEURS=(); LIBELLES=()
 generer_liste() {
-    local nom="$1" gen sortie rc ligne val lib
+    # code_vide est local : sans cela, la liste vide d'à côté héritait du
+    # code d'une autre, et le message annonçait une erreur jamais produite.
+    local nom="$1" gen sortie rc ligne val lib code_vide=0
 
     if [[ -n "${LISTE_FIGEE[$nom]:-}" ]]; then
         VALEURS=(); LIBELLES=()
@@ -1226,6 +1242,7 @@ generer_liste() {
 
     if [[ -n "${CACHE_LISTE[$gen]:-}" ]]; then
         sortie="${CACHE_LISTE[$gen]}"; [[ "$sortie" == $'\001' ]] && sortie=""
+        code_vide="${CACHE_CODE[$gen]:-0}"
     else
         journal "LISTE $nom : $gen"
         [[ -t 1 ]] && printf '  %s… lecture de la liste « %s »%s' "$ESTOMPE" "$nom" "$C0"
@@ -1239,8 +1256,8 @@ generer_liste() {
         # ou find rendent justement 1 ou 2 quand ils ne trouvent rien. C'est
         # une liste vide — la branche ne produit rien — et le journal garde
         # le code pour qui veut comprendre.
-        if (( rc != 0 && ${#sortie} == 0 )); then journal "LISTE $nom : aucune valeur (code $rc)"; CODE_LISTE_VIDE=$rc; fi
-        CACHE_LISTE["$gen"]="${sortie:-$'\001'}"
+        if (( rc != 0 && ${#sortie} == 0 )); then journal "LISTE $nom : aucune valeur (code $rc)"; code_vide=$rc; fi
+        CACHE_LISTE["$gen"]="${sortie:-$'\001'}"; CACHE_CODE["$gen"]="$code_vide"
     fi
 
     # Remise à zéro ICI : la résolution ci-dessus a pu rappeler generer_liste.
@@ -1252,7 +1269,7 @@ generer_liste() {
         if [[ "$val" == *'[['* || "$val" == *'{{'* ]]; then attention "valeur ignorée dans « $nom » : $val"; continue; fi
         VALEURS+=("$val"); LIBELLES+=("$lib")
     done <<< "$sortie"
-    (( ${#VALEURS[@]} > 0 )) || { journal "LISTE $nom : aucune valeur"; return 2; }
+    (( ${#VALEURS[@]} > 0 )) || { journal "LISTE $nom : aucune valeur"; CODE_LISTE_VIDE=$code_vide; return 2; }
     return 0
 }
 CODE_LISTE_VIDE=0
@@ -1634,7 +1651,7 @@ recap_enfants() {
 
 ecrire_rapport() {
     [[ -d "${TK_DIR_LOGS:-}" ]] || return 0
-    local f="$TK_DIR_LOGS/${TK_PREFIX}_rapport.txt" l num e d t ligne
+    local f="$TK_DIR_LOGS/${TK_PREFIX}_rapport.txt" l num e d t ligne enfants
     {
         printf 'Rapport %s\n  sujet      %s\n' "$NOM_SCRIPT" "$TK_SUJET"
         for l in ${TK_DETAILS[@]+"${TK_DETAILS[@]}"}; do
@@ -1645,11 +1662,14 @@ ecrire_rapport() {
         for l in "${RECAP[@]}"; do
             num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
             printf '  %2s  %-12s %-10s %s\n' "$num" "$(glyphe_texte "$e")" "$d" "$(titre_lisible "$t")"
+            # Les itérations sont jointes par \x01 : il faut les redécouper,
+            # sinon tout le groupe tient sur une ligne illisible.
+            enfants="${ENFANTS[$num]:-}"
             while IFS= read -r ligne; do
                 [[ -n "$ligne" ]] || continue
                 e="${ligne%%|*}"; d="${ligne#*|}"; t="${d#*|}"; d="${d%%|*}"
                 printf '        %-12s %-10s %s\n' "$(glyphe_texte "$e")" "$d" "$t"
-            done <<< "${ENFANTS[$num]:-}"
+            done <<< "${enfants//$'\x01'/$'\n'}"
         done
         printf '\n  %d reussies, %d en echec, %d passees\n' "$NB_OK" "$NB_KO" "$NB_PASSEES"
     } > "$f" 2>/dev/null && printf '  %srapport  %s%s\n' "$ESTOMPE" "$f" "$C0"

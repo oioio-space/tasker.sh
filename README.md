@@ -545,7 +545,7 @@ valeurs.
 | `-D`, `--var` | `nom=valeur` | répondre d'avance à `[[nom]]` |
 | `--list` | `nom=a,b,c` | figer `{{nom}}` sur ces valeurs |
 | `--vars` | | montrer les `[[ ]]` et `{{ }}` attendus |
-| `-h`, `--help` | `TK_SUJET` | l'aide ; `etapes` `valeurs` `outils` `config` `exemple` `tout` |
+| `-h`, `--help` | `SUJET` | l'aide ; `etapes` `valeurs` `outils` `config` `exemple` `tout` |
 | `-t`, `--template` | | écrire un fichier `-c` sur la sortie standard |
 | `-l`, `--plan` | | le plan, sans rien lancer |
 | `-n`, `--dry-run` | | tout afficher, rien exécuter — sauf les commandes de `TK_LISTES`, lancées pour annoncer les itérations |
