@@ -484,3 +484,10 @@ empreintes.
 * Pas de commande interactive avec `log`.
 * Une commande de `LISTES` ne lit pas le clavier.
 * Ctrl-C interrompt la commande en cours, pas la ligne : sur `a ; b`, `b` tourne. Écrivez `a && b`.
+
+---
+
+## Licence
+
+MIT — voir [LICENSE](LICENSE). Faites-en ce que vous voulez, gardez la
+mention de copyright, et c'est fourni sans garantie.
