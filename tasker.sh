@@ -1575,6 +1575,11 @@ executer_une() {
         eval "$1"; _rc=$?
     fi
     printf '%s' "$C0"
+    # Une sortie sans retour à la ligne final laissait le curseur au milieu
+    # de la ligne, et le verdict venait s'y coller. On remplit la ligne
+    # d'espaces : si le curseur était en cours de route, on passe à la
+    # suivante ; s'il était au début, l'affichage d'après les recouvre.
+    [[ -t 1 ]] && printf '%*s\r' $(( LARGEUR - 1 )) ''
     retablir_shell
     DUREE_S=$(( SECONDS - _debut )); duree "$DUREE_S"; journal "code $_rc en $DUREE_TXT"
     return "$_rc"
