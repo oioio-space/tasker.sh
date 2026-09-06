@@ -322,16 +322,69 @@ retrouve sans itération, elle est marquée `liste vide` au récapitulatif.
 Au récapitulatif, au-delà de dix itérations, seules celles qui ont mal
 tourné sont détaillées, suivies de « … et N itérations réussies ».
 
-### Écrire une fonction de liste
+### Les listes toutes faites
+
+Six fonctions sont livrées avec le script (section 7). Elles écrivent déjà
+`valeur<TAB>libellé`, encaissent les noms avec espaces, apostrophes, `$` ou
+`*`, laissent Ctrl-C sortir, et ne prennent jamais « rien trouvé » pour une
+erreur.
+
+| fonction | valeur · libellé |
+|---|---|
+| `lister_dossiers <racine> [motif...]` | chemin · nom du dossier |
+| `lister_fichiers <racine> [motif...]` | chemin · nom du fichier |
+| `lister_arbre <racine> [motif...]` | chemin · chemin relatif à la racine |
+| `lister_si_present <chemin>...` | chemin · nom, si ça existe |
+| `lister_lignes <fichier> [motif...]` | une ligne utile du fichier |
+| `lister_utilisateurs [uid_mini]` | dossier personnel · nom du compte |
 
 ```bash
-lister_dossiers() {
-    local d
-    for d in "$1"/*/; do
+LISTES=(
+"journal|lister_fichiers /var/log '*.log' '*.log.1'"
+"config|lister_arbre /etc '*.conf'"
+"serveur|lister_lignes ./serveurs.txt"
+)
+```
+
+Chaque home du système, et un fichier dans chacun — les deux listes
+s'emboîtent toutes seules :
+
+```bash
+LISTES=(
+"compte|lister_utilisateurs"
+"historique|lister_si_present '{{compte}}/.bash_history'"
+)
+```
+
+**Les motifs sont facultatifs** : sans motif, tout est pris. On peut en
+mettre plusieurs, ils portent sur le **nom** et jamais sur le chemin, comme
+`find -name`.
+
+| | |
+|---|---|
+| `lister_fichiers /etc` | tout, y compris les fichiers cachés |
+| `lister_fichiers /etc '*.conf'` | un motif |
+| `lister_fichiers /etc '*.conf' '*.cfg'` | plusieurs |
+| `lister_fichiers /etc '[!.]*'` | tout sauf les cachés |
+
+Trois précautions déjà prises : `lister_arbre` ne suit pas les liens vers
+des dossiers, donc aucune boucle ; un dossier illisible est signalé au
+journal et sauté, sans arrêter le reste ; un nom impossible à écrire sur une
+ligne (tabulation, retour à la ligne) est écarté avec un mot au journal.
+
+### Écrire la vôtre
+
+`emettre <valeur> [libellé]` écrit une ligne et refuse ce qui casserait la
+suite. C'est la seule chose à retenir, avec le test d'interruption.
+
+```bash
+lister_gros_dossiers() {          # <racine> [Mo mini, 100 par défaut]
+    local d taille
+    while IFS=$'\t' read -r d _; do
         (( INTERROMPU )) && return 130
-        [[ -d "$d" ]] || continue
-        d="${d%/}"; printf '%s\t%s\n' "$d" "${d##*/}"    # valeur <TAB> libellé
-    done
+        taille="$(du -sm "$d" 2>/dev/null | cut -f1)"
+        (( ${taille:-0} >= ${2:-100} )) && emettre "$d" "${d##*/} — ${taille} Mo"
+    done < <(lister_dossiers "$1")
     return 0
 }
 ```
@@ -340,14 +393,13 @@ Avant de la brancher, lancez-la à la main : c'est le meilleur moyen de voir
 ce que le script recevra.
 
 ```bash
-$ lister_dossiers /srv/data
-/srv/data/archives	archives
-/srv/data/photos	photos
-/srv/data/videos	videos
+$ lister_gros_dossiers /srv/data 10
+/srv/data/photos	photos — 240 Mo
+/srv/data/videos	videos — 1503 Mo
 ```
 
-Valeurs sur la sortie standard, messages sur `>&2`. Voir ce qui sera
-demandé et d'où ça vient : `./tasker.sh --vars`.
+Valeurs sur la sortie standard, messages sur `>&2` — ils vont au journal.
+Voir ce qui sera demandé et d'où ça vient : `./tasker.sh --vars`.
 
 ---
 

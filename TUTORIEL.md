@@ -267,7 +267,7 @@ Pas d'option `log` : `photorec` est plein écran et a besoin du terminal.
 "offset|lister_partitions '$IMAGE'"
 "index_testdisk|lister_partitions_testdisk '$IMAGE'"
 "home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
-"fichier|lister_fichiers '$IMAGE' '[[offset]]' '{{home}}'"
+"fichier|lister_fichiers_image '$IMAGE' '[[offset]]' '{{home}}'"
 ```
 
 * `offset` et `index_testdisk` : portent le même nom que les `[[valeurs]]`
@@ -474,17 +474,10 @@ LISTES=(
 "historique|lister_si_present '{{home}}/.bash_history'"
 )
 }
-
-# chemin<TAB>nom, seulement si le fichier existe : un home sans historique
-# ne produit aucune itération, plus besoin de 2>/dev/null
-lister_si_present() {
-    [[ -f "$1" ]] && printf '%s\t%s\n' "$1" "${1##*/}"
-    return 0
-}
 ```
 
-`lister_dossiers` est fournie par le script (section 5). Ce qui a changé,
-ligne par ligne :
+`lister_dossiers` et `lister_si_present` sont fournies par le script
+(section 7) : rien à écrire. Ce qui a changé, ligne par ligne :
 
 | avant | après | pourquoi |
 |---|---|---|

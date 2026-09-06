@@ -5,7 +5,8 @@
 #
 #   Sections, de la plus retouchée à la moins retouchée :
 #   1 VARIABLES · 2 RÉGLAGES · 3 COMMANDES · 4 LISTES · 5 FONCTIONS
-#   6 CHEMINS ET CONTRÔLES · 7 MÉCANIQUE     Voir aussi TUTORIEL.md.
+#   6 CHEMINS ET CONTRÔLES · 7 BOÎTE À OUTILS · 8 MÉCANIQUE
+#   Voir aussi TUTORIEL.md.
 #
 set -uo pipefail
 if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}" -lt 43 ]; then
@@ -87,18 +88,20 @@ LISTES=(
 #    Dans une boucle longue :  (( INTERROMPU )) && return 130
 # =====================================================================
 
-# lister_dossiers <racine>
-# La fonction de liste la plus simple qui soit : une boucle for sur les
-# sous-dossiers d'un répertoire, une ligne « chemin<TAB>nom » par dossier.
-# {{sousdossier}} vaut alors le chemin et {{sousdossier_libelle}} le nom.
-lister_dossiers() {
-    local d
-    for d in "$1"/*/; do                  # le / final ne garde que les dossiers
-        (( INTERROMPU )) && return 130    # Ctrl-C doit pouvoir sortir de la boucle
-        [[ -d "$d" ]] || continue         # aucun dossier : le motif reste tel quel
-        d="${d%/}"                        # retire le / final
-        printf '%s\t%s\n' "$d" "${d##*/}"  # chemin, tabulation, nom seul
-    done
+# Les listes courantes sont déjà écrites en section 7 : lister_dossiers,
+# lister_fichiers, lister_arbre, lister_si_present, lister_lignes,
+# lister_utilisateurs. Ici, les vôtres.
+#
+# Exemple : filtrer ce qu'une fonction fournie renvoie. Les deux règles
+# tiennent en deux lignes — emettre écrit la valeur, et toute boucle un
+# peu longue laisse Ctrl-C sortir.
+lister_gros_dossiers() {          # <racine> [Mo mini, 100 par défaut]
+    local d taille
+    while IFS=$'\t' read -r d _; do
+        (( INTERROMPU )) && return 130
+        taille="$(du -sm "$d" 2>/dev/null | cut -f1)"
+        (( ${taille:-0} >= ${2:-100} )) && emettre "$d" "${d##*/} — ${taille} Mo"
+    done < <(lister_dossiers "$1")
     return 0
 }
 
@@ -132,10 +135,171 @@ verifier() {
 
 
 # =====================================================================
-# 7. MÉCANIQUE
+# 7. BOÎTE À OUTILS     fournies avec le script : à appeler, pas à modifier
 # =====================================================================
 
-# --- 7.1 Affichage ---------------------------------------------------
+# Toutes les fonctions ci-dessous suivent le même contrat : une valeur par
+# ligne sur la sortie standard, « valeur<TAB>libellé », les messages sur
+# >&2 (ils vont au journal), et rien n'est une erreur quand il n'y a
+# simplement rien à lister. Les motifs sont facultatifs : sans motif, tout.
+
+# emettre <valeur> [libellé]
+# Le seul endroit qui écrit une ligne. Écarte ce que la mécanique ne
+# saurait pas relire. Rend 1 si la valeur a été écartée.
+emettre() {
+    local val="${1-}" lib="${2-}"
+    [[ -n "$val" ]] || return 1
+    case "$val$lib" in
+        *$'\n'*) printf 'valeur ignorée, retour à la ligne dans le nom : %q\n' "$val" >&2; return 1 ;;
+    esac
+    case "$val" in
+        *$'\t'*)       printf 'valeur ignorée, tabulation dans le nom : %q\n' "$val" >&2; return 1 ;;
+        *'[['*|*'{{'*) printf 'valeur ignorée, contient [[ ou {{ : %s\n'      "$val" >&2; return 1 ;;
+    esac
+    lib="${lib//$'\t'/ }"
+    if [[ -n "$lib" ]]; then printf '%s\t%s\n' "$val" "$lib"
+    else                     printf '%s\n'     "$val"; fi
+}
+
+# _entrees <d|f> <racine> [motif...]     interne : lister_dossiers/fichiers
+# Le motif porte sur le nom seul, jamais sur le chemin. Les entrées
+# cachées sont incluses ; pour ne garder que le visible : motif '[!.]*'.
+_entrees() {
+    local genre="${1-}" qui="${FUNCNAME[1]}" brut="${2-}" racine="${2-}"
+    local e nom m
+    [[ -n "$brut" ]] || { printf '%s : il faut un dossier en argument\n' "$qui" >&2; return 1; }
+    racine="${racine%/}" ; shift 2
+    local -a motifs=( ${@+"$@"} ) ; (( ${#motifs[@]} )) || motifs=( '*' )
+    [[ -d "$racine" ]] || { printf '%s : pas un dossier, ignoré : %s\n' "$qui" "$brut" >&2; return 0; }
+    [[ -r "$racine" && -x "$racine" ]] || { printf '%s : dossier illisible, ignoré : %s\n' "$qui" "$brut" >&2; return 0; }
+    # Aucun shopt à poser : un motif qui ne trouve rien reste tel quel et
+    # le test -e l'écarte. L'état du shell n'est pas touché.
+    for e in "$racine"/* "$racine"/.*; do
+        (( INTERROMPU )) && return 130
+        [[ -e "$e" || -L "$e" ]] || continue
+        nom="${e##*/}"
+        [[ "$nom" == "." || "$nom" == ".." ]] && continue
+        case "$genre" in
+            d) [[ -d "$e" ]] || continue ;;
+            f) [[ -f "$e" ]] || continue ;;
+        esac
+        for m in "${motifs[@]}"; do
+            # shellcheck disable=SC2053  # motif volontairement non protégé
+            [[ "$nom" == $m ]] && { emettre "$e" "$nom"; break; }
+        done
+    done
+    return 0
+}
+
+# lister_dossiers <racine> [motif...]   les sous-dossiers directs
+#   lister_dossiers /srv
+#   lister_dossiers /srv 'prod-*' 'test-*'
+lister_dossiers() { _entrees d "$@"; }
+
+# lister_fichiers <racine> [motif...]   les fichiers directs, sans descendre
+#   lister_fichiers /var/log '*.log'
+lister_fichiers() { _entrees f "$@"; }
+
+# lister_arbre <racine> [motif...]   les fichiers de toute l'arborescence
+# Valeur = chemin complet, libellé = chemin relatif à la racine. Ne suit
+# pas les liens vers des dossiers : aucune boucle possible.
+#   lister_arbre /etc '*.conf'
+lister_arbre() {
+    local brut="${1-}" racine="${1-}"
+    [[ -n "$brut" ]] || { printf 'lister_arbre : il faut un dossier en argument\n' >&2; return 1; }
+    racine="${racine%/}" ; shift
+    [[ -d "$racine" ]] || { printf 'lister_arbre : pas un dossier, ignoré : %s\n' "$brut" >&2; return 0; }
+    (( $# )) || set -- '*'
+    _arbre "$racine" "$racine" "$@"
+}
+_arbre() {
+    local racine="$1" dir="$2" ; shift 2
+    local e nom m
+    [[ -r "$dir" && -x "$dir" ]] || { printf 'lister_arbre : dossier illisible, ignoré : %s\n' "$dir" >&2; return 0; }
+    for e in "$dir"/* "$dir"/.*; do
+        (( INTERROMPU )) && return 130
+        [[ -e "$e" || -L "$e" ]] || continue
+        nom="${e##*/}"
+        [[ "$nom" == "." || "$nom" == ".." ]] && continue
+        if [[ -d "$e" && ! -L "$e" ]]; then
+            _arbre "$racine" "$e" "$@" || return $?
+        elif [[ -f "$e" ]]; then
+            for m in "$@"; do
+                # shellcheck disable=SC2053
+                [[ "$nom" == $m ]] && { emettre "$e" "${e#"$racine"/}"; break; }
+            done
+        fi
+    done
+    return 0
+}
+
+# lister_si_present <chemin>...   ne garde que ce qui existe
+# Le compagnon des listes emboîtées : un profil sans le fichier cherché
+# ne produit aucune itération, au lieu d'une commande qui échoue.
+#   lister_si_present '{{home}}/.bash_history'
+lister_si_present() {
+    local c
+    for c in ${@+"$@"}; do
+        (( INTERROMPU )) && return 130
+        [[ -e "$c" || -L "$c" ]] && emettre "$c" "${c##*/}"
+    done
+    return 0
+}
+
+# lister_lignes <fichier> [motif...]   une valeur par ligne d'un fichier
+# Saute les lignes vides et celles qui commencent par #, retire les
+# espaces autour et le retour chariot des fichiers Windows. Une ligne
+# « valeur<TAB>libellé » garde son libellé.
+#   lister_lignes ./serveurs.txt
+lister_lignes() {
+    local fichier="${1-}" ligne val lib m
+    [[ -n "$fichier" ]] || { printf 'lister_lignes : il faut un fichier en argument\n' >&2; return 1; }
+    shift
+    local -a motifs=( ${@+"$@"} ) ; (( ${#motifs[@]} )) || motifs=( '*' )
+    [[ -f "$fichier" && -r "$fichier" ]] || { printf 'lister_lignes : fichier illisible, ignoré : %s\n' "$fichier" >&2; return 0; }
+    while IFS= read -r ligne || [[ -n "$ligne" ]]; do
+        (( INTERROMPU )) && return 130
+        ligne="${ligne%$'\r'}"
+        ligne="${ligne#"${ligne%%[![:space:]]*}"}"
+        ligne="${ligne%"${ligne##*[![:space:]]}"}"
+        [[ -z "$ligne" || "$ligne" == '#'* ]] && continue
+        val="${ligne%%$'\t'*}" ; lib=""
+        [[ "$ligne" == *$'\t'* ]] && lib="${ligne#*$'\t'}"
+        for m in "${motifs[@]}"; do
+            # shellcheck disable=SC2053
+            [[ "$val" == $m ]] && { emettre "$val" "$lib"; break; }
+        done
+    done < "$fichier"
+    return 0
+}
+
+# lister_utilisateurs [uid_mini]   les comptes qui ont un vrai dossier
+# Valeur = le dossier personnel — c'est ce dont les commandes ont besoin ;
+# libellé = le nom du compte. uid_mini vaut 1000 : les comptes humains sur
+# la plupart des Linux, 0 pour tout prendre. Lit /etc/passwd ; ailleurs
+# (macOS), écrivez la vôtre avec dscl.
+#   lister_utilisateurs        lister_utilisateurs 0
+lister_utilisateurs() {
+    local mini="${1:-1000}" nom uid home shell
+    [[ "$mini" =~ ^[0-9]+$ ]] || { printf 'lister_utilisateurs : uid_mini doit être un entier : %s\n' "$mini" >&2; return 1; }
+    [[ -r /etc/passwd ]] || { printf 'lister_utilisateurs : /etc/passwd illisible\n' >&2; return 0; }
+    while IFS=: read -r nom _ uid _ _ home shell; do
+        (( INTERROMPU )) && return 130
+        [[ "$uid" =~ ^[0-9]+$ ]] || continue
+        (( 10#$uid >= 10#$mini )) || continue
+        [[ -d "$home" ]] || continue
+        case "$shell" in */nologin|*/false|*/sync) continue ;; esac
+        emettre "$home" "$nom"
+    done < /etc/passwd
+    return 0
+}
+
+
+# =====================================================================
+# 8. MÉCANIQUE
+# =====================================================================
+
+# --- 8.1 Affichage ---------------------------------------------------
 COULEUR="auto"
 LARGEUR=80
 NOM_SCRIPT="${0##*/}"
@@ -295,7 +459,7 @@ menu() {   # clé=texte ... — la première clé est celle de la touche Entrée
 invite() { printf '  %s›%s ' "$GRAS" "$C0"; }
 
 
-# --- 7.2 Aide --------------------------------------------------------
+# --- 8.2 Aide --------------------------------------------------------
 # L'aide : option en cyan, touches en gras, rien d'autre.
 h_titre() { printf '\n%s%s%s\n' "$GRAS" "$1" "$C0"; }
 h_opt()   { printf '  %s%-26s%s %s\n' "$C_PROG" "$1" "$C0" "$2"; }          # -x, --xx VALEUR   explication
@@ -336,7 +500,12 @@ aide() {
     h_titre "Dans le script   1 variables · 2 réglages · 3 commandes · 4 listes · 5 fonctions"
     printf '  %s"Titre|true|commande"%s   true = demander avant, false = lancer direct\n' "$C_PROG" "$C0"
     printf '  %s[[nom]]%s  une valeur demandée une fois       %s{{nom}}%s  l%sétape rejouée par valeur\n' "$C_PROG" "$C0" "$C_PROG" "$C0" "'"
-    printf '  Exemples et détails : TUTORIEL.md            Code de sortie : 1 s%sil reste un échec\n\n' "'"
+    h_titre "Listes toutes faites   section 7 du script, à appeler dans la section 4"
+    printf '  %slister_dossiers%s · %slister_fichiers%s · %slister_arbre%s  <racine> [motif...]\n' \
+           "$C_PROG" "$C0" "$C_PROG" "$C0" "$C_PROG" "$C0"
+    printf '  %slister_si_present%s <chemin...>   %slister_lignes%s <fichier>   %slister_utilisateurs%s\n' \
+           "$C_PROG" "$C0" "$C_PROG" "$C0" "$C_PROG" "$C0"
+    printf '\n  Exemples et détails : TUTORIEL.md            Code de sortie : 1 s%sil reste un échec\n\n' "'"
 }
 
 # ---------- --template : un fichier -c déduit des sections 1 et 2 ----------
@@ -378,7 +547,7 @@ gabarit() {
 }
 
 
-# --- 7.3 Arguments et configuration ----------------------------------
+# --- 8.3 Arguments et configuration ----------------------------------
 PRESETS=(); PRESETS_LISTE=(); SETS=()
 CONF=""; INTRO=""
 LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"; AIDE="false"; GABARIT="false"
@@ -501,7 +670,7 @@ TOTAL=${#COMMANDES[@]}
 LARG_NUM=${#TOTAL}; (( LARG_NUM < 2 )) && LARG_NUM=2
 
 
-# --- 7.4 Saisies et signaux ------------------------------------------
+# --- 8.4 Saisies et signaux ------------------------------------------
 # Les questions se lisent sur /dev/tty : l'entrée standard peut être
 # prise par une commande.
 if (exec 3< /dev/tty) 2>/dev/null; then ENTREE="/dev/tty"; INTERACTIF="oui"
@@ -595,7 +764,7 @@ quitter() {   # [code] — sans argument : 1 s'il y a déjà eu un échec
 }
 
 
-# --- 7.5 Valeurs, listes, emboîtement --------------------------------
+# --- 8.5 Valeurs, listes, emboîtement --------------------------------
 RE_SIMPLE='\[\[([a-zA-Z0-9_]+)\]\]'
 RE_LISTE='\{\{([a-zA-Z0-9_]+)\}\}'
 
@@ -895,7 +1064,7 @@ scanner_placeholders() {
 }
 
 
-# --- 7.6 Exécution ---------------------------------------------------
+# --- 8.6 Exécution ---------------------------------------------------
 analyser_validation() {   # "true,log" -> F_VALIDER F_LOG F_STOP F_CONTINU ; 1 si invalide
     local o; F_VALIDER=""; F_LOG=0; F_STOP=0; F_CONTINU=0; MSG_VALIDATION=""
     IFS=, read -r -a _opts <<< "${1,,}"
@@ -1008,7 +1177,7 @@ lister_iterations() {
 }
 
 
-# --- 7.7 Plan, récapitulatif, rapport --------------------------------
+# --- 8.7 Plan, récapitulatif, rapport --------------------------------
 RECAP=()                # "num|état|détail|titre"
 declare -A ENFANTS=()   # num -> itérations "état|détail|étiquette", séparées par \x01
 NB_OK=0; NB_KO=0; NB_PASSEES=0
@@ -1101,7 +1270,7 @@ ecrire_rapport() {
 }
 
 
-# --- 7.8 Contrôles de départ -----------------------------------------
+# --- 8.8 Contrôles de départ -----------------------------------------
 (( TOTAL > 0 )) || { erreur "le tableau COMMANDES est vide."; exit 1; }
 for e in "${COMMANDES[@]}"; do
     reste="${e#*|}"
@@ -1218,7 +1387,7 @@ journal "=== démarrage — $SUJET — par $OPERATEUR"
 plan_initial
 
 
-# --- 7.9 Boucle principale -------------------------------------------
+# --- 8.9 Boucle principale -------------------------------------------
 NUM=0; NB_FILTREES=0
 for entree in "${COMMANDES[@]}"; do
     NUM=$(( NUM + 1 ))
