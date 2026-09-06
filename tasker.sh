@@ -16,6 +16,13 @@
 #   Voir aussi TUTORIEL.md.
 #
 set -uo pipefail
+# DIR_xxx désigne vos dossiers de travail, et ce nom est courant : un DIR_
+# hérité du shell n'en est pas un. On l'écarte ICI, une fois, avant tout le
+# reste — après quoi tout DIR_ que le script voit vient de lui-même ou du
+# fichier -c. Effet de bord assumé : vos commandes n'héritent plus d'un DIR_
+# que vous auriez exporté pour elles.
+for _n in ${!DIR_@} ${!TK_DIR_@}; do unset "$_n"; done
+unset _n
 if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}" -lt 43 ]; then
     printf 'bash 4.3 ou plus est requis (trouvé : %s)\n' "${BASH_VERSION:-?}" >&2; exit 1
 fi
@@ -135,15 +142,6 @@ calculer_variables() {
     TK_PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
     DIR_LOGS="$SORTIE/logs"
 }
-
-# Défaire ce qu'une étape a mis en place — démonter une image, retirer un
-# fichier temporaire. Appelée en sortant, QUELLE QUE SOIT la sortie : fin
-# normale, « q », Ctrl-C, kill, erreur de configuration. Elle doit donc
-# supporter d'être appelée alors que rien n'a été fait : testez avant
-# d'agir. Un fichier -c ne peut pas poser son propre trap EXIT — la
-# mécanique remet les siens après chaque commande — c'est ce crochet qui
-# lui en tient lieu.
-nettoyer() { :; }
 
 # Contrôles avant de commencer : renvoyez 1 pour arrêter. Les dossiers et
 # les binaires de TK_REQUIS sont déjà vérifiés par ailleurs.
@@ -948,34 +946,31 @@ aide_outils() {
 
 aide_config() {
     h_titre "Le fichier -c"
-    h_ligne "Un nom en TK_ appartient au script : à remplir, jamais à supprimer"
-    h_ligne "ni à renommer. Un nom en _ est un rouage : le script s'en sert"
-    h_ligne "entre deux étapes. Le reste des noms est à vous."
-    h_vide
     h_ligne "Du shell, chargé après le script : il peut fixer les variables et"
-    h_ligne "redéfinir les quatre fonctions. Un squelette prêt à remplir :"
+    h_ligne "redéfinir les trois fonctions. Un squelette prêt à remplir :"
     h_code "./$NOM_SCRIPT -t > mon-cas.conf"
     h_code "./$NOM_SCRIPT -c mon-cas.conf"
     h_vide
     h_ligne "Priorité : valeurs du script < fichier -c < --set."
     h_ligne "Dans le fichier : return, jamais exit."
-    h_titre "Les quatre fonctions   sections 3, 4 et 6 du script"
+    h_titre "Les trois fonctions   sections 3, 4 et 6 du script"
     h_opt "calculer_variables" "appelée après -c et --set ; pose les noms ci-dessous"
     h_opt "verifier"           "contrôles de départ ; return 1 pour arrêter"
     h_opt "definir_commandes"  "remplit TK_COMMANDES et TK_LISTES"
-    h_opt "nettoyer"           "appelée en sortant, quelle que soit la sortie"
-    h_titre "Vos dossiers de travail   tout ce qui commence par DIR_"
+    h_titre "Vos dossiers   tout ce qui commence par DIR_"
     h_ligne "DIR_SORTIE, DIR_RAPPORTS, DIR_CE_QUE_VOUS_VOULEZ : vous nommez la"
     h_ligne "suite, le script crée le dossier et vérifie qu'il est inscriptible."
-    h_ligne "Ils sont à vous — d'où l'absence de TK_ : rien ne les impose, sauf"
-    h_ligne "DIR_LOGS, où vont le journal, le rapport et l'état de reprise."
+    h_ligne "Rien ne les impose — d'où l'absence de TK_ — sauf celui-ci :"
+    h_opt "DIR_LOGS"    "journal, rapport, état de reprise ; obligatoire"
+    h_ligne "Un DIR_ hérité de votre shell est écarté au démarrage : seuls"
+    h_ligne "comptent ceux du script et du fichier -c."
     h_titre "Les noms que le script exige   tout ce qui commence par TK_"
-    h_ligne "Vos commandes tournent dans le shell du script : un « NUM=1 » chez"
-    h_ligne "vous ne peut rien casser chez lui, ses noms à lui sont en _."
+    h_ligne "Ceux-là, il les attend sous ce nom précis. Vos commandes tournent"
+    h_ligne "dans son shell : un « NUM=1 » chez vous ne casse rien chez lui,"
+    h_ligne "ses rouages à lui sont en _."
     h_opt "TK_SUJET"    "titre court, en tête et au récapitulatif"
     h_opt "TK_DETAILS"  "lignes du bandeau, « clé=valeur » (clé sans accent)"
     h_opt "TK_PREFIX"   "préfixe des fichiers écrits"
-    h_opt "DIR_LOGS"   "journal, rapport, état ; obligatoire — voir DIR_xxx plus bas"
     h_opt "TK_INTRO"    "texte affiché après le bandeau (facultatif)"
     h_titre "Les réglages   section 2"
     h_opt "TK_REQUIS"         "binaires attendus, absents = avertissement : (du df)"
@@ -1231,14 +1226,13 @@ calculer_variables
 # Sans ces trois-là, la mécanique casserait bien plus loin, sur une
 # variable non définie, à un endroit qui n'aiderait personne. Le cas se
 # produit dès qu'un fichier -c redéfinit calculer_variables.
-# Les dossiers de travail s'appelaient TK_DIR_xxx : le préfixe TK_ est
-# réservé aux noms que le script exige, or ceux-là sont les vôtres — vous
-# les nommez, vous pouvez les retirer. Un fichier -c d'avant le changement
-# le lit ici, plutôt que par un « DIR_LOGS manquant » qui n'explique rien.
-_vieux=""
-for v in ${!TK_DIR_@}; do _vieux+=" ${v} -> ${v#TK_}"; done
-[[ -z "$_vieux" ]] || { erreur "les dossiers de travail ont perdu leur TK_ :$_vieux"
-    info "TK_ ne désigne plus que ce que le script exige ; un DIR_xxx est à vous."
+# Les dossiers de travail s'appelaient TK_DIR_xxx : TK_ est réservé aux noms
+# que le script exige, or ceux-là sont les vôtres. Un fichier -c d'avant le
+# changement le lit ici plutôt que par un « DIR_LOGS manquant » qui
+# n'explique rien.  (Passage de version : retirable une fois les fichiers -c
+# du parc convertis.)
+[[ -z "${!TK_DIR_*}" ]] || { erreur "les dossiers de travail ont perdu leur TK_ : ${!TK_DIR_*}"
+    info "retirez-le : TK_DIR_LOGS devient DIR_LOGS. TK_ ne désigne plus que ce que le script exige."
     exit 1; }
 
 for v in TK_SUJET TK_PREFIX DIR_LOGS; do
@@ -1921,7 +1915,7 @@ recap() {
     printf '  %sjournal  %s%s\n' "$ESTOMPE" "$_LOG" "$C0"
     ecrire_rapport
 }
-au_revoir() { restaurer_terminal; nettoyer; recap; }
+au_revoir() { restaurer_terminal; recap; }
 trap au_revoir EXIT
 
 # Au-delà de dix itérations, seules celles qui ont mal tourné sont montrées.
@@ -2055,9 +2049,6 @@ fi
 
 CREES=0
 for nom in ${!DIR_@}; do
-    # Un DIR_ venu de l'environnement n'est pas un de vos dossiers de travail :
-    # ceux du script et du fichier -c sont de simples variables du shell.
-    [[ "$(declare -p "$nom")" != "declare -x"* ]] || continue
     d="${!nom}"
     [[ -n "$d" ]] || { erreur "$nom est vide."; exit 1; }
     if [[ ! -d "$d" && "$_SIMULATION" != "true" ]]; then

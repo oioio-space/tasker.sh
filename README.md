@@ -33,7 +33,7 @@ jamais :
 | 3 | commandes | les étapes |
 | 4 | listes | les valeurs sur lesquelles une étape se répète |
 | 5 | fonctions | les vôtres, appelées par 3 et 4 |
-| 6 | chemins et contrôles | `calculer_variables`, `verifier`, `nettoyer` |
+| 6 | chemins et contrôles | `calculer_variables`, `verifier` |
 | 7 | boîte à outils | dix listes toutes faites : à appeler, pas à modifier |
 | 8 | mécanique | à ne pas toucher |
 
@@ -489,12 +489,9 @@ Trois préfixes, trois sens :
 | `DIR_` | **à vous** | un dossier de travail : vous nommez la suite, le script le crée et le vérifie |
 | `_` | à la mécanique | ce qu'elle garde d'une étape à l'autre — un `NUM=1` chez vous ne peut rien casser chez lui |
 
-Le reste des noms est à vous. `DIR_` n'a pas de `TK_` devant justement parce que
-ces dossiers ne sont pas au script : rien ne vous impose `DIR_TIMELINE` ni
-`DIR_STRINGS`, vous les inventez. Seul `DIR_LOGS` est obligatoire — c'est là que
-vont le journal, le rapport et l'état de reprise. Un `DIR_` venu de votre
-environnement est ignoré : seules les variables du script et du fichier `-c`
-comptent.
+Le reste des noms est à vous. Seul `DIR_LOGS` est obligatoire : c'est là que
+vont le journal, le rapport et l'état de reprise. Un `DIR_` hérité de votre
+shell est écarté au démarrage — vos commandes ne l'héritent plus non plus.
 
 ### Les réglages — section 2, ou votre fichier `-c`
 
@@ -521,24 +518,21 @@ Recalculée après `-c` et `--set`, pour que tout suive la dernière valeur.
 `TK_SUJET`, `TK_PREFIX` et `DIR_LOGS` sont obligatoires : le script refuse de
 partir sans.
 
-### Les quatre fonctions appelées par le script
+### Les trois fonctions appelées par le script
 
 | fonction | quand | ce qu'elle doit faire |
 |---|---|---|
 | `calculer_variables` | après `-c` et `--set` | poser les variables ci-dessus |
 | `verifier` | avant la première étape | vos contrôles ; `return 1` arrête tout |
 | `definir_commandes` | après `calculer_variables` | remplir `TK_COMMANDES` et `TK_LISTES` |
-| `nettoyer` | **en sortant, quelle que soit la sortie** | défaire ce qu'une étape a mis en place |
 
-Un fichier `-c` peut remplacer n'importe laquelle des quatre. S'il écrit
+Un fichier `-c` peut remplacer n'importe laquelle des trois. S'il écrit
 `TK_COMMANDES=(…)` directement, `definir_commandes` n'est pas appelée.
 
-`nettoyer` est appelée à la fin normale, sur `q`, sur Ctrl-C et sur un `kill` :
-c'est là qu'on démonte une image ou qu'on retire un fichier temporaire. Elle
-doit supporter d'être appelée alors que rien n'a été fait — testez avant
-d'agir. Un fichier `-c` ne peut pas poser son propre trap `EXIT` : la
-mécanique remet les siens après chaque commande, et ce crochet lui en tient
-lieu.
+Un fichier `-c` ne peut pas poser son propre trap `EXIT` — la mécanique remet
+les siens après chaque commande. Ce qu'une étape met en place, défaites-le donc
+dans une étape (`exemples/dd-linux-monte.conf` laisse pour cette raison le
+montage à l'opérateur).
 
 ### Ce que vous pouvez utiliser dans vos fonctions
 

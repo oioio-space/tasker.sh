@@ -180,8 +180,15 @@ TK_REQUIS=(mmls fls ils icat mactime testdisk photorec)
 
 `IMAGE`, `PC`, `SALLE`, `OS`, `BASE`, `TZ_MACTIME` sont des noms choisis
 ici : le script ne les connaît pas. Ceux qui commencent par `TK_` sont à
-lui — `TK_REQUIS` est vérifié au départ ; un binaire absent n'est qu'un
-avertissement, car on peut ne jouer qu'une partie des étapes.
+lui — il les attend sous ce nom précis ; `TK_REQUIS` est vérifié au départ,
+et un binaire absent n'est qu'un avertissement, car on peut ne jouer qu'une
+partie des étapes.
+
+Un troisième préfixe apparaît plus bas : `DIR_`. Ces dossiers-là sont à
+**vous** — vous choisissez la suite du nom, le script les crée et vérifie
+qu'ils sont inscriptibles. Ils n'ont pas de `TK_` justement parce que rien
+ne les impose : `DIR_CARVING` existe parce que ce cas-ci en a besoin. Seul
+`DIR_LOGS` est obligatoire.
 
 `TZ_MACTIME` : le fuseau du poste analysé, pas le vôtre, sinon la
 timeline ne correspondra ni aux journaux applicatifs ni aux témoignages.
@@ -196,7 +203,7 @@ calculer_variables() {
     TK_DETAILS=("image=$IMAGE" "fuseau=$TZ_MACTIME")    # lignes du bandeau
     TK_PREFIX="${PC}_${SALLE}_${OS}"                    # préfixe des fichiers écrits
     DEST="$BASE/$SALLE/$OS/$PC"
-    DIR_BODY="$DEST/body"                            # DIR_xxx : créés au besoin
+    DIR_BODY="$DEST/body"                # DIR_xxx : vos dossiers, créés au besoin
     DIR_TIMELINE="$DEST/timeline"
     DIR_CARVING="$DEST/carving"
     DIR_LOGS="$DEST/logs"                            # journal, rapport, état
