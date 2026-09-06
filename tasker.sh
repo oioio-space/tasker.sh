@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # tasker.sh — enchaîne des commandes, validées une à une.
-#     ./tasker.sh -h       aide          ./tasker.sh --demo   essai sans risque
+#     ./tasker.sh -h       aide          ./tasker.sh -l       voir le plan
 #
 #   1 VARIABLES · 2 COMMANDES · 3 LISTES · 4 CHEMINS · 5 FONCTIONS · 6 MÉCANIQUE
 #   Tout ce qui se modifie est dans les cinq premières. Voir aussi TUTORIEL.md.
@@ -95,7 +95,7 @@ calculer_variables() {
 # les binaires de REQUIS sont déjà vérifiés par ailleurs.
 verifier() {
     [[ -d "$DOSSIER" ]] || { erreur "dossier absent : $DOSSIER"
-        info "réglez DOSSIER en section 1, ou : --set DOSSIER=/chemin · -c fichier.conf · --demo pour essayer"
+        info "réglez DOSSIER en section 1, ou : --set DOSSIER=/chemin · -c fichier.conf"
         return 1; }
     return 0
 }
@@ -317,7 +317,6 @@ aide() {
     h_titre "Dialoguer"
     h_opt "-a, --ask"            "confirmer chaque étape, même les « false »"
     h_opt "-y, --yes"            "ne rien demander (sudo ? faites « sudo -v » avant)"
-    h_opt "    --demo"           "essai dans un bac à sable, sans rien installer"
     h_opt "    --color MODE"     "auto, always ou never  ·  --no-color"
     h_opt "-h, --help"           "cette aide"
     h_titre "Pendant l'exécution"
@@ -405,7 +404,6 @@ while (( $# > 0 )); do
         -l|--plan)         LISTER_ETAPES="true"; shift ;;
         -r|--resume)       REPRENDRE="true";     shift ;;
         --vars)            LISTER_VARS="true";   shift ;;
-        --demo)            CONF="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/exemples/demo.conf"; shift ;;
         --no-color)        COULEUR="non";        shift ;;
         -D|--var)          exige_valeur "$1" "${2:-}"; PRESETS+=("$2");       shift 2 ;;
         --var=*)           PRESETS+=("${1#*=}");                              shift ;;
@@ -432,7 +430,7 @@ init_affichage
 [[ "$AIDE" == "true" ]] && { aide; exit 0; }
 
 # Le fichier -c est du shell : il peut fixer les variables, mais aussi
-# redéfinir definir_commandes et ajouter des fonctions (voir exemples/demo.conf).
+# redéfinir definir_commandes et ajouter des fonctions (voir exemples/).
 if [[ -n "$CONF" ]]; then
     [[ -r "$CONF" ]] || { erreur "configuration illisible : $CONF"; exit 1; }
     bash -n "$CONF" 2>/dev/null || { erreur "erreur de syntaxe dans $CONF"; bash -n "$CONF"; exit 1; }

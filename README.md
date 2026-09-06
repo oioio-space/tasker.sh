@@ -4,7 +4,6 @@ Enchaîne des commandes, **validées une à une**. Un tableau de lignes, un
 journal, et de quoi répéter une étape sur une liste de valeurs.
 
 ```bash
-./tasker.sh --demo      # essayer, sans rien installer
 ./tasker.sh -h          # l'aide
 ./tasker.sh -l          # voir le plan sans rien lancer
 ./tasker.sh             # lancer
@@ -291,7 +290,6 @@ DOSSIER="/srv/autre"
 
 | fichier fourni | contenu |
 |---|---|
-| `exemples/demo.conf` | le bac à sable de `--demo` |
 | `exemples/forensic.conf` | analyse d'une image disque : menus, listes emboîtées, fonctions |
 | `exemples/pc07.conf` | `source forensic.conf` + six variables |
 
@@ -373,7 +371,6 @@ valeurs.
 | `-a`, `--ask` | | confirmer chaque étape, même les `false` |
 | `-y`, `--yes` | | ne rien demander |
 | `--color` | `auto` `always` `never` | couleur ; `--no-color` = `never` ; la variable `NO_COLOR` est respectée |
-| `--demo` | | bac à sable |
 
 ```bash
 ./tasker.sh -yn                    # options combinées

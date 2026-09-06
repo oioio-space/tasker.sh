@@ -477,5 +477,5 @@ sauvegarde, une batterie de tests, une installation. Ce qu'il faut :
 4. `definir_commandes` avec `COMMANDES` et `LISTES` ;
 5. vos fonctions.
 
-`./tasker.sh -t > mon-cas.conf` écrit le squelette des variables ;
-`exemples/demo.conf` montre le tout en quarante lignes, sans outil externe.
+`./tasker.sh -t > mon-cas.conf` écrit le squelette des variables ; le § 3
+montre le reste sur un cas complet.
