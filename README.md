@@ -12,6 +12,19 @@ journal, et de quoi répéter une étape sur une liste de valeurs.
 Prérequis : bash 4.3 (sur macOS : `brew install bash`, puis `/opt/homebrew/bin/bash tasker.sh`).
 Pour comprendre en profondeur : **[TUTORIEL.md](TUTORIEL.md)**.
 
+Le script est rangé de ce qu'on retouche le plus vers ce qu'on ne touche
+jamais :
+
+| | section | ce qu'on y met |
+|---|---|---|
+| 1 | variables | ce qui change d'un usage à l'autre |
+| 2 | réglages | posés une fois : `REQUIS`, `OPERATEUR`, `TOUT_VALIDER`, `MAX_ITERATIONS` |
+| 3 | commandes | les étapes |
+| 4 | listes | les valeurs sur lesquelles une étape se répète |
+| 5 | fonctions | ce que 3 et 4 appellent |
+| 6 | chemins et contrôles | `calculer_variables`, `verifier` |
+| 7 | mécanique | à ne pas toucher |
+
 ---
 
 ## Une étape
@@ -46,7 +59,7 @@ Pas de `|` dans le titre. Ceux de la commande sont libres.
 
 ```bash
 DOSSIER="/srv/data"                       # section 1
-"Contenu|true|ls -la '$DOSSIER'"          # section 2
+"Contenu|true|ls -la '$DOSSIER'"          # section 3
 ```
 
 Une variable qui naît **pendant** la commande s'échappe :
@@ -86,7 +99,7 @@ Toujours entre apostrophes : `'{{nom}}'`.
 
 ---
 
-## Les listes (section 3)
+## Les listes (section 4)
 
 Une liste = un nom, et une commande qui écrit **une valeur par ligne**.
 
@@ -261,11 +274,11 @@ OPERATEUR="M. Dupont"
 ```bash
 ./tasker.sh -c poste.conf
 ./tasker.sh -c poste.conf -s DOSSIER=/autre     # surcharge ponctuelle
-./tasker.sh -t > poste.conf                     # gabarit des variables de la section 1
+./tasker.sh -t > poste.conf                     # gabarit des variables du script
 ./tasker.sh -c cas.conf -t > poste2.conf        # gabarit d'un cas : « source cas.conf » + ses variables
 ```
 
-Priorité : section 1 &lt; fichier `-c` &lt; `--set`. Un tableau (`REQUIS`)
+Priorité : valeurs du script &lt; fichier `-c` &lt; `--set`. Un tableau (`REQUIS`)
 ne se change que dans le fichier, pas par `--set`. Dans le fichier,
 `return` et jamais `exit` : `exit` tuerait le script, et il est refusé.
 
@@ -300,7 +313,7 @@ DOSSIER="/srv/autre"
 Les noms de vos variables sont libres, **sauf ceux-ci**. Le script les lit ;
 ne les supprimez pas, renommez-les encore moins.
 
-### Dans la section 1
+### Les réglages — section 2, ou votre fichier `-c`
 
 | variable | rôle | valeurs |
 |---|---|---|
@@ -310,7 +323,7 @@ ne les supprimez pas, renommez-les encore moins.
 | `REQUIS` | binaires vérifiés au départ ; absents = avertissement | tableau : `(du df)` |
 | `INTRO` | texte affiché après le bandeau (facultatif) | texte, plusieurs lignes possibles |
 
-### Dans `calculer_variables` (section 4)
+### Dans `calculer_variables` (section 6)
 
 Recalculée après `-c` et `--set`, pour que tout suive la dernière valeur.
 
@@ -358,7 +371,7 @@ valeurs.
 | option | valeur | effet |
 |---|---|---|
 | `-c`, `--config` | fichier | variables et commandes lues dans un fichier |
-| `-s`, `--set` | `NOM=valeur` | fixer une variable de la section 1 |
+| `-s`, `--set` | `NOM=valeur` | fixer une variable des sections 1 et 2 |
 | `-D`, `--var` | `nom=valeur` | répondre d'avance à `[[nom]]` |
 | `--list` | `nom=a,b,c` | figer `{{nom}}` sur ces valeurs |
 | `--vars` | | montrer les `[[ ]]` et `{{ }}` attendus |

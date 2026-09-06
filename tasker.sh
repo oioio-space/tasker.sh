@@ -3,8 +3,9 @@
 # tasker.sh — enchaîne des commandes, validées une à une.
 #     ./tasker.sh -h       aide          ./tasker.sh -l       voir le plan
 #
-#   1 VARIABLES · 2 COMMANDES · 3 LISTES · 4 CHEMINS · 5 FONCTIONS · 6 MÉCANIQUE
-#   Tout ce qui se modifie est dans les cinq premières. Voir aussi TUTORIEL.md.
+#   Sections, de la plus retouchée à la moins retouchée :
+#   1 VARIABLES · 2 RÉGLAGES · 3 COMMANDES · 4 LISTES · 5 FONCTIONS
+#   6 CHEMINS ET CONTRÔLES · 7 MÉCANIQUE     Voir aussi TUTORIEL.md.
 #
 set -uo pipefail
 if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}" -lt 43 ]; then
@@ -13,18 +14,24 @@ fi
 
 
 # =====================================================================
-# 1. VARIABLES     aussi : -c fichier.conf, ou --set NOM=valeur
+# 1. VARIABLES     ce qui change d'un usage à l'autre
+#                  aussi : -c fichier.conf, ou --set NOM=valeur
 # =====================================================================
 DOSSIER="$HOME"                # ce sur quoi on travaille
 SORTIE="${TMPDIR:-/tmp}/tasker" # où écrire journal et rapport
-OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # noté dans le journal et le rapport
-TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -a)
-MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
-REQUIS=(du df)                 # binaires attendus ; absents = avertissement
 
 
 # =====================================================================
-# 2. COMMANDES     "Titre|validation|commande"
+# 2. RÉGLAGES      posés une fois, rarement retouchés
+# =====================================================================
+REQUIS=(du df)                 # binaires attendus ; absents = avertissement
+OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # noté dans le journal et le rapport
+TOUT_VALIDER="false"           # true = confirmer chaque étape (ou -a)
+MAX_ITERATIONS=500             # au-delà, une étape répétée est tronquée
+
+
+# =====================================================================
+# 3. COMMANDES     "Titre|validation|commande"
 #
 #   validation  true = demander avant de lancer, false = lancer direct ;
 #               puis, séparées par des virgules : log (sortie au journal),
@@ -51,7 +58,7 @@ COMMANDES=(
 
 
 # =====================================================================
-# 3. LISTES        "nom|commande qui écrit une valeur par ligne"
+# 4. LISTES        "nom|commande qui écrit une valeur par ligne"
 #
 #   [[nom]] dans une commande -> menu numéroté, une valeur choisie
 #   {{nom}} dans une commande -> l'étape est rejouée pour chaque valeur
@@ -70,34 +77,6 @@ LISTES=(
 "taille|printf '%s\t%s\n' 1M 'un mégaoctet' 10M 'dix mégaoctets' 100M 'cent mégaoctets'"
 )
 
-}
-
-
-# =====================================================================
-# 4. CHEMINS ET CONTRÔLES     ce que la mécanique attend de vous
-# =====================================================================
-
-# Recalculé après -c et --set. Quatre noms sont attendus, le reste vous
-# appartient :
-#   SUJET    titre court, en tête et au récapitulatif
-#   DETAILS  lignes du bandeau de départ, "clé=valeur" (clé sans accent)
-#   PREFIX   préfixe des fichiers écrits
-#   DIR_xxx  dossiers de travail, vérifiés et créés au besoin.
-#            DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
-calculer_variables() {
-    SUJET="${DOSSIER##*/}"
-    DETAILS=("dossier=$DOSSIER")
-    PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
-    DIR_LOGS="$SORTIE/logs"
-}
-
-# Contrôles avant de commencer : renvoyez 1 pour arrêter. Les dossiers et
-# les binaires de REQUIS sont déjà vérifiés par ailleurs.
-verifier() {
-    [[ -d "$DOSSIER" ]] || { erreur "dossier absent : $DOSSIER"
-        info "réglez DOSSIER en section 1, ou : --set DOSSIER=/chemin · -c fichier.conf"
-        return 1; }
-    return 0
 }
 
 
@@ -125,10 +104,38 @@ lister_dossiers() {
 
 
 # =====================================================================
-# 6. MÉCANIQUE
+# 6. CHEMINS ET CONTRÔLES     ce que la mécanique attend de vous
 # =====================================================================
 
-# --- 5.1 Affichage ---------------------------------------------------
+# Recalculé après -c et --set. Quatre noms sont attendus, le reste vous
+# appartient :
+#   SUJET    titre court, en tête et au récapitulatif
+#   DETAILS  lignes du bandeau de départ, "clé=valeur" (clé sans accent)
+#   PREFIX   préfixe des fichiers écrits
+#   DIR_xxx  dossiers de travail, vérifiés et créés au besoin.
+#            DIR_LOGS reçoit le journal, le rapport et l'état de reprise.
+calculer_variables() {
+    SUJET="${DOSSIER##*/}"
+    DETAILS=("dossier=$DOSSIER")
+    PREFIX="$(printf '%s' "${DOSSIER##*/}" | tr -c 'A-Za-z0-9._-' '_')"
+    DIR_LOGS="$SORTIE/logs"
+}
+
+# Contrôles avant de commencer : renvoyez 1 pour arrêter. Les dossiers et
+# les binaires de REQUIS sont déjà vérifiés par ailleurs.
+verifier() {
+    [[ -d "$DOSSIER" ]] || { erreur "dossier absent : $DOSSIER"
+        info "réglez DOSSIER en section 1, ou : --set DOSSIER=/chemin · -c fichier.conf"
+        return 1; }
+    return 0
+}
+
+
+# =====================================================================
+# 7. MÉCANIQUE
+# =====================================================================
+
+# --- 7.1 Affichage ---------------------------------------------------
 COULEUR="auto"
 LARGEUR=80
 NOM_SCRIPT="${0##*/}"
@@ -288,7 +295,7 @@ menu() {   # clé=texte ... — la première clé est celle de la touche Entrée
 invite() { printf '  %s›%s ' "$GRAS" "$C0"; }
 
 
-# --- 5.2 Aide --------------------------------------------------------
+# --- 7.2 Aide --------------------------------------------------------
 # L'aide : option en cyan, touches en gras, rien d'autre.
 h_titre() { printf '\n%s%s%s\n' "$GRAS" "$1" "$C0"; }
 h_opt()   { printf '  %s%-26s%s %s\n' "$C_PROG" "$1" "$C0" "$2"; }          # -x, --xx VALEUR   explication
@@ -304,7 +311,7 @@ aide() {
     h_titre "Configurer"
     h_opt "-c, --config FICHIER" "variables lues dans un fichier"
     h_opt "-t, --template"       "écrire un fichier -c prêt à compléter (sur la sortie standard)"
-    h_opt "-s, --set NOM=valeur" "fixer une variable de la section 1"
+    h_opt "-s, --set NOM=valeur" "fixer une variable des sections 1 et 2"
     h_opt "-D, --var nom=valeur" "répondre d'avance à une question [[nom]]"
     h_opt "    --list nom=a,b"   "figer une liste {{nom}}"
     h_opt "    --vars"           "montrer les questions et listes attendues"
@@ -326,14 +333,14 @@ aide() {
     h_cle "Ctrl-C"          "=interrompt la commande ; à une question, arrête le script"
     printf '  %-16s %s à faire  %s en cours  %s réussie  %s échec  %s passée  %s interrompue  %s simulée\n' "marques" \
            "$(glyphe todo)" "$(glyphe cours)" "$(glyphe ok)" "$(glyphe ko)" "$(glyphe skip)" "$(glyphe int)" "$(glyphe sim)"
-    h_titre "Dans le script   1 variables · 2 commandes · 3 listes · 4 chemins · 5 fonctions"
+    h_titre "Dans le script   1 variables · 2 réglages · 3 commandes · 4 listes · 5 fonctions"
     printf '  %s"Titre|true|commande"%s   true = demander avant, false = lancer direct\n' "$C_PROG" "$C0"
     printf '  %s[[nom]]%s  une valeur demandée une fois       %s{{nom}}%s  l%sétape rejouée par valeur\n' "$C_PROG" "$C0" "$C_PROG" "$C0" "'"
     printf '  Exemples et détails : TUTORIEL.md            Code de sortie : 1 s%sil reste un échec\n\n' "'"
 }
 
-# ---------- --template : un fichier -c déduit de la section 1 du script ----------
-# On relit la section 1 de ce fichier même : si vous y ajoutez ou renommez
+# ---------- --template : un fichier -c déduit des sections 1 et 2 ----------
+# On relit ces sections de ce fichier même : si vous y ajoutez ou renommez
 # une variable, le gabarit suit. La valeur écrite est la valeur courante,
 # donc « -c pc07.conf --template » donne un gabarit pré-rempli.
 gabarit() {
@@ -345,7 +352,7 @@ gabarit() {
     printf '# On peut aussi y redéfinir calculer_variables, verifier ou\n'
     printf '# definir_commandes : voir exemples/.\n\n'
     # Généré depuis un fichier -c : on en hérite, et ce sont SES variables
-    # qui sont proposées — celles de la section 1 ne le concernent pas.
+    # qui sont proposées — celles du script ne le concernent pas.
     if [[ -n "$CONF" ]]; then
         printf 'source "%s"\n\n' "$(readlink -f "$CONF" 2>/dev/null || printf '%s' "$CONF")"
     fi
@@ -366,12 +373,12 @@ gabarit() {
         [[ -z "${deja[$nom]:-}" ]] || continue; deja[$nom]=1
         if [[ -n "$com" ]]; then printf '%-30s # %s\n' "$nom=$val" "$com"; else printf '%s=%s\n' "$nom" "$val"; fi
     done < <(if [[ -n "$CONF" ]]; then sed '/^[a-zA-Z_][a-zA-Z0-9_]*() *{/,$d' "$CONF" | grep -E '^[A-Za-z_][A-Za-z0-9_]*='
-             else sed -n '/^# 1\. VARIABLES/,/^# 2\. COMMANDES/p' "$src"; fi)
-    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre « # 1. VARIABLES » et « # 2. COMMANDES » dans $src}"
+             else sed -n '/^# 1\. VARIABLES/,/^# 3\. COMMANDES/p' "$src"; fi)
+    (( ${#deja[@]} > 0 )) || erreur "aucune variable trouvée ${CONF:+dans $CONF}${CONF:-entre « # 1. VARIABLES » et « # 3. COMMANDES » dans $src}"
 }
 
 
-# --- 5.3 Arguments et configuration ----------------------------------
+# --- 7.3 Arguments et configuration ----------------------------------
 PRESETS=(); PRESETS_LISTE=(); SETS=()
 CONF=""; INTRO=""
 LISTER_VARS="false"; LISTER_ETAPES="false"; SIMULATION="false"; AIDE="false"; GABARIT="false"
@@ -441,12 +448,12 @@ if [[ -n "$CONF" ]]; then
     # shellcheck disable=SC1090
     source "$CONF" || { erreur "échec du chargement de $CONF"; exit 1; }
 fi
-# --set NOM=valeur : n'importe quelle variable de la section 1. On exige
+# --set NOM=valeur : n'importe quelle variable des sections 1 et 2. On exige
 # qu'elle existe déjà, sinon une faute de frappe passerait inaperçue.
 for e in ${SETS[@]+"${SETS[@]}"}; do
     k="${e%%=*}"
     [[ "$e" == *=* && "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { erreur "--set attend NOM=valeur : $e"; exit 1; }
-    decl="$(declare -p "$k" 2>/dev/null)" || { erreur "--set : aucune variable « $k » en section 1"; exit 1; }
+    decl="$(declare -p "$k" 2>/dev/null)" || { erreur "--set : aucune variable « $k » en section 1 ni 2"; exit 1; }
     [[ "$decl" != "declare -a"* && "$decl" != "declare -A"* ]] || { erreur "--set : « $k » est un tableau, modifiez-le dans le fichier -c"; exit 1; }
     printf -v "$k" '%s' "${e#*=}" 2>/dev/null \
         || { erreur "--set : « $k » ne peut pas être modifiée (lecture seule ?)"; exit 1; }
@@ -470,7 +477,7 @@ calculer_variables
 # variable non définie, à un endroit qui n'aiderait personne. Le cas se
 # produit dès qu'un fichier -c redéfinit calculer_variables.
 for v in SUJET PREFIX DIR_LOGS; do
-    [[ -n "${!v:-}" ]] || { erreur "calculer_variables doit définir $v (section 4, ou votre fichier -c)"; exit 1; }
+    [[ -n "${!v:-}" ]] || { erreur "calculer_variables doit définir $v (section 6, ou votre fichier -c)"; exit 1; }
 done
 [[ "$PREFIX" != */* ]] || { erreur "PREFIX ne peut pas contenir de / : $PREFIX"; exit 1; }
 
@@ -485,7 +492,7 @@ if declare -p COMMANDES >/dev/null 2>&1; then
 else
     if ! _err="$( (definir_commandes) 2>&1 )"; then
         erreur "impossible de construire COMMANDES : ${_err##*: }"
-        info "une variable utilisée en section 2 ou 3 n'existe pas — votre fichier -c redéfinit calculer_variables sans definir_commandes ?"
+        info "une variable utilisée en section 3 ou 4 n'existe pas — votre fichier -c redéfinit calculer_variables sans definir_commandes ?"
         exit 1
     fi
     definir_commandes
@@ -494,7 +501,7 @@ TOTAL=${#COMMANDES[@]}
 LARG_NUM=${#TOTAL}; (( LARG_NUM < 2 )) && LARG_NUM=2
 
 
-# --- 5.4 Saisies et signaux ------------------------------------------
+# --- 7.4 Saisies et signaux ------------------------------------------
 # Les questions se lisent sur /dev/tty : l'entrée standard peut être
 # prise par une commande.
 if (exec 3< /dev/tty) 2>/dev/null; then ENTREE="/dev/tty"; INTERACTIF="oui"
@@ -588,7 +595,7 @@ quitter() {   # [code] — sans argument : 1 s'il y a déjà eu un échec
 }
 
 
-# --- 5.5 Valeurs, listes, emboîtement --------------------------------
+# --- 7.5 Valeurs, listes, emboîtement --------------------------------
 RE_SIMPLE='\[\[([a-zA-Z0-9_]+)\]\]'
 RE_LISTE='\{\{([a-zA-Z0-9_]+)\}\}'
 
@@ -661,7 +668,7 @@ generer_liste() {
         return 0
     fi
     [[ -n "${GENERATEUR[$nom]:-}" ]] || {
-        erreur "aucune liste « $nom » en section 3 (voir --vars)"
+        erreur "aucune liste « $nom » en section 4 (voir --vars)"
         info "si {{$nom}} n'était pas censé être une liste, doublez l'accolade autrement"
         return 1; }
 
@@ -839,7 +846,7 @@ _expanser() {
     fi
     cible="$(liste_a_parcourir "${BASH_REMATCH[1]}")" || return 1
     [[ -n "${GENERATEUR[$cible]:-}${LISTE_FIGEE[$cible]:-}" ]] || {
-        erreur "aucune liste « $cible » en section 3 (voir --vars)"; return 1; }
+        erreur "aucune liste « $cible » en section 4 (voir --vars)"; return 1; }
     generer_liste "$cible"; rc=$?
     if (( rc == 2 )); then
         # Branche sans valeur : zéro itération ici, et c'est tout. Au
@@ -888,7 +895,7 @@ scanner_placeholders() {
 }
 
 
-# --- 5.6 Exécution ---------------------------------------------------
+# --- 7.6 Exécution ---------------------------------------------------
 analyser_validation() {   # "true,log" -> F_VALIDER F_LOG F_STOP F_CONTINU ; 1 si invalide
     local o; F_VALIDER=""; F_LOG=0; F_STOP=0; F_CONTINU=0; MSG_VALIDATION=""
     IFS=, read -r -a _opts <<< "${1,,}"
@@ -988,7 +995,7 @@ resume_iterations() {
     printf '  %s↻  étape répétée%s — %s%d itération%s%s\n' "$C_BOUCLE" "$C0" "$GRAS" "$n" "$(pluriel "$n")" "$C0"
     for (( i = 0; i < n && i < max; i++ )); do printf '     %s%2d%s  %s%s%s\n' "$ESTOMPE" $(( i + 1 )) "$C0" "$C_BOUCLE" "${EXP_LABELS[$i]}" "$C0"; done
     (( n > max )) && printf '     %s..  et %d autre%s — « l » pour tout voir%s\n' "$ESTOMPE" $(( n - max )) "$(pluriel "$(( n - max ))")" "$C0"
-    (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itérations atteinte, liste tronquée (MAX_ITERATIONS, section 1)"
+    (( EXP_TRONQUE )) && attention "limite de $MAX_ITERATIONS itérations atteinte, liste tronquée (MAX_ITERATIONS, section 2)"
     return 0
 }
 lister_iterations() {
@@ -1001,7 +1008,7 @@ lister_iterations() {
 }
 
 
-# --- 5.7 Plan, récapitulatif, rapport --------------------------------
+# --- 7.7 Plan, récapitulatif, rapport --------------------------------
 RECAP=()                # "num|état|détail|titre"
 declare -A ENFANTS=()   # num -> itérations "état|détail|étiquette", séparées par \x01
 NB_OK=0; NB_KO=0; NB_PASSEES=0
@@ -1094,7 +1101,7 @@ ecrire_rapport() {
 }
 
 
-# --- 5.8 Contrôles de départ -----------------------------------------
+# --- 7.8 Contrôles de départ -----------------------------------------
 (( TOTAL > 0 )) || { erreur "le tableau COMMANDES est vide."; exit 1; }
 for e in "${COMMANDES[@]}"; do
     reste="${e#*|}"
@@ -1211,7 +1218,7 @@ journal "=== démarrage — $SUJET — par $OPERATEUR"
 plan_initial
 
 
-# --- 5.9 Boucle principale -------------------------------------------
+# --- 7.9 Boucle principale -------------------------------------------
 NUM=0; NB_FILTREES=0
 for entree in "${COMMANDES[@]}"; do
     NUM=$(( NUM + 1 ))
