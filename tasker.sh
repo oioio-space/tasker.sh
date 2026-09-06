@@ -1126,10 +1126,10 @@ if [[ "$LISTER_VARS" == "true" ]]; then
     (( ${#PH_SIMPLES[@]} + ${#PH_LISTES[@]} > 0 )) || info "aucune valeur à fournir."
     for i in ${PH_SIMPLES[@]+"${!PH_SIMPLES[@]}"}; do
         printf '  %s[[%s]]%s  %s%s · %s %s%s\n' "$CYAN" "${PH_SIMPLES[$i]}" "$C0" "$ESTOMPE" \
-               "$( [[ -n "${GENERATEUR[${PH_SIMPLES[$i]}]:-}" ]] && printf menu || printf saisie)" "$(etapes_mot "${USAGE_SIMPLES[$i]}")" "${USAGE_SIMPLES[$i]}" "$C0"
+               "$( [[ -n "${GENERATEUR[${PH_SIMPLES[$i]}]:-}" ]] && printf menu || printf saisie)" "$(etapes_mot "${USAGE_SIMPLES[$i]}")" "$(sans_et "${USAGE_SIMPLES[$i]}")" "$C0"
     done
     for i in ${PH_LISTES[@]+"${!PH_LISTES[@]}"}; do
-        printf '  %s{{%s}}%s  %s%s %s%s\n         %s\n' "$MAGENTA" "${PH_LISTES[$i]}" "$C0" "$ESTOMPE" "$(etapes_mot "${USAGE_LISTES[$i]}")" "${USAGE_LISTES[$i]}" "$C0" "${GENERATEUR[${PH_LISTES[$i]}]:-(figée)}"
+        printf '  %s{{%s}}%s  %s%s %s%s\n         %s\n' "$MAGENTA" "${PH_LISTES[$i]}" "$C0" "$ESTOMPE" "$(etapes_mot "${USAGE_LISTES[$i]}")" "$(sans_et "${USAGE_LISTES[$i]}")" "$C0" "${GENERATEUR[${PH_LISTES[$i]}]:-(figée)}"
     done
     printf '\n  %s--var nom=valeur répond à une [[question]], --list nom=a,b fige une {{liste}}%s\n\n' "$ESTOMPE" "$C0"
     exit 0
