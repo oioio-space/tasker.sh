@@ -10,7 +10,8 @@ journal, et de quoi répéter une étape sur une liste de valeurs.
 ./tasker.sh             # lancer
 ```
 
-Prérequis : bash 4.3. Pour comprendre en profondeur : **[TUTORIEL.md](TUTORIEL.md)**.
+Prérequis : bash 4.3 (sur macOS : `brew install bash`, puis `/opt/homebrew/bin/bash tasker.sh`).
+Pour comprendre en profondeur : **[TUTORIEL.md](TUTORIEL.md)**.
 
 ---
 
@@ -140,6 +141,9 @@ Ajoutez une liste **du même nom**, la question devient un menu :
 | `p` | passe l'étape |
 | `q` | quitte |
 
+Après `a`, `p` et `q` redeviennent des valeurs ordinaires : une valeur
+qui s'appelle `p` se tape `a` puis `p`.
+
 La valeur choisie est **mémorisée** : toutes les étapes qui contiennent
 `[[jours]]` l'utilisent sans redemander. Pour la fournir d'avance :
 `./tasker.sh -D jours=7`. Pour tout ressaisir sur une étape : `r`.
@@ -212,6 +216,16 @@ Sans tabulation, `{{nom_libelle}}` vaut simplement la valeur.
 
 Une liste vide n'est pas une erreur : la branche ne produit rien.
 
+### Figer une liste, voir ce qui sera demandé
+
+```bash
+./tasker.sh --list sousdossier=/home/alice,/home/bruno   # sans interroger la commande
+./tasker.sh --vars                                       # les [[ ]] et {{ }} attendus, et leur source
+```
+
+Au récapitulatif, au-delà de dix itérations, seules celles qui ont mal
+tourné sont détaillées, suivies de « … et N itérations réussies ».
+
 ### Écrire une fonction de liste
 
 ```bash
@@ -244,8 +258,13 @@ OPERATEUR="M. Dupont"
 ```bash
 ./tasker.sh -c poste.conf
 ./tasker.sh -c poste.conf -s DOSSIER=/autre     # surcharge ponctuelle
-./tasker.sh -t > poste.conf                     # gabarit à compléter
+./tasker.sh -t > poste.conf                     # gabarit des variables de la section 1
+./tasker.sh -c cas.conf -t > poste2.conf        # gabarit d'un cas : « source cas.conf » + ses variables
 ```
+
+Priorité : section 1 &lt; fichier `-c` &lt; `--set`. Un tableau (`REQUIS`)
+ne se change que dans le fichier, pas par `--set`. Dans le fichier,
+`return` et jamais `exit` : `exit` tuerait le script, et il est refusé.
 
 Un jeu d'étapes complet, sans copier le script :
 
@@ -343,13 +362,13 @@ valeurs.
 | `--vars` | | montrer les `[[ ]]` et `{{ }}` attendus |
 | `-t`, `--template` | | écrire un fichier `-c` sur la sortie standard |
 | `-l`, `--plan` | | le plan, sans rien lancer |
-| `-n`, `--dry-run` | | tout afficher, rien exécuter |
+| `-n`, `--dry-run` | | tout afficher, rien exécuter — sauf les commandes de `LISTES`, lancées pour annoncer les itérations |
 | `-o`, `--only` | `2,5-7` | ne jouer que ces étapes |
 | `-f`, `--from` | `4` | partir de l'étape 4 |
 | `-r`, `--resume` | | sauter les étapes déjà réussies |
 | `-a`, `--ask` | | confirmer chaque étape, même les `false` |
 | `-y`, `--yes` | | ne rien demander |
-| `--color` | `auto` `always` `never` | couleur ; `--no-color` = `never` |
+| `--color` | `auto` `always` `never` | couleur ; `--no-color` = `never` ; la variable `NO_COLOR` est respectée |
 | `--demo` | | bac à sable |
 
 ```bash
@@ -382,10 +401,22 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 | `p` | passer l'étape |
 | `q` | quitter |
 
-| Ctrl-C | |
+| dans une étape répétée | |
 |---|---|
-| pendant une commande | l'interrompt ; le script demande si l'on continue |
-| pendant une question | arrête le script, avec le récapitulatif |
+| `t` | *(après `u`)* enchaîner le reste sans redemander |
+| `q` | *(après `u`)* arrêter la boucle, passer à l'étape suivante |
+| `Entrée` / `t` / `n` / `q` | *(après un échec)* continuer · continuer sans redemander · arrêter la boucle · quitter |
+
+| après un échec ou une interruption | |
+|---|---|
+| `Continuer quand même ? [O/n]` | `Entrée` continue, `n` arrête le script |
+| `Passer à l'étape suivante ? [O/n]` | après un Ctrl-C sur la commande |
+
+| Ctrl-C, Ctrl-D | |
+|---|---|
+| Ctrl-C pendant une commande | l'interrompt ; le script demande si l'on continue |
+| Ctrl-C pendant une question | arrête le script, avec le récapitulatif |
+| Ctrl-D à une question | arrête le script : plus personne au clavier |
 
 ---
 
@@ -406,10 +437,14 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 ## Ce qui est écrit
 
 ```
-<DIR_LOGS>/<PREFIX>_script.log     chaque commande, code, durée
-<DIR_LOGS>/<PREFIX>_rapport.txt    le récapitulatif
+<DIR_LOGS>/<PREFIX>_script.log     chaque commande, code, durée ; s'allonge à chaque exécution
+<DIR_LOGS>/<PREFIX>_rapport.txt    le récapitulatif, réécrit à chaque exécution
 <DIR_LOGS>/<PREFIX>_etat.txt       les étapes réussies (pour -r)
 ```
+
+`-r` reconnaît une étape à l'empreinte de son titre **et** de sa commande :
+modifiez la commande, elle sera rejouée. Deux étapes identiques ont deux
+empreintes.
 
 ---
 
@@ -427,7 +462,10 @@ Code de sortie : `0` si tout est passé, `1` s'il reste un échec.
 
 ## Limites
 
-* Les commandes passent par `eval` : n'y mettez que les vôtres.
+* Les commandes passent par `eval`, dans le shell du script : n'y mettez
+  que les vôtres. `set -u` est actif : une variable non définie arrête
+  l'étape. Un `cd` persiste jusqu'à la fin ; `set -e`, `IFS` et les traps
+  sont remis après chaque commande.
 * `head` derrière un `tee` ferme le tube : code 141. Utilisez `tail`.
 * Pas de commande interactive avec `log`.
 * Une commande de `LISTES` ne lit pas le clavier.
