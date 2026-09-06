@@ -1,337 +1,468 @@
-# tasker.sh — comprendre en dix minutes
+# tasker.sh — le cas forensique, pas à pas
 
-Ce document part de zéro et va jusqu'aux boucles emboîtées. Chaque exemple
-est **exécutable tel quel**.
+On a une image disque, `pc07.dd`. On veut sa table des partitions, une
+timeline des fichiers, un inventaire par utilisateur, et récupérer les
+fichiers effacés. Ce document déroule `exemples/forensic.conf` ligne à
+ligne : ce qu'on tape, ce qui s'affiche, et pourquoi c'est écrit ainsi.
 
----
-
-## 0. Voir avant de lire
-
-```bash
-./tasker.sh --demo
-```
-
-Rien à installer : le script fabrique un bac à sable dans `/tmp` et y
-rejoue tous ses mécanismes avec `ls`, `wc` et `sha256sum`. C'est le même
-moteur, ligne pour ligne, que celui qui exécutera vos commandes. Le tableau
-de cette démonstration est dans `exemples/demo.conf`, commenté étape par
-étape.
+Tout ce qui est expliqué ici vaut pour n'importe quel autre usage du
+script : seules les commandes changent.
 
 ---
 
-## 1. Le modèle mental
-
-Le script n'est qu'un **tableau de lignes**, parcouru de haut en bas. Une
-ligne = une étape = une commande shell.
+## 1. Lancer
 
 ```bash
-"Titre|validation|commande"
+./tasker.sh -c exemples/pc07.conf
 ```
 
-À chaque étape, le script affiche la commande, attend votre accord si
-`validation` vaut `true`, l'exécute, note le résultat, passe à la suivante.
-Tout le reste — menus, répétitions, journal — sert à remplir la troisième
-colonne sans se tromper.
+`pc07.conf` tient en huit lignes : il hérite du cas complet, puis règle
+son poste.
+
+```bash
+source "$(dirname "${BASH_SOURCE[0]}")/forensic.conf"
+
+IMAGE="/images/pc07.dd"
+PC="PC07"
+SALLE="B204"
+OS="windows"
+BASE="/cases"
+OPERATEUR="M. Bachmann"
+TZ_MACTIME="Europe/Paris"
+```
+
+Pour un nouveau poste, on ne réécrit rien :
+
+```bash
+./tasker.sh -c exemples/forensic.conf -t > pc09.conf    # gabarit pré-rempli
+# éditer IMAGE, PC, SALLE, OS
+./tasker.sh -c pc09.conf
+```
 
 ---
 
-## 2. Une étape simple
+## 2. Ce qui s'affiche
 
-```bash
-COMMANDES=(
-"Contenu de /etc|true|ls -l /etc"
-)
-```
+### Le bandeau et le plan
 
 ```
-──────────────────────────────────────────────────────────
-  ◐ 1/1  ━━━━━━━━━━━━  Contenu de /etc
-──────────────────────────────────────────────────────────
-  $ ls -l /etc
+ tasker.sh  PC07 · B204 · windows
+────────────────────────────────────────────────────────────
+  image      /images/pc07.dd
+  fuseau     Europe/Paris
+  sortie     /cases/B204/windows/PC07  (4 dossiers créés)
+  par        M. Bachmann
+  journal    /cases/B204/windows/PC07/logs/PC07_B204_windows_script.log
+
+ Plan   8 étapes
+────────────────────────────────────────────────────────────
+  ○  1  Table des partitions                              log
+  ○  2  Fichiers alloués et supprimés
+  ○  3  Inodes non alloués                                continu
+  ○  4  Fusion des body files                             auto
+  ○  5  Timeline
+  ○  6  Inventaire par utilisateur                        ↻ répétée
+  ○  7  Liste des partitions (testdisk)                   log
+  ○  8  Carving
+```
+
+On sait d'un coup d'œil ce qui va se passer. `auto` = partira sans
+demander ; `↻ répétée` = une fois par valeur d'une liste ; `log` = sortie
+recopiée au journal.
+
+### Étape 1 : une commande simple
+
+```
+  ◐ 1/8  ━━━━━━━━━━━━  Table des partitions
+────────────────────────────────────────────────────────────
+  $ mmls '/images/pc07.dd'
   Entrée exécuter · p passer · e éditer · r ressaisir · q quitter
-  ›
+  › 
 ```
 
-**Tout ce qui marche dans un terminal marche ici** : redirections, tubes,
-tests, `&&`, `||`, et les fonctions que vous écrivez en section 5.
-
-```bash
-"Sauvegarde|true|tar czf '$SORTIE/etc.tgz' /etc"
-"Aperçu|true|ls -la '$DOSSIER' | tee '$DIR_LOGS/ls.txt' | tail -n 20"
-"Si présent|true|[ -s '$SORTIE/etc.tgz' ] && echo ok || echo vide"
-```
-
----
-
-## 3. `$VARIABLE` — ce qu'on connaît à l'avance
-
-Réglé une fois en section 1, ou dans un fichier `-c`, ou avec
-`--set NOM=valeur`. Remplacé au lancement.
-
-### ⚠️ Le seul vrai piège
-
-Le tableau est écrit entre **guillemets doubles** : un `$` y est remplacé
-*tout de suite*. Une variable qui naîtra **pendant** la commande n'existe
-pas encore, et `set -u` arrête le script :
-
-```bash
-FAUX   "Boucle|true|for u in a b; do echo home_$u; done"
-JUSTE  "Boucle|true|for u in a b; do echo home_\$u; done"
-```
-
-Même chose pour `\$(date)`, `\$1`, `\$?`. **Si la variable existe déjà
-quand vous éditez le script, pas d'antislash. Sinon, antislash.**
-
----
-
-## 4. `[[nom]]` — une valeur qu'on ne connaît pas d'avance
-
-```bash
-"Fichiers récents|true|find '$DOSSIER' -mtime -[[jours]] -type f"
-"Fichiers récents, en détail|true|find '$DOSSIER' -mtime -[[jours]] -type f -ls"
-```
-
-`[[jours]]` est demandé quand on **arrive** sur la première étape qui
-l'utilise, puis **réutilisé** dans toutes les suivantes.
+La commande est affichée **avant** de partir. `Entrée` la lance :
 
 ```
-    ┌─ [[jours]]  — utilisé aux étapes 1, 2
-    │  la valeur sera réutilisée partout où [[jours]] apparaît
-    │   p  passer cette étape   q  quitter
-    └─ valeur ›
+      Slot      Start        End          Length       Description
+002:  000:000   0000002048   0083884031   0083881984   NTFS / exFAT (0x07)
+  ●  terminée en 0s
 ```
 
-Pour la fournir d'avance : `./tasker.sh -D jours=7`. Pour voir ce qui sera
-demandé : `./tasker.sh --vars`.
+### Étape 2 : une valeur demandée, proposée en menu
 
----
-
-## 5. `LISTES` — transformer la question en menu
-
-Déclarez d'où la valeur peut venir : une commande qui écrit **une valeur
-par ligne**, éventuellement suivie d'une tabulation et d'un libellé.
-
-```bash
-LISTES=(
-"jours|printf '%s\t%s\n' 1 'hier' 7 'cette semaine' 30 'ce mois'"
-)
-```
+`fls` a besoin de l'offset de la partition, celui que `mmls` vient
+d'afficher. Plutôt que de le recopier, le script le propose :
 
 ```
-    ┌─ [[jours]]  — utilisé aux étapes 1, 2
+  ◐ 2/8  ━━━━━━━━━━━━  Fichiers alloués et supprimés
+────────────────────────────────────────────────────────────
+    ┌─ [[offset]]  — utilisé aux étapes 2, 3, 6 et par la liste home
     │
-    │   1  1              hier
-    │   2  7              cette semaine
-    │   3  30             ce mois
+    │   1  2048           NTFS / exFAT (0x07) — 40.0 Go
     │
     │   a  saisir une autre valeur
     │   p  passer cette étape
     │   q  quitter le script
-    └─ votre choix [1] ›
+    └─ votre choix [1] › 
+    → 2048
+
+  $ fls -r -p -m / -o 2048 '/images/pc07.dd' > '/cases/B204/windows/PC07/body/PC07_B204_windows_fls.body'
 ```
 
-Seule la **valeur** (avant la tabulation) entre dans la commande ; le
-**libellé** s'affiche. Il reste accessible sous `{{nom_libelle}}`.
+`[[offset]]` est demandé **une fois**. Les étapes 3 et 6, et la liste des
+profils, le réutiliseront sans rien redemander.
 
----
-
-## 6. `{{nom}}` — répéter une étape
-
-Même tableau `LISTES`, autre syntaxe dans la commande :
-
-```bash
-LISTES=(
-"sousdossier|lister_dossiers '$DOSSIER'"
-)
-COMMANDES=(
-"Taille de chaque sous-dossier|true|du -sh '{{sousdossier}}'"
-)
-```
-
-L'étape est **rejouée une fois par valeur** :
+### Étape 6 : une étape rejouée par profil
 
 ```
+  ◐ 6/8  ━━━━━━━━━━━━  Inventaire par utilisateur
+────────────────────────────────────────────────────────────
   ↻  étape répétée — 3 itérations
-      1  sousdossier=documents
-      2  sousdossier=images
-      3  sousdossier=projets
-  Entrée tout exécuter · u une par une · l lister · p passer · …
+      1  home=Users/alice
+      2  home=Users/bruno
+      3  home=Users/celia
+  Entrée tout exécuter · u une par une · l lister · p passer · e éditer · r ressaisir · q quitter
+  › 
 ```
 
-* `l` montre les trois commandes en entier avant de vous engager ;
-* `u` les déroule une par une, avec une validation chacune ;
-* le nombre d'itérations est toujours annoncé **avant** de lancer quoi que
-  ce soit, et plafonné par `MAX_ITERATIONS`.
+Le nombre d'itérations est annoncé **avant** de lancer quoi que ce soit.
+`l` montre les trois commandes en entier ; `u` les déroule une par une.
 
-> **Toujours entre apostrophes** : `'{{sousdossier}}'`. Les valeurs
-> viennent d'un programme et contiennent des espaces. Le script neutralise
-> les apostrophes qu'elles pourraient contenir — `o'brien` passe — à
-> condition que le placeholder soit quoté.
+```
+  ── 1/3 ── home=Users/alice
+     $ inventorier_home '/images/pc07.dd' '2048' '51-144-1' 'Users/alice' '/cases/B204/windows/PC07/body'
+  142 entrées -> /cases/B204/windows/PC07/body/home_Users_alice.body
+  ●  terminée en 1s
+```
+
+### Le récapitulatif
+
+```
+ Récapitulatif   PC07 · B204 · windows
+────────────────────────────────────────────────────────────
+  ●  1  Table des partitions                              0s
+  ●  2  Fichiers alloués et supprimés                     4s
+  ✗  3  Inodes non alloués                            code 1
+  ●  4  Fusion des body files                             0s
+  ●  5  Timeline                                          2s
+  ●  6  Inventaire par utilisateur                   3/3  3s
+      ├─ ● home=Users/alice                                1s
+      ├─ ● home=Users/bruno                                1s
+      └─ ● home=Users/celia                                1s
+  ●  7  Liste des partitions (testdisk)                   0s
+  ●  8  Carving                                        1h04m
+────────────────────────────────────────────────────────────
+  7 réussies · 1 en échec · 0 passée · total 1h14m
+  journal  /cases/B204/windows/PC07/logs/PC07_B204_windows_script.log
+  rapport  /cases/B204/windows/PC07/logs/PC07_B204_windows_rapport.txt
+```
+
+L'étape 3 a échoué : c'est normal, `ils` échoue sur NTFS, et l'étape
+était marquée `continu` — le script n'a rien demandé et a poursuivi. Le
+rapport écrit sur disque contient la même chose, en texte brut.
 
 ---
 
-## 7. Une liste écrite à la main, avec une boucle `for`
+## 3. `forensic.conf`, ligne à ligne
 
-Une liste n'est rien de plus qu'une fonction qui écrit une ligne par
-valeur. La plus simple possible, fournie en section 5 :
+### Les variables
 
 ```bash
-lister_dossiers() {
-    local d
-    for d in "$1"/*/; do                  # le / final ne garde que les dossiers
-        (( INTERROMPU )) && return 130    # Ctrl-C doit pouvoir sortir de la boucle
-        [[ -d "$d" ]] || continue         # aucun dossier : le motif reste tel quel
-        d="${d%/}"                        # retire le / final
-        printf '%s\t%s\n' "$d" "${d##*/}"  # chemin, tabulation, nom seul
-    done
+IMAGE="/images/pc07.dd"        # image disque à analyser
+PC="PC07"                      # poste
+SALLE="B204"                   # salle
+OS="windows"                   # windows ou linux
+BASE="/cases"                  # racine où tout est écrit
+OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"
+TZ_MACTIME="Europe/Paris"      # fuseau du POSTE ANALYSÉ
+REQUIS=(mmls fls ils icat mactime testdisk photorec)
+```
+
+Les noms sont libres : le script ne connaît aucun d'eux. `REQUIS` est
+vérifié au départ ; un binaire absent n'est qu'un avertissement, car on
+peut vouloir ne jouer qu'une partie des étapes.
+
+`TZ_MACTIME` : le fuseau du poste analysé, pas le vôtre, sinon la
+timeline ne correspondra ni aux journaux applicatifs ni aux témoignages.
+Un **nom de zone** (`Europe/Paris`), jamais un décalage (`UTC+1`) qui
+serait faux la moitié de l'année.
+
+### Ce que le script attend
+
+```bash
+calculer_variables() {
+    SUJET="$PC · $SALLE · $OS"                       # en tête et au récapitulatif
+    DETAILS=("image=$IMAGE" "fuseau=$TZ_MACTIME")    # lignes du bandeau
+    PREFIX="${PC}_${SALLE}_${OS}"                    # préfixe des fichiers écrits
+    DEST="$BASE/$SALLE/$OS/$PC"
+    DIR_BODY="$DEST/body"                            # DIR_xxx : créés au besoin
+    DIR_TIMELINE="$DEST/timeline"
+    DIR_CARVING="$DEST/carving"
+    DIR_LOGS="$DEST/logs"                            # journal, rapport, état
+}
+```
+
+Quatre noms sont obligatoires : `SUJET`, `DETAILS`, `PREFIX`, `DIR_LOGS`.
+Tout `DIR_xxx` est vérifié et créé. C'est une fonction, et pas des
+affectations en vrac, pour être **recalculée après** `-c` et `--set`.
+
+```bash
+verifier() {
+    [[ -e "$IMAGE" ]] || { erreur "image absente : $IMAGE"; return 1; }
+    [[ -r "$IMAGE" ]] || { erreur "image illisible : $IMAGE"; return 1; }
     return 0
 }
 ```
 
-* `for d in "$1"/*/` — le shell remplace `*/` par chaque sous-dossier ; le
-  `/` final exclut les fichiers.
-* `(( INTERROMPU )) && return 130` — sans cette ligne, Ctrl-C tue le `du`
-  en cours mais la boucle repart sur le dossier suivant.
-* `[[ -d "$d" ]] || continue` — s'il n'y a aucun dossier, bash laisse le
-  motif tel quel ; on l'écarte.
-* `printf '%s\t%s\n' "$d" "${d##*/}"` — la **valeur**, une **tabulation**,
-  le **libellé**. `${d##*/}` retire tout jusqu'au dernier `/`.
+Vos contrôles de départ. `return 1` arrête tout avant la première étape.
 
-Appelée sur `/home`, elle écrit :
+### Les commandes
 
+```bash
+"Table des partitions|true,log|mmls '$IMAGE'"
 ```
-/home/alice	alice
-/home/bruno	bruno
+`log` : la table est recopiée au journal, on la retrouvera.
+
+```bash
+"Fichiers alloués et supprimés|true|fls -r -p -m / -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_fls.body'"
 ```
+`-r` récursif, `-p` chemins complets, `-m /` format *body* pour
+`mactime`. `[[offset]]` : demandé ici, réutilisé ensuite. `'$IMAGE'`
+entre apostrophes : le chemin peut contenir des espaces.
+
+```bash
+"Inodes non alloués|true,continu|ils -m -o [[offset]] '$IMAGE' > '$DIR_BODY/${PREFIX}_ils.body'"
+```
+`continu` : `ils` échoue souvent sur NTFS ; on ne veut pas de question.
+
+```bash
+"Fusion des body files|false|fusionner_body '$DIR_BODY/${PREFIX}_full.body' '$DIR_BODY/${PREFIX}_fls.body' '$DIR_BODY/${PREFIX}_ils.body'"
+```
+`false` : pas de validation, c'est une concaténation. `fusionner_body`
+est une fonction du fichier : `cat` échouerait sur le body absent d'`ils`.
+
+```bash
+"Timeline|true|mactime -b '$DIR_BODY/${PREFIX}_full.body' -z '$TZ_MACTIME' -d -y > '$DIR_TIMELINE/${PREFIX}_timeline.csv'"
+```
+
+```bash
+"Inventaire par utilisateur|true|inventorier_home '$IMAGE' '[[offset]]' '{{home}}' '{{home_libelle}}' '$DIR_BODY'"
+```
+`{{home}}` : rejouée pour chaque profil. La liste `home` renvoie
+`inode<TAB>chemin` — `{{home}}` vaut l'inode (ce que `fls` attend),
+`{{home_libelle}}` le chemin (ce que vous lisez, et le nom du fichier
+produit).
+
+```bash
+"Carving|true|photorec /log /logname '$DIR_LOGS/${PREFIX}_photorec.log' /d '$DIR_CARVING/recup_' /cmd '$IMAGE' [[index_testdisk]],fileopt,everything,enable,freespace,search"
+```
+`photorec` veut le **numéro** de partition selon `testdisk`, pas l'offset :
+d'où une seconde valeur, `[[index_testdisk]]`, avec son propre menu.
+`freespace` : espace non alloué seulement ; `search` reste en dernier.
+Pas d'option `log` : `photorec` est plein écran et a besoin du terminal.
+
+### Les listes
+
+```bash
+"offset|lister_partitions '$IMAGE'"
+"index_testdisk|lister_partitions_testdisk '$IMAGE'"
+"home|lister_homes '$IMAGE' '[[offset]]' '$OS'"
+"fichier|lister_fichiers '$IMAGE' '[[offset]]' '{{home}}'"
+```
+
+* `offset` et `index_testdisk` : portent le même nom que les `[[valeurs]]`
+  → les questions deviennent des menus.
+* `home` : utilisée en `{{home}}` → l'étape 6 est rejouée. Elle contient
+  `[[offset]]` : la question est posée une fois pour toutes.
+* `fichier` : contient `{{home}}` → elle est régénérée pour chaque profil.
+  Écrire `{{fichier}}` seul dans une commande boucle donc sur tous les
+  fichiers de tous les profils.
+
+Une fonction de liste écrit **une valeur par ligne**, `valeur<TAB>libellé`.
+`lister_partitions` lit `mmls` et écrit `2048<TAB>NTFS — 40.0 Go` ;
+`lister_homes` lit `fls` et écrit `51-144-1<TAB>Users/alice`.
 
 ---
 
-## 8. Deux niveaux : la liste qui en appelle une autre
+## 4. Ajouter une étape : le `.bashrc` de chaque utilisateur
 
-C'est le point qui surprend le plus, et le plus utile. On veut, pour chaque
-utilisateur, le contenu de son `.bashrc` — sachant que tous n'en ont pas.
-
-**1. La liste des homes** (celle du § 7) :
+Les deux lignes sont dans `forensic.conf`, en commentaire. Décommentez :
 
 ```bash
-"profil|lister_dossiers '/home'"
-```
-
-**2. Une liste qui cherche DANS un profil** :
-
-```bash
-lister_bashrc() {
-    [[ -f "$1/.bashrc" ]] && printf '%s\t%s\n' "$1/.bashrc" "${1##*/}/.bashrc"
-    return 0
-}
+"bashrc|lister_fichiers_nommes '$IMAGE' '[[offset]]' '{{home}}' '^\.bashrc$'"
 ```
 
 ```bash
-"bashrc|lister_bashrc '{{profil}}'"
+"Contenu de chaque .bashrc|true,log|echo '--- {{bashrc_libelle}}'; icat -o [[offset]] '$IMAGE' '{{bashrc}}'"
 ```
 
-Le `{{profil}}` est la clé : cette liste n'a de sens que pour un profil
-donné, donc le script la régénère pour chacun.
-
-**3. L'étape**, qui ne mentionne que `{{bashrc}}` :
-
-```bash
-"Contenu de chaque .bashrc|true,log|cat '{{bashrc}}'"
-```
-
-**Ce que fait le script :**
+La liste `bashrc` dépend de `{{home}}` ; l'étape n'écrit que
+`{{bashrc}}`. Le script boucle sur les profils tout seul :
 
 ```
   ↻  étape répétée — 2 itérations
-      1  profil=alice · bashrc=alice/.bashrc
-      2  profil=carole · bashrc=carole/.bashrc
+      1  home=Users/alice · bashrc=Users/alice/.bashrc
+      2  home=Users/celia · bashrc=Users/celia/.bashrc
 ```
 
-Il a bouclé sur les profils *tout seul*, parce que `bashrc` en dépend.
-Bruno n'a pas de `.bashrc` : sa branche ne produit rien et disparaît, sans
-erreur. Les étiquettes montrent les deux niveaux.
+Bruno n'a pas de `.bashrc` : sa branche ne produit rien et disparaît,
+sans erreur.
 
-> **Une liste vide n'est pas une erreur.** C'est une branche qui ne produit
-> rien. Le script ne s'arrête que si l'étape entière finit sans aucune
-> itération.
-
-Deux `{{listes}}` écrites côte à côte dans une commande s'emboîtent aussi,
-de gauche à droite. Essayez : `./tasker.sh --demo -o 5,7`.
+Pour un autre fichier : changez le motif. `'^\.ssh$'`, `'\.(bash|zsh)rc$'`.
 
 ---
 
-## 9. Écrire une fonction plutôt qu'une ligne à rallonge
+## 5. Quand ça se passe mal
 
-Au-delà de deux ou trois instructions, la ligne devient illisible et les
-échappements ingérables. Écrivez une fonction en **section 5** et
-appelez-la depuis le tableau. Une fonction d'**étape** termine par un
-`return` explicite : ce code devient le ● ou le ✗ du récapitulatif. Une
-fonction de **liste** écrit ses valeurs sur la sortie standard et ses
-messages d'erreur sur `>&2`.
+**Une étape échoue** — le script demande :
 
-Pour reprendre une fonction venue d'ailleurs : `exit` → `return`, variables
-internes en `local`, et `(( INTERROMPU )) && return 130` dans toute boucle
-longue.
+```
+  ✗  échec — code 1, 0s
+  Continuer quand même ? [O/n]
+```
 
----
+**Ctrl-C pendant `photorec`** — la commande est interrompue, pas le
+script, et le terminal est rendu tel qu'il était :
 
-## 10. Un jeu d'étapes par usage : le fichier `-c`
+```
+  ⊗  interrompu au bout de 12m30s
+  Passer à l'étape suivante ? [O/n]
+```
 
-Un fichier `-c` est du shell. Il peut fixer les variables, mais aussi
-redéfinir `calculer_variables`, `verifier`, `definir_commandes` et
-ajouter des fonctions. C'est un jeu d'étapes complet, sans copier le
-script.
+**La session SSH tombe au milieu du carving** — le rapport et le journal
+sont quand même écrits, avec la raison. Le lendemain :
 
 ```bash
-./tasker.sh -t > mon-cas.conf              # gabarit à compléter
-./tasker.sh -c mon-cas.conf
+./tasker.sh -c pc07.conf -r        # saute ce qui a réussi, rejoue le reste
 ```
 
-`exemples/forensic.conf` en est un exemple complet : l'analyse d'une image
-disque avec la Sleuth Kit, avec des menus construits depuis `mmls`, une
-liste des profils qui donne l'inode à `fls` et le chemin à l'écran, et le
-`.bashrc` de chaque utilisateur exactement comme au § 8. Pour un poste
-donné, `exemples/pc07.conf` fait `source forensic.conf` puis règle six
-variables.
-
----
-
-## 11. Touches, Ctrl-C, reprise
-
-**À une étape** : `Entrée` exécuter · `p` passer · `e` éditer pour cette
-fois · `r` ressaisir les valeurs · `q` quitter · `u` une itération à la
-fois · `l` lister les itérations.
-
-**À une question** : `1 2 3` choisir · `Entrée` la proposition 1 · `a`
-autre valeur · `p` passer · `q` quitter. Après `a`, `p` et `q` redeviennent
-des valeurs ordinaires.
-
-**Ctrl-C** pendant une commande l'interrompt, pas le script ; à une
-question, arrête le script proprement. Sur une étape `a ; b`, `b`
-s'exécutera quand même : écrivez `a && b` si ce n'est pas voulu.
+**Rejouer une seule étape** :
 
 ```bash
-./tasker.sh -r            # sauter les étapes déjà réussies
-./tasker.sh -o 2,5-7      # ne jouer que celles-là
-./tasker.sh -f 4          # partir de l'étape 4
-./tasker.sh -n            # simulation
-./tasker.sh -y &          # en arrière-plan, sans question
+./tasker.sh -c pc07.conf -o 5 -D offset=2048
+```
+
+**Tout enchaîner sans question**, pour un poste dont on connaît déjà les
+valeurs :
+
+```bash
+./tasker.sh -c pc07.conf -y -D offset=2048 -D index_testdisk=1
 ```
 
 ---
 
-## 12. Quand ça ne marche pas
+## 6. Porter un script existant
 
-| symptôme | cause la plus fréquente |
-|---|---|
-| `u: unbound variable` au lancement | un `$` non échappé dans le tableau (§ 3) |
-| `les listes n'ont rien donné` | la commande de liste ne renvoie rien : testez-la seule |
-| l'étape répétée n'a qu'une itération | la liste ne renvoie qu'une ligne, ou `--list` la fige |
-| code 141 | un `head` derrière un `tee` |
-| une valeur avec un espace casse la commande | un `{{nom}}` non entouré d'apostrophes |
-| `ERREUR de format` | un `\|` dans le titre ou dans le champ validation |
-| `calculer_variables doit définir DIR_LOGS` | votre fichier `-c` redéfinit `calculer_variables` sans ce nom |
+Le cas typique : un script de collecte, écrit un jour de hâte, qu'on
+voudrait rejouer proprement, avec validation et journal.
 
-Le journal `<DIR_LOGS>/<PREFIX>_script.log` contient chaque commande telle
-qu'elle a été lancée, son code de retour et sa durée. C'est là qu'il faut
-regarder en premier.
+### Avant
+
+```bash
+#!/bin/bash
+OUT=/tmp/collecte
+mkdir -p $OUT
+hostname > $OUT/hostname.txt
+cat /etc/os-release > $OUT/os-release.txt
+for h in /home/*; do
+    u=$(basename $h)
+    ls -la $h > $OUT/ls_$u.txt
+    cp $h/.bash_history $OUT/history_$u.txt 2>/dev/null
+done
+```
+
+### Après : `collecte.conf`
+
+```bash
+# ./tasker.sh -c collecte.conf
+OUT="/tmp/collecte"
+HOMES="/home"
+
+calculer_variables() {
+    SUJET="collecte $(hostname)"
+    DETAILS=("homes=$HOMES")
+    PREFIX="collecte"
+    DIR_OUT="$OUT"                 # DIR_xxx : créé au besoin — le mkdir disparaît
+    DIR_LOGS="$OUT/logs"
+}
+verifier() { [[ -d "$HOMES" ]] || { erreur "pas de $HOMES"; return 1; }; return 0; }
+
+definir_commandes() {
+COMMANDES=(
+"Nom de la machine|false|hostname > '$DIR_OUT/hostname.txt'"
+"Version du système|false|cat /etc/os-release > '$DIR_OUT/os-release.txt'"
+"Contenu de chaque home|true|ls -la '{{home}}' > '$DIR_OUT/ls_{{home_libelle}}.txt'"
+"Historique de chaque home|true|cp '{{historique}}' '$DIR_OUT/history_{{home_libelle}}.txt'"
+)
+LISTES=(
+"home|lister_dossiers '$HOMES'"
+"historique|lister_si_present '{{home}}/.bash_history'"
+)
+}
+
+# chemin<TAB>nom, seulement si le fichier existe : un home sans historique
+# ne produit aucune itération, plus besoin de 2>/dev/null
+lister_si_present() {
+    [[ -f "$1" ]] && printf '%s\t%s\n' "$1" "${1##*/}"
+    return 0
+}
+```
+
+`lister_dossiers` est fournie par le script (section 5). Ce qui a changé,
+ligne par ligne :
+
+| avant | après | pourquoi |
+|---|---|---|
+| `OUT=/tmp/collecte` | `OUT="/tmp/collecte"` en tête | même chose, mais `-s OUT=/ailleurs` marche |
+| `mkdir -p $OUT` | `DIR_OUT="$OUT"` | tout `DIR_xxx` est créé au besoin |
+| `hostname > $OUT/…` | `"Nom de la machine\|false\|hostname > …"` | une ligne = une étape ; `false` : rien à valider |
+| `for h in /home/*` | liste `home` + `{{home}}` | l'étape est rejouée par home, on voit combien avant de lancer |
+| `u=$(basename $h)` | `{{home_libelle}}` | le libellé de la liste, c'est le nom seul |
+| `cp … 2>/dev/null` | liste `historique` qui ne renvoie que ce qui existe | l'absence n'est plus un échec masqué, c'est zéro itération |
+| `$h` sans guillemets | `'{{home}}'` | un home avec un espace ne casse plus rien |
+
+### Ce que ça donne
+
+```
+  ○  1  Nom de la machine                                  auto
+  ○  2  Version du système                                 auto
+  ○  3  Contenu de chaque home                             ↻ répétée
+  ○  4  Historique de chaque home                          ↻ répétée
+```
+
+```
+  ◐ 4/4  ━━━━━━━━━━━━  Historique de chaque home
+  ↻  étape répétée — 2 itérations
+      1  home=alice · historique=.bash_history
+      2  home=celia · historique=.bash_history
+```
+
+Bruno n'a pas d'historique : il n'apparaît pas, et rien n'a échoué.
+
+### Les règles quand on reprend une fonction d'un autre script
+
+* `exit` → `return` : `exit` tuerait tasker.sh tout entier.
+* Un `return` explicite à la fin : son code fait ● ou ✗.
+* Variables internes en `local`.
+* Dans toute boucle longue : `(( INTERROMPU )) && return 130`, sinon
+  Ctrl-C tue l'itération en cours mais pas la boucle.
+* `set -u` est actif : une variable non définie arrête l'étape — ce que
+  l'ancien script tolérait peut-être en silence.
+* Une fonction de **liste** écrit ses valeurs sur la sortie standard et
+  ses messages sur `>&2`, sinon ils seraient pris pour des valeurs.
+
+---
+
+## 7. Ce que vous pouvez retenir pour un autre usage
+
+Rien ici n'est propre au forensique. Le même fichier `-c` peut décrire une
+sauvegarde, une batterie de tests, une installation. Ce qu'il faut :
+
+1. des variables en tête ;
+2. `calculer_variables` qui pose `SUJET`, `DETAILS`, `PREFIX`, `DIR_LOGS` ;
+3. `verifier` pour les contrôles de départ ;
+4. `definir_commandes` avec `COMMANDES` et `LISTES` ;
+5. vos fonctions.
+
+`./tasker.sh -t > mon-cas.conf` écrit le squelette des variables ;
+`exemples/demo.conf` montre le tout en quarante lignes, sans outil externe.

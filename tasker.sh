@@ -46,7 +46,7 @@ COMMANDES=(
 "Espace disponible|false|df -h '$DOSSIER'"
 "Contenu du dossier|true|ls -la '$DOSSIER'"
 "Taille de chaque sous-dossier|true|du -sh '{{sousdossier}}'"
-"Les fichiers les plus gros|true,log|find '$DOSSIER' -maxdepth [[profondeur]] -type f -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -n 10"
+"Fichiers plus gros que [[taille]]|true,log|find '$DOSSIER' -type f -size +[[taille]] 2>/dev/null | head -n 20"
 )
 
 
@@ -67,7 +67,7 @@ COMMANDES=(
 # =====================================================================
 LISTES=(
 "sousdossier|lister_dossiers '$DOSSIER'"
-"profondeur|printf '%s\t%s\n' 1 'ce dossier seulement' 2 'et ses sous-dossiers' 4 'quatre niveaux'"
+"taille|printf '%s\t%s\n' 1M 'un mégaoctet' 10M 'dix mégaoctets' 100M 'cent mégaoctets'"
 )
 
 }
@@ -435,6 +435,10 @@ init_affichage
 if [[ -n "$CONF" ]]; then
     [[ -r "$CONF" ]] || { erreur "configuration illisible : $CONF"; exit 1; }
     bash -n "$CONF" 2>/dev/null || { erreur "erreur de syntaxe dans $CONF"; bash -n "$CONF"; exit 1; }
+    # Un « exit » dans le fichier tuerait le script sans un mot : on le
+    # charge d'abord dans un sous-shell pour le voir venir.
+    # shellcheck disable=SC1090
+    ( source "$CONF" >/dev/null 2>&1 ) || { erreur "$CONF s'est terminé tout seul (code $?) : un « exit » dedans ? Utilisez return."; exit 1; }
     # shellcheck disable=SC1090
     source "$CONF" || { erreur "échec du chargement de $CONF"; exit 1; }
 fi
@@ -1141,7 +1145,8 @@ done
 
 if [[ "$LISTER_ETAPES" == "true" ]]; then plan_initial oui; printf '\n'; exit 0; fi
 
-verifier || exit 1
+# En simulation, un contrôle qui échoue n'empêche pas de voir le plan.
+if ! verifier; then [[ "$SIMULATION" == "true" ]] && attention "contrôles en échec — simulation quand même" || exit 1; fi
 [[ "$INTERACTIF" == "non" && "$SANS_QUESTION" != "true" ]] && attention "aucun terminal : les réponses seront lues sur l'entrée standard (-y pour ne rien demander)"
 MANQUANTS=""; for b in "${REQUIS[@]}"; do command -v "$b" >/dev/null 2>&1 || MANQUANTS+=" $b"; done
 [[ -n "$MANQUANTS" ]] && attention "binaires absents :$MANQUANTS"
