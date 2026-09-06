@@ -1,4 +1,4 @@
-# Sorties d'analyse : elles n'ont rien à faire dans le dépôt.
-/cases/
-*.body
+# Sorties d'exécution : elles n'ont rien à faire dans le dépôt.
 *.log
+*_rapport.txt
+*_etat.txt
