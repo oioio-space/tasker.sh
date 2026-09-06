@@ -197,6 +197,64 @@ DOSSIER="/srv/autre"
 
 ---
 
+## Ce que le script attend de vous
+
+Les noms de vos variables sont libres, **sauf ceux-ci**. Le script les lit ;
+ne les supprimez pas, renommez-les encore moins.
+
+### Dans la section 1
+
+| variable | rôle | valeurs |
+|---|---|---|
+| `OPERATEUR` | qui a lancé, noté au bandeau, au journal et au rapport | texte ; `${SUDO_USER:-$USER}` prend la vraie personne sous sudo |
+| `TOUT_VALIDER` | confirmer chaque étape, même les `false` | `true` / `false` (ou `-a`) |
+| `MAX_ITERATIONS` | plafond d'une étape répétée, au-delà elle est tronquée | entier ≥ 1 |
+| `REQUIS` | binaires vérifiés au départ ; absents = avertissement | tableau : `(du df)` |
+| `INTRO` | texte affiché après le bandeau (facultatif) | texte, plusieurs lignes possibles |
+
+### Dans `calculer_variables` (section 4)
+
+Recalculée après `-c` et `--set`, pour que tout suive la dernière valeur.
+
+| variable | rôle | exemple |
+|---|---|---|
+| `SUJET` | titre court, en tête et au récapitulatif | `"$PC · $SALLE"` |
+| `DETAILS` | lignes du bandeau de départ | `("image=$IMAGE" "fuseau=$TZ")` — clé sans accent |
+| `PREFIX` | préfixe des fichiers écrits, sans `/` | `"${PC}_${SALLE}"` |
+| `DIR_LOGS` | dossier du journal, du rapport et de l'état de reprise | `"$DEST/logs"` |
+| `DIR_xxx` | tout autre dossier de travail : vérifié, créé au besoin | `DIR_BODY`, `DIR_SORTIE`… |
+
+`SUJET`, `PREFIX` et `DIR_LOGS` sont obligatoires : le script refuse de
+partir sans.
+
+### Les trois fonctions appelées par le script
+
+| fonction | quand | ce qu'elle doit faire |
+|---|---|---|
+| `calculer_variables` | après `-c` et `--set` | poser les variables ci-dessus |
+| `verifier` | avant la première étape | vos contrôles ; `return 1` arrête tout |
+| `definir_commandes` | après `calculer_variables` | remplir `COMMANDES` et `LISTES` |
+
+Un fichier `-c` peut remplacer n'importe laquelle des trois. S'il écrit
+`COMMANDES=(…)` directement, `definir_commandes` n'est pas appelée.
+
+### Ce que vous pouvez utiliser dans vos fonctions
+
+| nom | usage |
+|---|---|
+| `(( INTERROMPU )) && return 130` | en tête de toute boucle : Ctrl-C doit pouvoir en sortir |
+| `erreur "…"` `attention "…"` `info "…"` | un message rouge, jaune, estompé |
+| `journal "…"` | une ligne horodatée dans le journal |
+| `lire "invite " variable` | poser une question (Ctrl-C et Ctrl-D y sont gérés) |
+| `demander_oui_non "… ? "` | vrai sauf `n` |
+| `pluriel N` | écrit `s` si N > 1 |
+
+Dans une fonction de **liste** : les valeurs sur la sortie standard, une
+par ligne ; les messages sur `>&2` — sinon ils seraient pris pour des
+valeurs.
+
+---
+
 ## Options
 
 | option | valeur | effet |
