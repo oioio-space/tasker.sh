@@ -57,7 +57,7 @@ jamais :
 |---|---|
 | `true` | demande avant de lancer |
 | `false` | lance directement |
-| `,log` | la sortie va aussi dans le journal |
+| `,log` | la sortie va aussi dans le journal — la commande tourne alors dans un sous-shell : un `cd` n'y persiste pas |
 | `,continu` | un échec est ignoré, sans question |
 | `,stop` | un échec arrête tout, sans question |
 
@@ -548,7 +548,7 @@ valeurs.
 | `-n`, `--dry-run` | | tout afficher, rien exécuter — sauf les commandes de `TK_LISTES`, lancées pour annoncer les itérations |
 | `-o`, `--only` | `2,5-7` | ne jouer que ces étapes |
 | `-f`, `--from` | `4` | partir de l'étape 4 |
-| `-r`, `--resume` | | sauter les étapes déjà réussies |
+| `-r`, `--resume` | | reprendre la dernière exécution : ses étapes réussies sont sautées |
 | `-a`, `--ask` | | confirmer chaque étape, même les `false` |
 | `-y`, `--yes` | | ne rien demander |
 | `--color` | `auto` `always` `never` | couleur ; `--no-color` = `never` ; la variable `NO_COLOR` est respectée |
@@ -624,12 +624,16 @@ de route ; `COLUMNS=60` la force.
 ```
 <TK_DIR_LOGS>/<TK_PREFIX>_script.log     chaque commande, code, durée ; s'allonge à chaque exécution
 <TK_DIR_LOGS>/<TK_PREFIX>_rapport.txt    le récapitulatif, réécrit à chaque exécution
-<TK_DIR_LOGS>/<TK_PREFIX>_etat.txt       les étapes réussies (pour -r)
+<TK_DIR_LOGS>/<TK_PREFIX>_etat.txt       les étapes réussies de la dernière exécution (pour -r)
 ```
+
+Le journal reçoit les commandes **résolues**, valeurs comprises : une valeur
+sensible tapée à une question y figure en clair.
 
 `-r` reconnaît une étape à l'empreinte de son titre **et** de sa commande :
 modifiez la commande, elle sera rejouée. Deux étapes identiques ont deux
-empreintes.
+empreintes. Sans `-r`, l'état repart de zéro : `-r` reprend la dernière
+exécution, pas le cumul de toutes.
 
 ---
 
@@ -641,7 +645,7 @@ empreintes.
 | `sudo` avec `-y` | le script prévient au départ : faites `sudo -v` avant |
 | script lancé sous `sudo` | le rapport note `SUDO_USER` et « (root) » |
 | programme plein écran interrompu | le terminal est rendu tel qu'il était |
-| terminal fermé, `kill` | récapitulatif et journal quand même écrits |
+| terminal fermé, `kill` | récapitulatif et journal quand même écrits, une fois la commande en cours terminée |
 
 ---
 
@@ -650,9 +654,9 @@ empreintes.
 * Les commandes passent par `eval`, dans le shell du script : n'y mettez
   que les vôtres. Un `exit` y arrête le script — pour marquer un échec,
   rendez un code non nul. `set -u` est actif : une variable non définie arrête
-  l'étape. Un `cd` persiste jusqu'à la fin ; `set -e`, `set -x`, `IFS`, les
-  options `shopt`, `LC_ALL`, les traps, la sortie standard et la sortie
-  d'erreur sont remis après chaque commande.
+  l'étape. Un `cd` persiste jusqu'à la fin (sauf avec `log`) ; les options
+  `set` et `shopt`, `IFS`, `LC_ALL`, les traps, la sortie standard et la
+  sortie d'erreur sont remis après chaque commande.
 * `head` derrière un `tee` ferme le tube : code 141. Utilisez `tail`.
 * Pas de commande interactive avec `log`.
 * Une commande de `TK_LISTES` ne lit pas le clavier.

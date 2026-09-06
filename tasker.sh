@@ -40,8 +40,10 @@ TK_MAX_ITERATIONS=500          # au-delà, une étape répétée est tronquée
 # 3. COMMANDES     "Titre|validation|commande"
 #
 #   validation  true = demander avant de lancer, false = lancer direct ;
-#               puis, séparées par des virgules : log (sortie au journal),
-#               continu (un échec n'arrête rien), stop (un échec arrête tout)
+#               puis, séparées par des virgules : log (sortie au journal ;
+#               la commande tourne alors dans un sous-shell, un cd n'y
+#               persiste pas), continu (un échec n'arrête rien), stop (un
+#               échec arrête tout)
 #   $VAR        remplacée maintenant ; \$ pour qu'elle survive jusqu'à
 #               l'exécution :  for f in *; do echo \$f; done
 #   [[nom]]     une valeur demandée une fois, réutilisée partout
@@ -809,7 +811,7 @@ aide_etapes() {
     h_vide
     h_opt "true"      "demande avant de lancer"
     h_opt "false"     "lance directement"
-    h_opt ",log"      "la sortie va aussi dans le journal (pas d'interactif)"
+    h_opt ",log"      "la sortie va aussi dans le journal (pas d'interactif, un cd n'y persiste pas)"
     h_opt ",continu"  "un échec est ignoré, sans question"
     h_opt ",stop"     "un échec arrête tout, sans question"
     h_vide
@@ -1251,6 +1253,7 @@ restaurer_terminal() {
 # un trap casserait donc la suite : après chaque commande, on remet ce
 # dont la mécanique dépend.
 SHOPT_TK="$(shopt -p)"       # les options du shell au départ, remises après chaque commande
+SET_TK="$(set +o)"           # idem pour set : un « set -f » dans une étape éteignait toutes les listes d'après
 # Une commande tourne dans ce shell : un « exec 1>&- » ou un « exec
 # 2>/tmp/x » emporterait la sortie du script avec elle, jusqu'au
 # récapitulatif. On garde une copie des deux descripteurs, remise après
@@ -1258,7 +1261,7 @@ SHOPT_TK="$(shopt -p)"       # les options du shell au départ, remises après c
 exec {FD_SORTIE}>&1 {FD_ERREUR}>&2
 retablir_shell() {
     exec 1>&"$FD_SORTIE" 2>&"$FD_ERREUR"
-    set +e -u -o pipefail +x +v
+    eval "$SET_TK"
     IFS=$' \t\n'
     eval "$SHOPT_TK"
     if [[ "$LC_ALL_TK" == "__absent__" ]]; then unset LC_ALL; else LC_ALL="$LC_ALL_TK"; fi
@@ -1631,8 +1634,9 @@ scanner_placeholders() {
 # --- 8.6 Exécution ---------------------------------------------------
 analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ; 1 si invalide
     local o; _F_VALIDER=""; _F_LOG=0; _F_STOP=0; _F_CONTINU=0; _MSG_VALIDATION=""
-    IFS=, read -r -a _opts <<< "${1,,}"
-    for o in "${_opts[@]}"; do
+    local -a mots
+    IFS=, read -r -a mots <<< "${1,,}"
+    for o in ${mots[@]+"${mots[@]}"}; do
         o="${o//[[:space:]]/}"
         case "$o" in
             true|vrai|oui|1) _F_VALIDER="true" ;;  false|faux|non|0) _F_VALIDER="false" ;;
@@ -1954,6 +1958,8 @@ for p in ${PRESETS_LISTE[@]+"${PRESETS_LISTE[@]}"}; do
     nom="${p%%=*}"; val="${p#*=}"
     [[ "$p" == *=* && "$nom" =~ ^[a-zA-Z0-9_]+$ && -n "$val" ]] || { erreur "--list attend nom=v1,v2 : $p"; exit 1; }
     connu_dans "$nom" ${PH_LISTES[@]+"${PH_LISTES[@]}"} || { erreur "aucune liste « $nom » utilisée (voir --vars)"; exit 1; }
+    IFS=, read -r -a _vals <<< "$val"
+    for v in "${_vals[@]}"; do valeur_valide "$v" || { erreur "--list $nom : valeur refusée « $v »"; exit 1; }; done
     LISTE_FIGEE["$nom"]="${val//,/$'\n'}"
 done
 
@@ -1991,7 +1997,11 @@ done
 [[ "$_SIMULATION" == "true" ]] || { _LOG="$TK_DIR_LOGS/${TK_PREFIX}_script.log"; : 2>/dev/null >> "$_LOG" || { erreur "journal non inscriptible : $_LOG"; exit 1; }; }
 
 # Reprise : empreinte du titre ET de la commande, une par étape réussie.
+# Sans -r on repart de zéro : l'état est celui de la dernière exécution, pas
+# le cumul de toutes — une étape réussie la semaine dernière et ratée hier
+# ne doit pas être sautée aujourd'hui.
 _ETAT="$TK_DIR_LOGS/${TK_PREFIX}_etat.txt"
+[[ "$_REPRENDRE" == "true" || "$_SIMULATION" == "true" ]] || : 2>/dev/null > "$_ETAT"
 empreinte() {
     if command -v sha1sum >/dev/null 2>&1; then printf '%s' "$1" | sha1sum | cut -d' ' -f1
     elif command -v shasum >/dev/null 2>&1; then printf '%s' "$1" | shasum | cut -d' ' -f1
