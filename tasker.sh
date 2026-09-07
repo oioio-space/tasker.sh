@@ -1721,6 +1721,14 @@ executer_une() {
     local _debut=$SECONDS _rc
     INTERROMPU=0; journal "$1"
     [[ "$_SIMULATION" == "true" ]] && { _DUREE_S=0; return 0; }
+    # Le départ se voit. Presque toutes les commandes finissent par un
+    # « | tail » : rien ne sort avant la fin, et l'écran restait mort
+    # pendant des minutes sans qu'on sache si la touche avait été prise.
+    # Une ligne franche, du même ◐ accentué que le bandeau de l'étape, et
+    # l'heure — sur une commande longue, c'est elle qui dit depuis quand.
+    # Pas de témoin animé : la sortie de la commande arrive au même endroit
+    # et viendrait s'y coller.
+    printf '  %s  %slancée à %(%T)T%s\n' "${GLYPHE[cours]}" "$ESTOMPE" -1 "$C0"
     printf '%s' "$SORTIE_GRISE"
     if (( $2 )); then
         # Un tube et non une substitution de processus : le shell attend tee,
