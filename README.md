@@ -476,7 +476,7 @@ DOSSIER="/srv/autre"
 | `exemples/dd-windows.conf` | un dd Windows, sans aucune liste : fdisk puis l'offset tapé, testdisk puis la partition tapée |
 | `exemples/dd-linux.conf` | un dd Linux, même organisation : hostname, fuseau, le `.bashrc` de chaque compte par une liste emboîtée, timeline, `/var/log`, photorec |
 | `exemples/dd-linux-monte.conf` | le même, sur une image **déjà montée** en lecture seule, dont vous donnez le point avec `--set MONTAGE=…` : `cat` et `cp` au lieu de la Sleuth Kit, et les listes toutes faites avec leurs jokers |
-| `exemples/collecte-linux.conf` | une collecte de triage complète sur une image montée — 25 étapes : distribution, fuseau, `fstab`, paquets `dpkg` ou `rpm`, `wtmp`/`btmp` copiés puis relus, profils réseau, `/var/log`, timeline, cinq étapes rejouées pour chaque compte, disques virtuels, photorec, archive finale. Les pièces sont copiées (`cp -a`, dates conservées), pas seulement lues. Le portage d'un script de collecte écrit d'une traite, en commandes simples — ni fonction, ni sed, ni awk, et pas un seul `continu` : ce qui varie d'une distribution à l'autre est réglé une fois, avant le tableau |
+| `exemples/collecte-linux.conf` | une collecte de triage complète sur une image montée — 25 étapes : distribution, fuseau, `fstab`, système de fichiers, paquets, connexions, profils réseau, `/var/log`, timeline, cinq étapes rejouées pour chaque compte, disques virtuels, photorec, archive finale. Les pièces sont copiées (`cp -a`, dates conservées), pas seulement lues. En tête du fichier, un mémo pour monter l'image : disque simple, LVM, LUKS, LUKS+LVM |
 
 ---
 
