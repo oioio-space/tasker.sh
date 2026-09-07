@@ -3,6 +3,10 @@
 # tasker.sh — enchaîne des commandes, validées une à une.
 #     ./tasker.sh -h       aide          ./tasker.sh -h tout  tout le manuel
 #
+#   Version 1.0 — 2026-09-07. Le numéro ne vit qu'ici : le script ne
+#   l'affiche pas. Le majeur bouge quand un fichier -c existant doit être
+#   retouché, le mineur pour le reste.
+#
 #   Sections, de la plus retouchée à la moins retouchée :
 #   1 VARIABLES · 2 RÉGLAGES · 3 COMMANDES · 4 LISTES · 5 FONCTIONS
 #   6 CHEMINS ET CONTRÔLES · 7 BOÎTE À OUTILS · 8 MÉCANIQUE
@@ -43,7 +47,7 @@ TK_REQUIS=(du df)              # binaires attendus ; absents = avertissement
 TK_OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # noté au journal et au rapport
 TK_TOUT_VALIDER="false"        # true = confirmer chaque étape (ou -a)
 TK_MAX_ITERATIONS=500          # au-delà, une étape répétée est tronquée
-TK_TEMOIN=3                    # secondes de silence avant le témoin animé ; 0 = jamais
+TK_TEMOIN=3                    # secondes avant le témoin d'attente ; 0 = jamais
 
 
 # =====================================================================
@@ -53,7 +57,8 @@ TK_TEMOIN=3                    # secondes de silence avant le témoin animé ; 0
 #               puis, séparées par des virgules : log (sortie au journal ;
 #               la commande tourne alors dans un sous-shell, un cd n'y
 #               persiste pas), continu (un échec n'arrête rien), stop (un
-#               échec arrête tout)
+#               échec arrête tout), ecran (l'étape occupe l'écran ou parle
+#               à l'opérateur : pas de témoin d'attente)
 #   $VAR        remplacée maintenant ; \$ pour qu'elle survive jusqu'à
 #               l'exécution :  for f in *; do echo \$f; done
 #   [[nom]]     une valeur demandée une fois, réutilisée partout
@@ -842,6 +847,7 @@ aide_etapes() {
     h_opt ",log"      "la sortie va aussi dans le journal (pas d'interactif, un cd n'y persiste pas)"
     h_opt ",continu"  "un échec est ignoré, sans question"
     h_opt ",stop"     "un échec arrête tout, sans question"
+    h_opt ",ecran"    "l'étape occupe l'écran (photorec) ou parle à l'opérateur : pas de témoin d'attente"
     h_vide
     h_ligne "Pas de | dans le titre ; ceux de la commande sont libres."
     h_ligne "Le code de sortie de la commande fait ● ou ✗. Un échec sans"
@@ -978,7 +984,7 @@ aide_config() {
     h_opt "TK_OPERATEUR"      "qui a lancé ; \${SUDO_USER:-\$USER} sous sudo"
     h_opt "TK_TOUT_VALIDER"   "true = confirmer chaque étape, même les « false »"
     h_opt "TK_MAX_ITERATIONS" "plafond d'une étape répétée, au-delà elle est tronquée"
-    h_opt "TK_TEMOIN"    "secondes de silence avant le compteur d'attente ; 0 = jamais"
+    h_opt "TK_TEMOIN"    "secondes avant le témoin d'attente ; 0 = jamais, « ,ecran » l'écarte d'une étape"
 }
 
 aide_exemple() {
@@ -1193,12 +1199,16 @@ if [[ -n "$_CONF" ]]; then
         grep -q $'\r' "$_CONF" 2>/dev/null && info "le fichier contient des retours chariot (Windows) : dos2unix ou sed -i 's/\r\$//'"
         bash -n "$_CONF"; exit 1
     fi
-    # Un « exit » dans le fichier tuerait le script sans un mot : on le
-    # charge d'abord dans un sous-shell pour le voir venir.
+    # Un « exit » dans le fichier tuerait le script sans un mot : le temps
+    # du chargement, sortir est une alarme. Chargé UNE fois — un essai
+    # préalable en sous-shell jouait deux fois ses effets de bord. Et son
+    # code n'est pas regardé : source rend celui de la DERNIÈRE ligne, et
+    # « [[ -d /x ]] && Y=1 » en dernière ligne n'est pas un échec.
+    _exit_conf() { erreur "$_CONF s'est terminé tout seul (code $?) : un « exit » dedans ? Utilisez return."; }
+    trap _exit_conf EXIT
     # shellcheck disable=SC1090
-    ( source "$_CONF" >/dev/null 2>&1 ) || { erreur "$_CONF s'est terminé tout seul (code $?) : un « exit » dedans ? Utilisez return."; exit 1; }
-    # shellcheck disable=SC1090
-    source "$_CONF" || { erreur "échec du chargement de $_CONF"; exit 1; }
+    source "$_CONF"
+    trap - EXIT; unset -f _exit_conf
 fi
 # --set NOM=valeur : n'importe quelle variable des sections 1 et 2. On exige
 # qu'elle existe déjà, sinon une faute de frappe passerait inaperçue.
@@ -1702,15 +1712,15 @@ scanner_placeholders() {
 
 
 # --- 8.6 Exécution ---------------------------------------------------
-analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ; 1 si invalide
-    local o; _F_VALIDER=""; _F_LOG=0; _F_STOP=0; _F_CONTINU=0; _MSG_VALIDATION=""
+analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU _F_ECRAN ; 1 si invalide
+    local o; _F_VALIDER=""; _F_LOG=0; _F_STOP=0; _F_CONTINU=0; _F_ECRAN=0; _MSG_VALIDATION=""
     local -a mots
     IFS=, read -r -a mots <<< "${1,,}"
     for o in ${mots[@]+"${mots[@]}"}; do
         o="${o//[[:space:]]/}"
         case "$o" in
             true|vrai|oui|1) _F_VALIDER="true" ;;  false|faux|non|0) _F_VALIDER="false" ;;
-            log) _F_LOG=1 ;;  stop) _F_STOP=1 ;;  continu|continue) _F_CONTINU=1 ;;  "") ;;
+            log) _F_LOG=1 ;;  stop) _F_STOP=1 ;;  continu|continue) _F_CONTINU=1 ;;  ecran) _F_ECRAN=1 ;;  "") ;;
             *) _MSG_VALIDATION="option inconnue « $o »"; return 1 ;;
         esac
     done
@@ -1719,90 +1729,98 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ;
     return 0
 }
 
-# Le témoin d'attente : un compteur qui tourne sur UNE ligne, réécrite en
-# place. Presque toutes les étapes finissent par un « | tail » : rien ne
-# sort avant la fin, et sans lui l'écran reste mort pendant des minutes.
+# Le témoin d'attente : un segment qui glisse sur UNE ligne, réécrite en
+# place, avec le temps écoulé. Presque toutes les étapes finissent par un
+# « | tail » : rien ne sort avant la fin, et sans lui l'écran reste mort
+# pendant des minutes.
 #
-# Il n'apparaît qu'après TK_TEMOIN secondes de silence, et ce délai fait
-# presque tout le travail : une commande bavarde — tar -v, photorec — a
-# déjà écrit avant, donc il ne paraît jamais chez elle ; une commande
-# courte se termine avant lui. Il ne reste qu'un cas : muette longtemps,
-# puis une première ligne de sortie plus COURTE que la largeur du terminal.
-# Elle n'efface que le début de la ligne et laisse le témoin à son bout,
-# « /etc/shadow      ──━ 15s ». C'est cosmétique, sur une ligne, jamais une
-# perte — mais c'est le prix d'un témoin qui ne s'empile pas. TK_TEMOIN=0
-# pour s'en passer.
+# Il n'apparaît qu'après TK_TEMOIN secondes, et ce délai suffit aux
+# commandes courtes. Il ne sait PAS si la commande a déjà écrit : il ne
+# voit pas sa sortie. Une commande bavarde — tar -v — garde donc le témoin
+# au bout des lignes qu'elle écrit pendant qu'il est affiché : « …/auth.log
+# ──━ 15s ». C'est cosmétique, jamais une perte, et c'est le prix d'un
+# témoin qui ne s'empile pas. Une commande qui OCCUPE l'écran — photorec —
+# ou qui attend une réponse de l'opérateur, en revanche, ne doit pas être
+# dérangée : c'est le drapeau « ecran » de l'étape. TK_TEMOIN=0 pour s'en
+# passer partout.
 #
 # Le témoin écrit sur /dev/tty : ni le journal, ni les fichiers écrits par
-# tee ne le voient.
+# tee ne le voient. Il est détaché (disown) : un « wait » nu dans une
+# commande n'attend que les enfants de la commande, pas lui.
 _TEMOIN_PID=0
 _TEMOIN_T0=0
-temoin_debut() {
-    [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
+# Une seule règle dit si le témoin est à l'écran, pour le fils qui le
+# dessine comme pour le père qui le remplit. SECONDS compte en secondes
+# entières : > et non >=, pour ne jamais remplir une piste jamais montrée.
+temoin_visible() { (( SECONDS - _TEMOIN_T0 > TK_TEMOIN )); }
+# temoin_ligne <image> : la ligne du témoin, posée À DROITE, sur la sortie
+# standard. \r et non \n : la ligne est réécrite, jamais empilée. Le \033[K
+# efface ce qu'une durée plus longue laisserait derrière elle (« 1m00s »
+# après « 59s »), et le curseur revient colonne 0. La sortie de la
+# commande, qui part de la gauche, ne heurte le témoin que si elle atteint
+# le bord — et l'écrase alors proprement. À gauche, elle le traverserait :
+# les tabulations d'un fls sautent sans effacer, et le témoin resterait
+# dans le trou. Le SORTIE_GRISE final rend à la sortie de la commande
+# l'estompage que le C0 de l'image a annulé.
+temoin_ligne() {
+    duree $(( SECONDS - _TEMOIN_T0 ))
+    repeter ' ' $(( _LARGEUR_TTY - 15 ))
+    printf '\r%s%s %s%s%s\033[K\r%s' "$REPET" "$1" "$ESTOMPE" "$DUREE_TXT" "$C0" "$SORTIE_GRISE"
+}
+temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
+    (( ! $1 )) && [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
+    _TEMOIN_T0=$SECONDS
     # Les images sont calculées une fois : un segment épais ━ — celui de
     # la barre d'avancement du bandeau — qui glisse sur une piste fine ─,
     # celle des filets, et revient. L'épaisseur porte le mouvement autant
     # que la couleur : on le suit même sans couleur.
-    { local -a f=(); local i=0 n=$(( TK_TEMOIN * 6 )) p g m d
+    { local -a img=(); local i=0 p g m d
       for (( p = 0; p <= 6; p++ )); do
           repeter '─' "$p";           g="$REPET"
           repeter '━' 3;              m="$REPET"
           repeter '─' $(( 6 - p ));   d="$REPET"
-          f+=( "$ESTOMPE$g$C0$C_ACCENT$m$C0$ESTOMPE$d$C0" )
+          img+=( "$ESTOMPE$g$C0$C_ACCENT$m$C0$ESTOMPE$d$C0" )
       done
-      for (( p = 5; p >= 1; p-- )); do f+=( "${f[$p]}" ); done
-      sleep "$TK_TEMOIN"
+      for (( p = 5; p >= 1; p-- )); do img+=( "${img[$p]}" ); done
       while :; do
-          duree $(( n / 6 ))
-          # \r et non \n : la ligne est réécrite, jamais empilée. Le \033[K
-          # efface ce qu'une durée plus longue laisserait derrière elle
-          # (« 1m00s » après « 59s »).
-          # Le témoin est posé À DROITE, et le curseur revient colonne 0.
-          # La sortie de la commande, qui part de la gauche, ne le heurte
-          # que si elle atteint le bord — et l'écrase alors proprement.
-          # À gauche, elle le traverserait : les tabulations d'un fls
-          # sautent sans effacer, et le témoin resterait dans le trou.
-          repeter ' ' $(( _LARGEUR_TTY - 15 ))
-          printf '\r%s%s %s%s%s\033[K\r' "$REPET" "${f[$i]}" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
-          sleep 0.16; i=$(( (i + 1) % ${#f[@]} )); n=$(( n + 1 ))
-      done; } 2>/dev/null &
+          temoin_visible && { temoin_ligne "${img[$i]}"; i=$(( (i + 1) % ${#img[@]} )); }
+          sleep 0.16
+      done; } > /dev/tty 2>/dev/null &
     _TEMOIN_PID=$!
-    _TEMOIN_T0=$SECONDS
+    disown "$_TEMOIN_PID" 2>/dev/null
 }
-temoin_fin() {
+# temoin_effacer : arrête le témoin et rend la ligne, sans rien fêter —
+# c'est ce que veut une sortie brutale du script.
+temoin_effacer() {
     (( _TEMOIN_PID )) || return 0
-    kill "$_TEMOIN_PID" 2>/dev/null; wait "$_TEMOIN_PID" 2>/dev/null
-    _TEMOIN_PID=0
-    # La piste se remplit d'un coup : le mouvement s'arrête sur une image
-    # pleine, pas au milieu d'un aller-retour. Le temps de la voir, puis
-    # la ligne est rendue au verdict. Rien si le témoin n'a jamais paru.
-    local ecoule=$(( SECONDS - _TEMOIN_T0 )) plein
-    if (( ecoule >= TK_TEMOIN )); then
-        duree "$ecoule"
-        repeter '━' 9;                        plein="$REPET"
-        repeter ' ' $(( _LARGEUR_TTY - 15 ))
-        printf '\r%s%s%s %s%s%s\033[K\r' \
-            "$REPET" "$C_ACCENT" "$plein" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty 2>/dev/null
-        sleep 0.4
-    fi
+    kill "$_TEMOIN_PID" 2>/dev/null; _TEMOIN_PID=0
     printf '\r\033[K' > /dev/tty 2>/dev/null
 }
+# temoin_fin : la commande a rendu la main. La piste se remplit d'un coup —
+# le mouvement s'arrête sur une image pleine, pas au milieu d'un
+# aller-retour —, le temps de la voir, puis la ligne est rendue au verdict.
+temoin_fin() {
+    (( _TEMOIN_PID )) || return 0
+    kill "$_TEMOIN_PID" 2>/dev/null   # avant de dessiner : le fils ne repasse pas dessus
+    if temoin_visible; then
+        repeter '━' 9
+        temoin_ligne "$C_ACCENT$REPET$C0" > /dev/tty 2>/dev/null
+        sleep 0.4
+    fi
+    temoin_effacer
+}
 
-# executer_une <commande> <log 0/1> : code de la commande ; _DUREE_S posé.
+# executer_une <commande> <log 0/1> <écran 0/1> : code de la commande ; _DUREE_S posé.
 _DUREE_S=0
 executer_une() {
     local _debut=$SECONDS _rc
     INTERROMPU=0; journal "$1"
     [[ "$_SIMULATION" == "true" ]] && { _DUREE_S=0; return 0; }
-    # Le départ se voit. Presque toutes les commandes finissent par un
-    # « | tail » : rien ne sort avant la fin, et l'écran restait mort
-    # pendant des minutes sans qu'on sache si la touche avait été prise.
-    # Une ligne franche, du même ◐ accentué que le bandeau de l'étape, et
-    # l'heure — sur une commande longue, c'est elle qui dit depuis quand.
-    # Pas de témoin animé : la sortie de la commande arrive au même endroit
-    # et viendrait s'y coller.
+    # Le départ se voit : l'heure, en gris — sur une commande longue,
+    # c'est elle qui dit depuis quand. Puis le témoin, sauf si l'étape
+    # occupe l'écran.
     printf '  %slancée à %(%T)T%s\n' "$ESTOMPE" -1 "$C0"
-    temoin_debut
+    temoin_debut "$3"
     printf '%s' "$SORTIE_GRISE"
     if (( $2 )); then
         # Un tube et non une substitution de processus : le shell attend tee,
@@ -1813,14 +1831,16 @@ executer_une() {
     else
         eval "$1"; _rc=$?
     fi
+    # Le shell est remis d'aplomb AVANT tout affichage : un « set -e » ou
+    # une sortie redirigée laissés par la commande ne touchent rien d'ici.
+    retablir_shell
+    temoin_fin
     printf '%s' "$C0"
     # Une sortie sans retour à la ligne final laissait le curseur au milieu
     # de la ligne, et le verdict venait s'y coller. On remplit la ligne
     # d'espaces : si le curseur était en cours de route, on passe à la
     # suivante ; s'il était au début, l'affichage d'après les recouvre.
-    temoin_fin
     [[ -t 1 ]] && printf '%*s\r' $(( _LARGEUR_TTY - 1 )) ''
-    retablir_shell
     _DUREE_S=$(( SECONDS - _debut )); duree "$_DUREE_S"; journal "code $_rc en $DUREE_TXT"
     return "$_rc"
 }
@@ -1850,7 +1870,7 @@ executer_groupe() {
             esac
         fi
 
-        executer_une "${_EXP_CMDS[$_i]}" "$_F_LOG"; _rc=$?
+        executer_une "${_EXP_CMDS[$_i]}" "$_F_LOG" "$_F_ECRAN"; _rc=$?
 
         if (( INTERROMPU )); then
             INTERROMPU=0
@@ -1928,6 +1948,7 @@ plan_initial() {   # [oui] = avec les commandes
         (( _F_LOG ))     && m+="${m:+ · }log"
         (( _F_STOP ))    && m+="${m:+ · }stop"
         (( _F_CONTINU )) && m+="${m:+ · }continu"
+        (( _F_ECRAN ))   && m+="${m:+ · }écran"
         if etape_retenue "$i"; then etats+=(todo); marques+=("$m")
         else etats+=(skip); marques+=("hors filtre"); fi
     done
@@ -1998,7 +2019,8 @@ recap() {
     printf '  %sjournal  %s%s\n' "$ESTOMPE" "$_LOG" "$C0"
     ecrire_rapport
 }
-au_revoir() { restaurer_terminal; recap; }
+# Le shell d'abord : un « set -e » laissé par une commande tuerait le récapitulatif.
+au_revoir() { retablir_shell; temoin_effacer; recap; }
 trap au_revoir EXIT
 
 # Au-delà de dix itérations, seules celles qui ont mal tourné sont montrées.
@@ -2278,6 +2300,7 @@ jouer_etape() {
         (( _F_LOG ))     && info "la sortie est recopiée dans le journal"
         (( _F_STOP ))    && info "un échec ici arrête le script"
         (( _F_CONTINU )) && info "un échec ici est ignoré, sans question"
+        (( _F_ECRAN ))   && info "l'étape occupe l'écran : pas de témoin d'attente"
 
         _CHOIX=""   # vide = exécuter : les étapes « false » partent seules
         if [[ "$_F_VALIDER" == "true" || "$TK_TOUT_VALIDER" == "true" ]]; then
