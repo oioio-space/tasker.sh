@@ -2105,10 +2105,36 @@ plan_initial
 # Tout ce qui arrive à une étape, du titre au récapitulatif : la reprise,
 # la résolution des valeurs, l'expansion des listes, le dialogue, et le
 # verdict. Rend 1 si --only ou --from l'écartent, 0 sinon.
+# noter_etape : ce que l'exécution vient de donner devient une ligne du
+# récapitulatif. Lit les _G_* posés par executer_groupe ; ne décide rien
+# d'autre — l'arrêt éventuel reste chez l'appelant.
+noter_etape() {
+    local bilan
+    duree "$_G_DUREE"
+    if (( ! _REPETEE )); then
+        if   (( _G_INT )); then recap_ajouter int "$DUREE_TXT"
+             (( _G_ARRET )) || demander_oui_non "  Passer à l'étape suivante ? ${ESTOMPE}[O/n]${C0} " || quitter 130
+        elif (( _G_KO )); then recap_ajouter ko "code $_G_RC"
+        elif [[ "$_SIMULATION" == "true" ]]; then recap_ajouter sim simulee
+        else recap_ajouter ok "$DUREE_TXT"; fi
+        return 0
+    fi
+    if [[ "$_SIMULATION" == "true" ]]; then recap_ajouter sim "$_NB_ITER iter"
+    elif (( _G_KO )); then recap_ajouter ko "$_G_KO KO /$_NB_ITER"
+    elif (( _G_INT || _G_SKIP || _G_ARRET )); then recap_ajouter int "$_G_OK/$_NB_ITER ok"
+    else recap_ajouter ok "$_G_OK/$_NB_ITER$( (( _EXP_TRONQUE )) && printf ' tronq') $DUREE_TXT"; fi
+    bilan="$C_OK$_G_OK réussie$(pluriel "$_G_OK")$C0"
+    (( _G_KO ))   && bilan+=" · $C_KO$_G_KO échec$(pluriel "$_G_KO")$C0"
+    (( _G_INT ))  && bilan+=" · $C_WARN$_G_INT interrompue$(pluriel "$_G_INT")$C0"
+    (( _G_SKIP )) && bilan+=" · $ESTOMPE$_G_SKIP passée$(pluriel "$_G_SKIP")$C0"
+    printf '\n  %s└─%s  %s · %s%s%s\n' "$ESTOMPE" "$C0" "$bilan" "$ESTOMPE" "$DUREE_TXT" "$C0"
+    return 0
+}
+
 jouer_etape() {
     local entree="$1" e
     suivre_fenetre          # la fenêtre a pu changer depuis l'étape d'avant
-    local _TITRE _RESTE _BRUTE _OCC _CLE _CMDBASE _NOUVELLE _BILAN _CHOIX
+    local _TITRE _RESTE _BRUTE _OCC _CLE _CMDBASE _NOUVELLE _CHOIX
     local _BESOIN_EXP _RCEXP _NB_ITER _REPETEE _UNE_PAR_UNE
     # Le titre garde ses [[nom]] : c'est la clé de --resume et ce qu'affiche
     # le plan. Au récapitulatif il est figé avec les valeurs du moment, pour
@@ -2183,24 +2209,7 @@ jouer_etape() {
                 executer_groupe "$_UNE_PAR_UNE" "$_REPETEE"
                 (( _REPETEE && ${#_ITERS[@]} > 0 )) && _ENFANTS["$_NUM"]="$(printf '%s\x01' "${_ITERS[@]}")"
 
-                if (( _REPETEE )); then
-                    duree "$_G_DUREE"
-                    if [[ "$_SIMULATION" == "true" ]]; then recap_ajouter sim "$_NB_ITER iter"
-                    elif (( _G_KO == 0 && _G_INT == 0 && _G_SKIP == 0 && _G_ARRET == 0 )); then
-                        recap_ajouter ok "$_G_OK/$_NB_ITER$( (( _EXP_TRONQUE )) && printf ' tronq') $DUREE_TXT"
-                    elif (( _G_KO > 0 )); then recap_ajouter ko "$_G_KO KO /$_NB_ITER"
-                    else recap_ajouter int "$_G_OK/$_NB_ITER ok"; fi
-                    _BILAN="$C_OK$_G_OK réussie$(pluriel "$_G_OK")$C0"
-                    (( _G_KO ))   && _BILAN+=" · $C_KO$_G_KO échec$(pluriel "$_G_KO")$C0"
-                    (( _G_INT ))  && _BILAN+=" · $C_WARN$_G_INT interrompue$(pluriel "$_G_INT")$C0"
-                    (( _G_SKIP )) && _BILAN+=" · $ESTOMPE$_G_SKIP passée$(pluriel "$_G_SKIP")$C0"
-                    printf '\n  %s└─%s  %s · %s%s%s\n' "$ESTOMPE" "$C0" "$_BILAN" "$ESTOMPE" "$DUREE_TXT" "$C0"
-                elif (( _G_INT )); then
-                    duree "$_G_DUREE"; recap_ajouter int "$DUREE_TXT"
-                    (( _G_ARRET )) || demander_oui_non "  Passer à l'étape suivante ? ${ESTOMPE}[O/n]${C0} " || quitter 130
-                elif (( _G_KO )); then recap_ajouter ko "code $_G_RC"
-                elif [[ "$_SIMULATION" == "true" ]]; then recap_ajouter sim simulee
-                else duree "$_G_DUREE"; recap_ajouter ok "$DUREE_TXT"; fi
+                noter_etape
                 (( _G_ARRET == 2 )) && quitter 1
                 break ;;
             l) lister_iterations ;;
