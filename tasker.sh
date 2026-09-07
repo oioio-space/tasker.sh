@@ -1923,7 +1923,12 @@ recap_enfants() {
     local brut="${_ENFANTS[$1]:-}" i n e d t caches=0 tout=0 marge
     local -a lignes=() montrees=()
     [[ -n "$brut" ]] || return 0
-    mapfile -t lignes < <(printf '%s' "${brut//$'\x01'/$'\n'}")
+    # Le \x01 final est retiré avant : sinon le « here-string » ajoute une
+    # ligne vide, et le seuil des dix itérations se déclenche un cran trop
+    # tôt. Pas de < <( ) ici : bash 4.3 y perd le saut de ligne du
+    # remplacement et écrasait toutes les itérations sur une seule ligne.
+    brut="${brut%$'\x01'}"
+    mapfile -t lignes <<< "${brut//$'\x01'/$'\n'}"
     (( ${#lignes[@]} <= 10 )) && tout=1
     for i in "${!lignes[@]}"; do
         [[ -n "${lignes[$i]}" ]] || continue
