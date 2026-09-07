@@ -1737,7 +1737,7 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ;
 _TEMOIN_PID=0
 temoin_debut() {
     [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
-    { local -a f=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧'); local i=0 n=$(( TK_TEMOIN * 4 ))
+    { local -a f=('◐' '◓' '◑' '◒'); local i=0 n=$(( TK_TEMOIN * 4 ))
       sleep "$TK_TEMOIN"
       while :; do
           duree $(( n / 4 ))
@@ -1745,7 +1745,7 @@ temoin_debut() {
           # efface ce qu'une durée plus longue laisserait derrière elle
           # (« 1m00s » après « 59s »).
           printf '\r  %s%s%s %s%s%s\033[K\r' "$C_ACCENT" "${f[$i]}" "$C0" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
-          sleep 0.25; i=$(( (i + 1) % 8 )); n=$(( n + 1 ))
+          sleep 0.25; i=$(( (i + 1) % 4 )); n=$(( n + 1 ))
       done; } 2>/dev/null &
     _TEMOIN_PID=$!
 }
