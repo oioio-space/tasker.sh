@@ -978,7 +978,7 @@ aide_config() {
     h_opt "TK_OPERATEUR"      "qui a lancé ; \${SUDO_USER:-\$USER} sous sudo"
     h_opt "TK_TOUT_VALIDER"   "true = confirmer chaque étape, même les « false »"
     h_opt "TK_MAX_ITERATIONS" "plafond d'une étape répétée, au-delà elle est tronquée"
-    h_opt "TK_TEMOIN"    "secondes de silence avant le témoin animé ; 0 = jamais"
+    h_opt "TK_TEMOIN"    "secondes avant le premier « toujours en cours » ; 0 = jamais"
 }
 
 aide_exemple() {
@@ -1719,26 +1719,34 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ;
     return 0
 }
 
-# Le témoin animé : un compteur qui tourne pendant les commandes longues.
-# Il n'apparaît qu'après TK_TEMOIN secondes de silence, et c'est ce délai
-# qui le rend fréquentable : une commande bavarde (tar -v, photorec) a
-# déjà écrit avant, donc il ne paraît jamais chez elle ; une commande
-# courte se termine avant lui. Il reste un cas — muette longtemps, puis
-# une sortie plus COURTE que le témoin — où quelques caractères du témoin
-# survivent sur la ligne : « 42⠸  3s ». Cosmétique, jamais une perte.
-# Il écrit sur /dev/tty et non sur la sortie standard : ni le journal, ni
-# les fichiers écrits par tee ne le voient. Mettez TK_TEMOIN=0 pour vous
-# en passer.
+# Le témoin d'attente : « toujours en cours », de loin en loin, pendant
+# les commandes longues. Presque toutes les étapes finissent par un
+# « | tail » : rien ne sort avant la fin, et l'écran restait mort.
+#
+# Ce sont des LIGNES ENTIÈRES, et c'est tout l'enjeu. Un compteur animé au
+# même endroit — le \r classique — a été essayé et mesuré : la sortie de
+# la commande arrive sur cette même ligne et n'en efface que le début.
+# Une sortie courte laisse le reste du témoin derrière elle, « FIN  5s »,
+# ce qui ressemble à de la sortie corrompue. Aucun jeu d'effacement n'y
+# peut rien : il faudrait intercepter le premier octet écrit, donc mettre
+# la commande dans un tube, donc lui retirer son terminal. Des lignes
+# entières, elles, s'intercalent proprement quoi qu'il arrive.
+#
+# L'intervalle double à chaque fois — TK_TEMOIN, puis 2×, 4×… plafonné à
+# une minute : dense quand on regarde, discret ensuite. Une commande de
+# vingt minutes tient en une vingtaine de lignes.
+#
+# Le témoin écrit sur /dev/tty : ni le journal, ni les fichiers écrits par
+# tee ne le voient. TK_TEMOIN=0 pour s'en passer.
 _TEMOIN_PID=0
 temoin_debut() {
     [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
-    { local -a f=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧') ; local i=0 n=$(( TK_TEMOIN * 4 ))
-      sleep "$TK_TEMOIN"
+    { local pause=$TK_TEMOIN n=0
       while :; do
-          duree $(( n / 4 ))
-          printf '  %s  %s%s%s
-' "$C_ACCENT${f[$i]}$C0" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
-          sleep 0.25; i=$(( (i + 1) % 8 )); n=$(( n + 1 ))
+          sleep "$pause"; n=$(( n + pause ))
+          duree "$n"
+          printf '  %s  %stoujours en cours… %s%s\n' "${GLYPHE[cours]}" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
+          (( pause < 60 )) && pause=$(( pause * 2 )) && (( pause > 60 )) && pause=60
       done; } 2>/dev/null &
     _TEMOIN_PID=$!
 }
