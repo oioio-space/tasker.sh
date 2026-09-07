@@ -43,6 +43,7 @@ TK_REQUIS=(du df)              # binaires attendus ; absents = avertissement
 TK_OPERATEUR="${SUDO_USER:-${USER:-inconnu}}"   # noté au journal et au rapport
 TK_TOUT_VALIDER="false"        # true = confirmer chaque étape (ou -a)
 TK_MAX_ITERATIONS=500          # au-delà, une étape répétée est tronquée
+TK_TEMOIN=3                    # secondes de silence avant le témoin animé ; 0 = jamais
 
 
 # =====================================================================
@@ -977,6 +978,7 @@ aide_config() {
     h_opt "TK_OPERATEUR"      "qui a lancé ; \${SUDO_USER:-\$USER} sous sudo"
     h_opt "TK_TOUT_VALIDER"   "true = confirmer chaque étape, même les « false »"
     h_opt "TK_MAX_ITERATIONS" "plafond d'une étape répétée, au-delà elle est tronquée"
+    h_opt "TK_TEMOIN"    "secondes de silence avant le témoin animé ; 0 = jamais"
 }
 
 aide_exemple() {
@@ -1211,6 +1213,8 @@ done
 case "${TK_TOUT_VALIDER,,}" in true|oui|1) TK_TOUT_VALIDER="true" ;; *) TK_TOUT_VALIDER="false" ;; esac
 [[ "$TK_MAX_ITERATIONS" =~ ^[0-9]+$ ]] && (( TK_MAX_ITERATIONS >= 1 )) \
     || { erreur "TK_MAX_ITERATIONS doit être un entier positif : $TK_MAX_ITERATIONS"; exit 1; }
+[[ "$TK_TEMOIN" =~ ^[0-9]+$ ]] \
+    || { erreur "TK_TEMOIN doit être un entier de secondes, ou 0 : $TK_TEMOIN"; exit 1; }
 [[ "$_DEPUIS" =~ ^[0-9]+$ ]] || { erreur "--from attend un numéro d'étape"; exit 1; }
 _DEPUIS=$(( 10#$_DEPUIS ))
 _FILTRE_ETAPES="${_FILTRE_ETAPES//[[:space:]]/}"
@@ -1715,6 +1719,35 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ;
     return 0
 }
 
+# Le témoin animé : un compteur qui tourne pendant les commandes longues.
+# Il n'apparaît qu'après TK_TEMOIN secondes de silence, et c'est ce délai
+# qui le rend fréquentable : une commande bavarde (tar -v, photorec) a
+# déjà écrit avant, donc il ne paraît jamais chez elle ; une commande
+# courte se termine avant lui. Il reste un cas — muette longtemps, puis
+# une sortie plus COURTE que le témoin — où quelques caractères du témoin
+# survivent sur la ligne : « 42⠸  3s ». Cosmétique, jamais une perte.
+# Il écrit sur /dev/tty et non sur la sortie standard : ni le journal, ni
+# les fichiers écrits par tee ne le voient. Mettez TK_TEMOIN=0 pour vous
+# en passer.
+_TEMOIN_PID=0
+temoin_debut() {
+    [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
+    { local -a f=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧') ; local i=0 n=$(( TK_TEMOIN * 4 ))
+      sleep "$TK_TEMOIN"
+      while :; do
+          duree $(( n / 4 ))
+          printf '  %s  %s%s%s
+' "$C_ACCENT${f[$i]}$C0" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
+          sleep 0.25; i=$(( (i + 1) % 8 )); n=$(( n + 1 ))
+      done; } 2>/dev/null &
+    _TEMOIN_PID=$!
+}
+temoin_fin() {
+    (( _TEMOIN_PID )) || return 0
+    kill "$_TEMOIN_PID" 2>/dev/null; wait "$_TEMOIN_PID" 2>/dev/null
+    _TEMOIN_PID=0
+}
+
 # executer_une <commande> <log 0/1> : code de la commande ; _DUREE_S posé.
 _DUREE_S=0
 executer_une() {
@@ -1729,6 +1762,7 @@ executer_une() {
     # Pas de témoin animé : la sortie de la commande arrive au même endroit
     # et viendrait s'y coller.
     printf '  %s  %slancée à %(%T)T%s\n' "${GLYPHE[cours]}" "$ESTOMPE" -1 "$C0"
+    temoin_debut
     printf '%s' "$SORTIE_GRISE"
     if (( $2 )); then
         # Un tube et non une substitution de processus : le shell attend tee,
@@ -1744,6 +1778,7 @@ executer_une() {
     # de la ligne, et le verdict venait s'y coller. On remplit la ligne
     # d'espaces : si le curseur était en cours de route, on passe à la
     # suivante ; s'il était au début, l'affichage d'après les recouvre.
+    temoin_fin
     [[ -t 1 ]] && printf '%*s\r' $(( _LARGEUR_TTY - 1 )) ''
     retablir_shell
     _DUREE_S=$(( SECONDS - _debut )); duree "$_DUREE_S"; journal "code $_rc en $DUREE_TXT"

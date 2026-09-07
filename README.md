@@ -29,7 +29,7 @@ jamais :
 | | section | ce qu'on y met |
 |---|---|---|
 | 1 | variables | ce qui change d'un usage à l'autre |
-| 2 | réglages | posés une fois : `TK_REQUIS`, `TK_OPERATEUR`, `TK_TOUT_VALIDER`, `TK_MAX_ITERATIONS` |
+| 2 | réglages | posés une fois : `TK_REQUIS`, `TK_OPERATEUR`, `TK_TOUT_VALIDER`, `TK_MAX_ITERATIONS`, `TK_TEMOIN` |
 | 3 | commandes | les étapes |
 | 4 | listes | les valeurs sur lesquelles une étape se répète |
 | 5 | fonctions | les vôtres, appelées par 3 et 4 |
@@ -501,6 +501,7 @@ shell est écarté au démarrage — vos commandes ne l'héritent plus non plus.
 | `TK_OPERATEUR` | qui a lancé, noté au bandeau, au journal et au rapport | texte ; `${SUDO_USER:-$USER}` prend la vraie personne sous sudo |
 | `TK_TOUT_VALIDER` | confirmer chaque étape, même les `false` | `true` / `false` (ou `-a`) |
 | `TK_MAX_ITERATIONS` | plafond d'une étape répétée, au-delà elle est tronquée | entier ≥ 1 |
+| `TK_TEMOIN` | secondes de silence avant le témoin animé d'une commande longue | entier ≥ 0, `0` = jamais |
 | `TK_REQUIS` | binaires vérifiés au départ ; absents = avertissement | tableau : `(du df)` |
 | `TK_INTRO` | texte affiché après le bandeau (facultatif) | texte, plusieurs lignes possibles |
 
