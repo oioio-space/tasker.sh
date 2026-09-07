@@ -1737,15 +1737,32 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ;
 _TEMOIN_PID=0
 temoin_debut() {
     [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
-    { local -a f=('◐' '◓' '◑' '◒'); local i=0 n=$(( TK_TEMOIN * 4 ))
+    # Les images sont calculées une fois : un segment épais ━ — celui de
+    # la barre d'avancement du bandeau — qui glisse sur une piste fine ─,
+    # celle des filets, et revient. L'épaisseur porte le mouvement autant
+    # que la couleur : on le suit même sans couleur.
+    { local -a f=(); local i=0 n=$(( TK_TEMOIN * 8 )) p g m d
+      for (( p = 0; p <= 6; p++ )); do
+          repeter '─' "$p";           g="$REPET"
+          repeter '━' 3;              m="$REPET"
+          repeter '─' $(( 6 - p ));   d="$REPET"
+          f+=( "$ESTOMPE$g$C0$C_ACCENT$m$C0$ESTOMPE$d$C0" )
+      done
+      for (( p = 5; p >= 1; p-- )); do f+=( "${f[$p]}" ); done
       sleep "$TK_TEMOIN"
       while :; do
-          duree $(( n / 4 ))
+          duree $(( n / 8 ))
           # \r et non \n : la ligne est réécrite, jamais empilée. Le \033[K
           # efface ce qu'une durée plus longue laisserait derrière elle
           # (« 1m00s » après « 59s »).
-          printf '\r  %s%s%s %s%s%s\033[K\r' "$C_ACCENT" "${f[$i]}" "$C0" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
-          sleep 0.25; i=$(( (i + 1) % 4 )); n=$(( n + 1 ))
+          # Le témoin est posé À DROITE, et le curseur revient colonne 0.
+          # La sortie de la commande, qui part de la gauche, ne le heurte
+          # que si elle atteint le bord — et l'écrase alors proprement.
+          # À gauche, elle le traverserait : les tabulations d'un fls
+          # sautent sans effacer, et le témoin resterait dans le trou.
+          repeter ' ' $(( _LARGEUR_TTY - 15 ))
+          printf '\r%s%s %s%s%s\033[K\r' "$REPET" "${f[$i]}" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
+          sleep 0.12; i=$(( (i + 1) % ${#f[@]} )); n=$(( n + 1 ))
       done; } 2>/dev/null &
     _TEMOIN_PID=$!
 }
@@ -1769,7 +1786,7 @@ executer_une() {
     # l'heure — sur une commande longue, c'est elle qui dit depuis quand.
     # Pas de témoin animé : la sortie de la commande arrive au même endroit
     # et viendrait s'y coller.
-    printf '  %s  %slancée à %(%T)T%s\n' "${GLYPHE[cours]}" "$ESTOMPE" -1 "$C0"
+    printf '  %slancée à %(%T)T%s\n' "$ESTOMPE" -1 "$C0"
     temoin_debut
     printf '%s' "$SORTIE_GRISE"
     if (( $2 )); then
