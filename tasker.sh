@@ -1727,21 +1727,23 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU ;
 # presque tout le travail : une commande bavarde — tar -v, photorec — a
 # déjà écrit avant, donc il ne paraît jamais chez elle ; une commande
 # courte se termine avant lui. Il ne reste qu'un cas : muette longtemps,
-# puis une première ligne de sortie plus COURTE que le témoin. Elle
-# n'efface alors que le début de la ligne et laisse « 42 ⠸ 12s ». C'est
-# cosmétique, sur une ligne, jamais une perte — mais c'est le prix d'un
-# compteur qui ne s'empile pas. TK_TEMOIN=0 pour s'en passer.
+# puis une première ligne de sortie plus COURTE que la largeur du terminal.
+# Elle n'efface que le début de la ligne et laisse le témoin à son bout,
+# « /etc/shadow      ──━ 15s ». C'est cosmétique, sur une ligne, jamais une
+# perte — mais c'est le prix d'un témoin qui ne s'empile pas. TK_TEMOIN=0
+# pour s'en passer.
 #
 # Le témoin écrit sur /dev/tty : ni le journal, ni les fichiers écrits par
 # tee ne le voient.
 _TEMOIN_PID=0
+_TEMOIN_T0=0
 temoin_debut() {
     [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
     # Les images sont calculées une fois : un segment épais ━ — celui de
     # la barre d'avancement du bandeau — qui glisse sur une piste fine ─,
     # celle des filets, et revient. L'épaisseur porte le mouvement autant
     # que la couleur : on le suit même sans couleur.
-    { local -a f=(); local i=0 n=$(( TK_TEMOIN * 8 )) p g m d
+    { local -a f=(); local i=0 n=$(( TK_TEMOIN * 6 )) p g m d
       for (( p = 0; p <= 6; p++ )); do
           repeter '─' "$p";           g="$REPET"
           repeter '━' 3;              m="$REPET"
@@ -1751,7 +1753,7 @@ temoin_debut() {
       for (( p = 5; p >= 1; p-- )); do f+=( "${f[$p]}" ); done
       sleep "$TK_TEMOIN"
       while :; do
-          duree $(( n / 8 ))
+          duree $(( n / 6 ))
           # \r et non \n : la ligne est réécrite, jamais empilée. Le \033[K
           # efface ce qu'une durée plus longue laisserait derrière elle
           # (« 1m00s » après « 59s »).
@@ -1762,14 +1764,27 @@ temoin_debut() {
           # sautent sans effacer, et le témoin resterait dans le trou.
           repeter ' ' $(( _LARGEUR_TTY - 15 ))
           printf '\r%s%s %s%s%s\033[K\r' "$REPET" "${f[$i]}" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty
-          sleep 0.12; i=$(( (i + 1) % ${#f[@]} )); n=$(( n + 1 ))
+          sleep 0.16; i=$(( (i + 1) % ${#f[@]} )); n=$(( n + 1 ))
       done; } 2>/dev/null &
     _TEMOIN_PID=$!
+    _TEMOIN_T0=$SECONDS
 }
 temoin_fin() {
     (( _TEMOIN_PID )) || return 0
     kill "$_TEMOIN_PID" 2>/dev/null; wait "$_TEMOIN_PID" 2>/dev/null
     _TEMOIN_PID=0
+    # La piste se remplit d'un coup : le mouvement s'arrête sur une image
+    # pleine, pas au milieu d'un aller-retour. Le temps de la voir, puis
+    # la ligne est rendue au verdict. Rien si le témoin n'a jamais paru.
+    local ecoule=$(( SECONDS - _TEMOIN_T0 )) plein
+    if (( ecoule >= TK_TEMOIN )); then
+        duree "$ecoule"
+        repeter '━' 9;                        plein="$REPET"
+        repeter ' ' $(( _LARGEUR_TTY - 15 ))
+        printf '\r%s%s%s %s%s%s\033[K\r' \
+            "$REPET" "$C_ACCENT" "$plein" "$ESTOMPE" "$DUREE_TXT" "$C0" > /dev/tty 2>/dev/null
+        sleep 0.4
+    fi
     printf '\r\033[K' > /dev/tty 2>/dev/null
 }
 
