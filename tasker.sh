@@ -34,25 +34,26 @@ fi
 # fois celle-ci finie : « kill PID » au milieu d'un fls d'une heure ne
 # ferait rien avant une heure. Le script se relance donc sous un gardien
 # qui n'a rien d'autre à faire qu'attendre — et attendre, ça s'interrompt.
-# Le signal reçu part au script (qui le traitera dès que sa commande rend
-# la main) puis à toute la descendance de la commande, feuilles d'abord.
+# Le signal reçu part au script, une fois — il le traitera dès que sa
+# commande rend la main —, puis à la descendance de la commande, feuilles
+# d'abord. Pas au groupe de processus : sous sudo ou appelé d'un autre
+# script, le groupe n'est pas le nôtre. Un processus qui s'est détaché de
+# sa lignée (double fork) échappe donc à la marche ; c'est accepté.
 # Ctrl-C n'a pas besoin de lui : le terminal l'envoie déjà à tout le monde
 # — à condition de le rendre au script : un « & » fait ignorer INT et QUIT
-# à son enfant, le sous-shell les remet avant de se changer en script.
+# à son enfant, et lui donne /dev/null pour entrée ; le sous-shell remet
+# les deux et garde l'entrée avant de se changer en script.
 if [ -z "${_TK_GARDIEN:-}" ]; then
-    ( trap - INT QUIT; _TK_GARDIEN=$$ exec "$BASH" "$0" "$@" ) &
-    _tk_script=$!
-    _tk_tuer() { local p; for p in $(pgrep -P "$2" 2>/dev/null); do _tk_tuer "$1" "$p"; done; kill -"$1" "$2" 2>/dev/null; }
-    _tk_relayer() {
-        local p; trap '' TERM HUP
-        kill -"$1" "$_tk_script" 2>/dev/null
-        for p in $(pgrep -P "$_tk_script" 2>/dev/null); do _tk_tuer "$1" "$p"; done
-    }
+    command -v pgrep >/dev/null 2>&1 || printf "pgrep manquant : un kill du script n'arrêtera pas sa commande en cours\n" >&2
+    ( trap - INT QUIT; _TK_GARDIEN=1 exec "$BASH" "$0" "$@" ) <&0 &
+    _tk_script=$! _tk_rc=0
+    _tk_descendance() { local p; for p in $(pgrep -P "$2" 2>/dev/null); do _tk_descendance "$1" "$p"; kill -"$1" "$p" 2>/dev/null; done; }
+    _tk_relayer() { trap '' TERM HUP; kill -"$1" "$_tk_script" 2>/dev/null; _tk_descendance "$1" "$_tk_script"; }
     trap '_tk_relayer TERM' TERM
     trap '_tk_relayer HUP' HUP
-    trap '' INT
+    trap '' INT QUIT
     # Un signal fait rendre la main à wait avant la fin du script : on
-    # attend tant qu'il vit, et on sort avec son code.
+    # attend tant qu'il vit.
     while kill -0 "$_tk_script" 2>/dev/null; do wait "$_tk_script"; _tk_rc=$?; done
     exit "$_tk_rc"
 fi
@@ -1775,10 +1776,6 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU _
 # commande n'attend que les enfants de la commande, pas lui.
 _TEMOIN_PID=0
 _TEMOIN_T0=0
-# Le témoin a-t-il paru depuis au moins une seconde ? SECONDS compte en
-# secondes entières, d'où le > : on ne remplit jamais une piste qui n'a
-# pas été montrée, et l'on ne remplit pas celle qui n'a fait que passer.
-temoin_installe() { (( SECONDS - _TEMOIN_T0 > TK_TEMOIN )); }
 # temoin_ligne <image> : la ligne du témoin, posée À DROITE, sur la sortie
 # standard. \r et non \n : la ligne est réécrite, jamais empilée. Le \033[K
 # efface ce qu'une durée plus longue laisserait derrière elle (« 1m00s »
@@ -1801,6 +1798,7 @@ temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
     # celle des filets, et revient. L'épaisseur porte le mouvement autant
     # que la couleur : on le suit même sans couleur.
     { local -a img=(); local i=0 p g m d
+      sleep "$TK_TEMOIN"   # pile, et non à la seconde entière d'après
       for (( p = 0; p <= 6; p++ )); do
           repeter '─' "$p";           g="$REPET"
           repeter '━' 3;              m="$REPET"
@@ -1808,7 +1806,6 @@ temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
           img+=( "$ESTOMPE$g$C0$C_ACCENT$m$C0$ESTOMPE$d$C0" )
       done
       for (( p = 5; p >= 1; p-- )); do img+=( "${img[$p]}" ); done
-      sleep "$TK_TEMOIN"   # pile, et non à la seconde entière d'après
       while :; do
           temoin_ligne "${img[$i]}"; i=$(( (i + 1) % ${#img[@]} ))
           sleep 0.16
@@ -1829,7 +1826,9 @@ temoin_effacer() {
 temoin_fin() {
     (( _TEMOIN_PID )) || return 0
     kill "$_TEMOIN_PID" 2>/dev/null   # avant de dessiner : le fils ne repasse pas dessus
-    if temoin_installe; then
+    # Un cran au-dessus du sleep du fils, exprès : SECONDS est entier, et
+    # une piste à peine montrée n'a pas à se remplir.
+    if (( SECONDS - _TEMOIN_T0 > TK_TEMOIN )); then
         repeter '━' 9
         temoin_ligne "$C_ACCENT$REPET$C0" > /dev/tty 2>/dev/null
         sleep 0.4
