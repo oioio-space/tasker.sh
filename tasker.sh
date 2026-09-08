@@ -1275,6 +1275,11 @@ for e in ${SETS[@]+"${SETS[@]}"}; do
     [[ "$e" == *=* && "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { erreur "--set attend NOM=valeur : $e"; exit 1; }
     decl="$(declare -p "$k" 2>/dev/null)" || { erreur "--set : aucune variable « $k » en section 1 ni 2"; exit 1; }
     [[ "$decl" != "declare -a"* && "$decl" != "declare -A"* ]] || { erreur "--set : « $k » est un tableau, modifiez-le dans le fichier -c"; exit 1; }
+    # Les commandes citent vos variables entre guillemets simples : une
+    # apostrophe dans la valeur les refermerait, et la suite serait exécutée.
+    # Les valeurs demandées ([[nom]]) et les listes ({{nom}}) sont protégées
+    # en entrant dans la commande ; une variable, non — on la refuse ici.
+    [[ "${e#*=}" != *\'* ]] || { erreur "--set : apostrophe refusée dans « $k », elle casserait les guillemets des commandes : ${e#*=}"; exit 1; }
     printf -v "$k" '%s' "${e#*=}" 2>/dev/null \
         || { erreur "--set : « $k » ne peut pas être modifiée (lecture seule ?)"; exit 1; }
 done
@@ -1311,6 +1316,7 @@ for v in TK_SUJET TK_PREFIX DIR_LOGS; do
     [[ -n "${!v:-}" ]] || { erreur "calculer_variables doit définir $v (section 6, ou votre fichier -c)"; exit 1; }
 done
 [[ "$TK_PREFIX" != */* ]] || { erreur "TK_PREFIX ne peut pas contenir de / : $TK_PREFIX"; exit 1; }
+[[ "$TK_PREFIX" != *\'* ]] || { erreur "TK_PREFIX ne peut pas contenir d'apostrophe : $TK_PREFIX"; exit 1; }
 
 [[ "$_GABARIT" == "true" ]] && { gabarit; exit 0; }
 
@@ -2229,6 +2235,7 @@ CREES=0
 for nom in ${!DIR_@}; do
     d="${!nom}"
     [[ -n "$d" ]] || { erreur "$nom est vide."; exit 1; }
+    [[ "$d" != *\'* ]] || { erreur "$nom contient une apostrophe, elle casserait les guillemets des commandes : $d"; exit 1; }
     if [[ ! -d "$d" && "$_SIMULATION" != "true" ]]; then
         mkdir -p "$d" || { erreur "création impossible : $d"; exit 1; }; CREES=$(( CREES + 1 ))
     fi
