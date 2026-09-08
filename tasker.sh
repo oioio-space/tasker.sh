@@ -34,29 +34,55 @@ fi
 # fois celle-ci finie : « kill PID » au milieu d'un fls d'une heure ne
 # ferait rien avant une heure. Le script se relance donc sous un gardien
 # qui n'a rien d'autre à faire qu'attendre — et attendre, ça s'interrompt.
-# Le signal reçu part au script, une fois — il le traitera dès que sa
-# commande rend la main —, puis à la descendance de la commande, feuilles
-# d'abord. Pas au groupe de processus : sous sudo ou appelé d'un autre
-# script, le groupe n'est pas le nôtre. Un processus qui s'est détaché de
-# sa lignée (double fork) échappe donc à la marche ; c'est accepté.
+#
+# Le signal reçu part au script, puis à la descendance de sa commande,
+# relevée AVANT de signaler le script : ce qu'il lance ensuite pour finir
+# (récapitulatif, stty) n'y est pas. Chaque processus est gelé avant sa
+# descendance et signalé après elle : un père qui relance ses fils morts
+# n'en a pas le temps. Pas de « kill » du groupe de processus : la commande
+# doit rester dans le groupe du terminal — pour ses questions, pour un
+# photorec —, et bash ne sait pas lui en donner un autre au premier plan.
+# Restent hors de portée : un processus détaché de sa lignée (double
+# fork), et ceux d'un autre utilisateur (sudo dans une étape) — ceux-là
+# sont nommés. Un second kill relaie de nouveau.
+#
 # Ctrl-C n'a pas besoin de lui : le terminal l'envoie déjà à tout le monde
 # — à condition de le rendre au script : un « & » fait ignorer INT et QUIT
 # à son enfant, et lui donne /dev/null pour entrée ; le sous-shell remet
-# les deux et garde l'entrée avant de se changer en script.
-if [ -z "${_TK_GARDIEN:-}" ]; then
-    command -v pgrep >/dev/null 2>&1 || printf "pgrep manquant : un kill du script n'arrêtera pas sa commande en cours\n" >&2
-    ( trap - INT QUIT; _TK_GARDIEN=1 exec "$BASH" "$0" "$@" ) <&0 &
-    _tk_script=$! _tk_rc=0
-    _tk_descendance() { local p; for p in $(pgrep -P "$2" 2>/dev/null); do _tk_descendance "$1" "$p"; kill -"$1" "$p" 2>/dev/null; done; }
-    _tk_relayer() { trap '' TERM HUP; kill -"$1" "$_tk_script" 2>/dev/null; _tk_descendance "$1" "$_tk_script"; }
+# les deux et garde l'entrée avant de se changer en script. Sans fichier à
+# relancer (« bash < tasker.sh », « curl | bash »), pas de gardien.
+if [ -z "${_TK_GARDIEN:-}" ] && [ -f "$0" ]; then
+    case $- in *x*) _tk_x=-x ;; *) _tk_x= ;; esac
+    ( trap - INT QUIT; _TK_GARDIEN=1 exec "$BASH" $_tk_x "$0" "$@" ) <&0 &
+    _tk_script=$! _tk_rc=0 _tk_signal=0
+    declare -A _tk_enfants=()
+    _tk_tuer() {   # <signal> <pid> : gèle, descend, signale, dégèle
+        local p; kill -STOP "$2" 2>/dev/null
+        for p in ${_tk_enfants[$2]:-}; do _tk_tuer "$1" "$p"; done
+        kill -"$1" "$2" 2>/dev/null || [ ! -d "/proc/$2" ] \
+            || printf "le processus %s n'est pas à nous (sudo ?) : il continue\n" "$2" >&2
+        kill -CONT "$2" 2>/dev/null
+    }
+    _tk_relayer() {   # <signal> : une photo de la descendance, le script, puis elle
+        local p pp; _tk_signal=1; _tk_enfants=()
+        while read -r p pp; do _tk_enfants[$pp]+=" $p"; done < <(ps -A -o pid= -o ppid= 2>/dev/null)
+        kill -"$1" "$_tk_script" 2>/dev/null
+        for p in ${_tk_enfants[$_tk_script]:-}; do _tk_tuer "$1" "$p"; done
+    }
     trap '_tk_relayer TERM' TERM
     trap '_tk_relayer HUP' HUP
     trap '' INT QUIT
-    # Un signal fait rendre la main à wait avant la fin du script : on
-    # attend tant qu'il vit.
-    while kill -0 "$_tk_script" 2>/dev/null; do wait "$_tk_script"; _tk_rc=$?; done
+    # Un relais interrompt wait, qui rend alors 128 + signal : on attend
+    # encore. bash garde le code d'un fils déjà récolté ; 127, c'est qu'il
+    # a déjà été rendu, on garde le précédent.
+    while :; do
+        _tk_signal=0; wait "$_tk_script"; _tk_st=$?
+        [ "$_tk_st" -ne 127 ] && _tk_rc=$_tk_st
+        [ "$_tk_signal" -eq 1 ] || break
+    done
     exit "$_tk_rc"
 fi
+unset _TK_GARDIEN   # servi ; ne pas le léguer à un tasker.sh lancé par une étape
 
 
 # =====================================================================
@@ -684,6 +710,11 @@ barre() {   # <fait> <total> -> BARRE
 }
 
 DUREE_TXT=""
+# horloge -> HORLOGE, l'heure en secondes, sans fork. Pas SECONDS : une
+# commande qui fait « SECONDS=0 » pour se chronométrer fausserait toutes
+# les durées d'après.
+horloge() { printf -v HORLOGE '%(%s)T' -1; return 0; }
+horloge; _T_DEPART=$HORLOGE
 duree() {   # <secondes> -> DUREE_TXT
     if   (( $1 < 60 ));   then printf -v DUREE_TXT '%ds' "$1"
     elif (( $1 < 3600 )); then printf -v DUREE_TXT '%dm%02ds' $(( $1 / 60 )) $(( $1 % 60 ))
@@ -1356,10 +1387,7 @@ retablir_shell() {
     IFS=$' \t\n'
     eval "$SHOPT_TK"
     if [[ "$LC_ALL_TK" == "__absent__" ]]; then unset LC_ALL; else LC_ALL="$LC_ALL_TK"; fi
-    trap gerer_int INT
-    trap au_revoir EXIT
-    trap 'journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
-    trap 'journal "ARRÊT : SIGTERM"; exit 143' TERM
+    poser_traps
     restaurer_terminal
 }
 
@@ -1376,11 +1404,17 @@ gerer_int() {
     fi
     INTERROMPU=1
 }
-trap gerer_int INT
 # Terminal fermé ou kill : on passe par exit pour que le trap EXIT écrive
-# le récapitulatif et le rapport, et que le journal dise pourquoi.
-trap 'journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
-trap 'journal "ARRÊT : SIGTERM"; exit 143' TERM
+# le récapitulatif et le rapport, et que le journal dise pourquoi. Le
+# premier signal ferme la porte aux suivants : un second kill — le gardien
+# relaie, pkill -f touche les deux — couperait le récapitulatif.
+poser_traps() {
+    trap gerer_int INT
+    trap au_revoir EXIT
+    trap 'trap "" TERM HUP; journal "ARRÊT : SIGHUP (terminal fermé)"; exit 129' HUP
+    trap 'trap "" TERM HUP; journal "ARRÊT : SIGTERM"; exit 143' TERM
+}
+poser_traps
 
 # lire <invite> <variable> : Entrée vide = défaut ; Ctrl-D = arrêt.
 lire() {
@@ -1776,6 +1810,7 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU _
 # commande n'attend que les enfants de la commande, pas lui.
 _TEMOIN_PID=0
 _TEMOIN_T0=0
+_TEMOIN_LARG=9   # la piste ; la ligne fait _TEMOIN_LARG + 1 espace + 5 de durée
 # temoin_ligne <image> : la ligne du témoin, posée À DROITE, sur la sortie
 # standard. \r et non \n : la ligne est réécrite, jamais empilée. Le \033[K
 # efface ce qu'une durée plus longue laisserait derrière elle (« 1m00s »
@@ -1786,60 +1821,66 @@ _TEMOIN_T0=0
 # dans le trou. Le SORTIE_GRISE final rend à la sortie de la commande
 # l'estompage que le C0 de l'image a annulé.
 temoin_ligne() {
-    duree $(( SECONDS - _TEMOIN_T0 ))
-    repeter ' ' $(( _LARGEUR_TTY - 15 ))
+    horloge; duree $(( HORLOGE - _TEMOIN_T0 ))
+    repeter ' ' $(( _LARGEUR_TTY - _TEMOIN_LARG - 6 ))
     printf '\r%s%s %s%s%s\033[K\r%s' "$REPET" "$1" "$ESTOMPE" "$DUREE_TXT" "$C0" "$SORTIE_GRISE"
 }
 temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
     (( ! $1 )) && [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
-    _TEMOIN_T0=$SECONDS
+    horloge; _TEMOIN_T0=$HORLOGE
     # Les images sont calculées une fois : un segment épais ━ — celui de
     # la barre d'avancement du bandeau — qui glisse sur une piste fine ─,
     # celle des filets, et revient. L'épaisseur porte le mouvement autant
     # que la couleur : on le suit même sans couleur.
-    { local -a img=(); local i=0 p g m d
-      sleep "$TK_TEMOIN"   # pile, et non à la seconde entière d'après
-      for (( p = 0; p <= 6; p++ )); do
-          repeter '─' "$p";           g="$REPET"
-          repeter '━' 3;              m="$REPET"
-          repeter '─' $(( 6 - p ));   d="$REPET"
+    #
+    # Le fils seul sait s'il a dessiné : c'est lui qui finit la ligne.
+    # USR1, du script, la commande a rendu la main : la piste se remplit
+    # d'un coup — le mouvement s'arrête sur une image pleine, pas au milieu
+    # d'un aller-retour —, le temps de la voir, puis la ligne est rendue.
+    # TERM ou HUP, de qui que ce soit — le script qui sort, le gardien qui
+    # relaie un kill —, la ligne est rendue, sans rien fêter.
+    # Ses sleep sont en arrière-plan et attendus : un wait s'interrompt
+    # sur un signal, un sleep au premier plan le ferait attendre.
+    { local -a img=(); local i=0 p g m d montre=0
+      temoin_sortie() {   # <fêter 0/1>
+          kill "$!" 2>/dev/null
+          if (( montre && $1 )); then
+              repeter '━' "$_TEMOIN_LARG"; temoin_ligne "$C_ACCENT$REPET$C0"; sleep 0.4
+          fi
+          printf '\r\033[K'; exit 0
+      }
+      trap 'temoin_sortie 1' USR1; trap 'temoin_sortie 0' TERM HUP
+      for (( p = 0; p <= _TEMOIN_LARG - 3; p++ )); do
+          repeter '─' "$p";                        g="$REPET"
+          repeter '━' 3;                           m="$REPET"
+          repeter '─' $(( _TEMOIN_LARG - 3 - p )); d="$REPET"
           img+=( "$ESTOMPE$g$C0$C_ACCENT$m$C0$ESTOMPE$d$C0" )
       done
-      for (( p = 5; p >= 1; p-- )); do img+=( "${img[$p]}" ); done
+      for (( p = _TEMOIN_LARG - 4; p >= 1; p-- )); do img+=( "${img[$p]}" ); done
+      sleep "$TK_TEMOIN" & wait "$!"
       while :; do
-          temoin_ligne "${img[$i]}"; i=$(( (i + 1) % ${#img[@]} ))
-          sleep 0.16
+          temoin_ligne "${img[$i]}"; montre=1; i=$(( (i + 1) % ${#img[@]} ))
+          sleep 0.16 & wait "$!"
       done; } > /dev/tty 2>/dev/null &
     _TEMOIN_PID=$!
     disown "$_TEMOIN_PID" 2>/dev/null
 }
-# temoin_effacer : arrête le témoin et rend la ligne, sans rien fêter —
-# c'est ce que veut une sortie brutale du script.
-temoin_effacer() {
+# temoin_arret <USR1|HUP> : le fils finit sa ligne et s'en va ; on attend
+# qu'il soit parti avant d'écrire à sa place — deux secondes au plus.
+temoin_arret() {
     (( _TEMOIN_PID )) || return 0
-    kill "$_TEMOIN_PID" 2>/dev/null; _TEMOIN_PID=0
-    printf '\r\033[K' > /dev/tty 2>/dev/null
-}
-# temoin_fin : la commande a rendu la main. La piste se remplit d'un coup —
-# le mouvement s'arrête sur une image pleine, pas au milieu d'un
-# aller-retour —, le temps de la voir, puis la ligne est rendue au verdict.
-temoin_fin() {
-    (( _TEMOIN_PID )) || return 0
-    kill "$_TEMOIN_PID" 2>/dev/null   # avant de dessiner : le fils ne repasse pas dessus
-    # Un cran au-dessus du sleep du fils, exprès : SECONDS est entier, et
-    # une piste à peine montrée n'a pas à se remplir.
-    if (( SECONDS - _TEMOIN_T0 > TK_TEMOIN )); then
-        repeter '━' 9
-        temoin_ligne "$C_ACCENT$REPET$C0" > /dev/tty 2>/dev/null
-        sleep 0.4
-    fi
-    temoin_effacer
+    local n=0
+    kill -"$1" "$_TEMOIN_PID" 2>/dev/null
+    while kill -0 "$_TEMOIN_PID" 2>/dev/null && (( n++ < 40 )); do sleep 0.05; done
+    kill -KILL "$_TEMOIN_PID" 2>/dev/null
+    _TEMOIN_PID=0
+    return 0
 }
 
 # executer_une <commande> <log 0/1> <écran 0/1> : code de la commande ; _DUREE_S posé.
 _DUREE_S=0
 executer_une() {
-    local _debut=$SECONDS _rc
+    horloge; local _debut=$HORLOGE _rc
     INTERROMPU=0; journal "$1"
     [[ "$_SIMULATION" == "true" ]] && { _DUREE_S=0; return 0; }
     # Le départ se voit : l'heure, en gris — sur une commande longue,
@@ -1860,14 +1901,15 @@ executer_une() {
     # Le shell est remis d'aplomb AVANT tout affichage : un « set -e » ou
     # une sortie redirigée laissés par la commande ne touchent rien d'ici.
     retablir_shell
-    temoin_fin
+    horloge; _DUREE_S=$(( HORLOGE - _debut ))   # avant la fête du témoin, qui prend un instant
+    temoin_arret USR1
     printf '%s' "$C0"
     # Une sortie sans retour à la ligne final laissait le curseur au milieu
     # de la ligne, et le verdict venait s'y coller. On remplit la ligne
     # d'espaces : si le curseur était en cours de route, on passe à la
     # suivante ; s'il était au début, l'affichage d'après les recouvre.
     [[ -t 1 ]] && printf '%*s\r' $(( _LARGEUR_TTY - 1 )) ''
-    _DUREE_S=$(( SECONDS - _debut )); duree "$_DUREE_S"; journal "code $_rc en $DUREE_TXT"
+    duree "$_DUREE_S"; journal "code $_rc en $DUREE_TXT"
     return "$_rc"
 }
 
@@ -1875,7 +1917,7 @@ executer_une() {
 # Résultat dans _G_OK _G_KO _G_SKIP _G_INT _G_ARRET(1 boucle, 2 script) _G_RC _G_DUREE, _ITERS.
 _G_OK=0; _G_KO=0; _G_SKIP=0; _G_INT=0; _G_ARRET=0; _G_DUREE=0; _G_RC=0; _ITERS=()
 executer_groupe() {
-    local _upu="$1" _rep="$2" _n=${#_EXP_CMDS[@]} _i _rc _choix _ign=0 _debut=$SECONDS _rang
+    horloge; local _upu="$1" _rep="$2" _n=${#_EXP_CMDS[@]} _i _rc _choix _ign=0 _debut=$HORLOGE _rang
     _G_OK=0; _G_KO=0; _G_SKIP=0; _G_INT=0; _G_ARRET=0; _G_RC=0; _ITERS=()
 
     for _i in "${!_EXP_CMDS[@]}"; do
@@ -1931,7 +1973,7 @@ executer_groupe() {
             demander_oui_non "  Continuer quand même ? ${ESTOMPE}[O/n]${C0} " || _G_ARRET=2
         fi
     done
-    _G_DUREE=$(( SECONDS - _debut ))
+    horloge; _G_DUREE=$(( HORLOGE - _debut ))
     return 0
 }
 
@@ -2026,7 +2068,7 @@ recap() {
     suivre_fenetre
     local l num e d t
     local TOTAL_TXT
-    duree "$SECONDS"; TOTAL_TXT="$DUREE_TXT"
+    horloge; duree $(( HORLOGE - _T_DEPART )); TOTAL_TXT="$DUREE_TXT"
     local -a details=()
     for l in ${_RECAP[@]+"${_RECAP[@]}"}; do d="${l#*|}"; d="${d#*|}"; details+=("${d%%|*}"); done
     poser_colonne ${details[@]+"${details[@]}"}
@@ -2046,7 +2088,7 @@ recap() {
     ecrire_rapport
 }
 # Le shell d'abord : un « set -e » laissé par une commande tuerait le récapitulatif.
-au_revoir() { retablir_shell; temoin_effacer; recap; }
+au_revoir() { retablir_shell; trap '' TERM HUP; temoin_arret HUP; recap; }
 trap au_revoir EXIT
 
 # Au-delà de dix itérations, seules celles qui ont mal tourné sont montrées.
@@ -2087,7 +2129,7 @@ ecrire_rapport() {
             if [[ "$l" == *=* ]]; then printf '  %-10s %s\n' "${l%%=*}" "${l#*=}"; else printf '  %s\n' "$l"; fi
         done
         printf '  par        %s%s sur %s\n' "$TK_OPERATEUR" "$( (( EUID == 0 )) && printf ' (root)')" "$(hostname 2>/dev/null || printf '?')"
-        duree "$SECONDS"
+        horloge; duree $(( HORLOGE - _T_DEPART ))
         printf '  debut      %s\n  fin        %s\n  duree      %s\n\n' "$DEBUT_HORODATE" "$(date '+%F %T %z')" "$DUREE_TXT"
         for l in ${_RECAP[@]+"${_RECAP[@]}"}; do
             num="${l%%|*}"; l="${l#*|}"; e="${l%%|*}"; l="${l#*|}"; d="${l%%|*}"; t="${l#*|}"
