@@ -568,13 +568,12 @@ suivre_fenetre() {
         taille="$(stty size 2>/dev/null < /dev/tty)"
         cols="${cols:-${taille#* }}"; lignes="${lignes:-${taille%% *}}"
     fi
-    # « 0 0 » veut dire taille inconnue, et non terminal de rien du tout :
-    # comme tput et less, on retombe alors sur le 80x24 d'usage.
+    # « 0 0 » veut dire taille inconnue, non terminal de rien du tout :
+    # comme tput et less, on prend alors le 80x24 d'usage.
     case "$cols"   in ''|*[!0-9]*|0) cols=80 ;; esac
     case "$lignes" in ''|*[!0-9]*|0) lignes=24 ;; esac
     _LIGNES_TTY="$lignes"       # la hauteur : le témoin s'y réserve la dernière ligne
-    _LARGEUR_TTY="$cols"        # celle du terminal, avant la borne à 100 de la mise en page
-    _LARGEUR="$cols"
+    _LARGEUR_TTY="$cols"        # brute, avant les bornes 40 et 100 de la mise en page
     poser_largeur
     return 0
 }
@@ -688,6 +687,10 @@ poser_colonne() {   # <détail>...
     for d in ${@+"$@"}; do largeur_texte "$d"; (( LARG_TXT > max )) && max=$LARG_TXT; done
     _COL_BLOC=$(( _LARGEUR - _LARG_NUM - 8 - max ))
     (( _COL_BLOC > _COL_TITRE )) && _COL_BLOC=$_COL_TITRE
+    # Comme le filet : sous le plancher de 40, cette colonne est calée sur
+    # une largeur que le terminal n'a pas, et le détail passe à la ligne.
+    (( _COL_BLOC > _LARGEUR_TTY - _LARG_NUM - 8 - max )) \
+        && _COL_BLOC=$(( _LARGEUR_TTY - _LARG_NUM - 8 - max ))
     (( _COL_BLOC < 12 )) && _COL_BLOC=12
     return 0
 }
@@ -747,14 +750,15 @@ init_glyphes() {
 # Recalculés à chaque changement de largeur, jamais dans une boucle.
 _COL_TITRE=52
 poser_largeur() {
-    (( _LARGEUR < 40 )) && _LARGEUR=40
+    # _LARGEUR est une sortie, pas une entrée : elle se déduit du terminal.
+    _LARGEUR=$_LARGEUR_TTY
+    (( _LARGEUR < 40 )) && _LARGEUR=40   # plancher : que les colonnes tiennent
     (( _LARGEUR > 100 )) && _LARGEUR=100
     _COL_TITRE=$(( _LARGEUR - 22 )); (( _COL_TITRE < 24 )) && _COL_TITRE=24
     (( _COL_TITRE > 52 )) && _COL_TITRE=52
     _COL_BLOC=$_COL_TITRE          # par défaut : une ligne seule tient la colonne
-    # Le filet suit le terminal, jamais la mise en page : celle-ci garde un
-    # plancher de 40 colonnes pour que ses colonnes tiennent, mais un filet
-    # de 40 dans un terminal de 30 se replierait sur une deuxième ligne.
+    # Un filet de 40 dans un terminal de 30 se replierait sur une deuxième
+    # ligne : il se tire donc au plus étroit des deux.
     repeter '─' $(( _LARGEUR < _LARGEUR_TTY ? _LARGEUR : _LARGEUR_TTY )); _REGLE_TXT="$REPET"
     return 0
 }
