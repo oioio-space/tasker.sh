@@ -566,8 +566,7 @@ suivre_fenetre() {
     local taille cols="${COLUMNS:-}" lignes="${LINES:-}"      # posés à la main : ils gagnent
     if [[ ( -z "$cols" || -z "$lignes" ) && -t 1 ]]; then
         taille="$(stty size 2>/dev/null < /dev/tty)"
-        [[ -n "$cols" ]]   || cols="${taille#* }"
-        [[ -n "$lignes" ]] || lignes="${taille%% *}"
+        cols="${cols:-${taille#* }}"; lignes="${lignes:-${taille%% *}}"
     fi
     case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
     case "$lignes" in ''|*[!0-9]*) lignes=24 ;; esac
@@ -1822,9 +1821,13 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU _
 # Il ne la partage donc plus. Le terminal se voit réserver sa dernière
 # ligne (région de défilement) : la sortie défile au-dessus sans jamais
 # la toucher, le témoin y écrit seul, et la région est rendue quand il
-# s'en va. Une commande qui OCCUPE l'écran — photorec — ou qui attend une
-# réponse, en revanche, ne doit pas être dérangée du tout : c'est le
-# drapeau « ecran » de l'étape. TK_TEMOIN=0 pour s'en passer partout.
+# s'en va. La hauteur est celle du fork : la fenêtre redimensionnée en
+# pleine étape laisse la ligne où elle était — le noyau n'envoie pas
+# SIGWINCH au fils, et le père ne le relaierait qu'après sa commande —,
+# l'étape suivante la remet en place. Une commande qui OCCUPE l'écran —
+# photorec — ou qui attend une réponse, en revanche, ne doit pas être
+# dérangée du tout : c'est le drapeau « ecran » de l'étape. TK_TEMOIN=0
+# pour s'en passer partout.
 #
 # Le témoin écrit sur /dev/tty : ni le journal, ni les fichiers écrits par
 # tee ne le voient. Il est détaché (disown) : un « wait » nu dans une
@@ -1844,8 +1847,13 @@ temoin_ligne() {
     printf '\0337\033[%d;1H\033[K%s%s %s%s%s\0338%s' \
            "$_LIGNES_TTY" "$REPET" "$1" "$ESTOMPE" "$DUREE_TXT" "$C0" "$SORTIE_GRISE"
 }
+# temoin_rendre_ligne : la ligne réservée effacée, la région rendue. Le
+# \033[r est DANS la sauvegarde du curseur : un vrai xterm le ramène en
+# haut à gauche sur ce code, \0338 le remet ensuite où il était.
+temoin_rendre_ligne() { printf '\0337\033[%d;1H\033[K\033[r\0338' "$_LIGNES_TTY"; }
 temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
-    (( ! $1 )) && [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
+    # Sous quatre lignes, réserver la dernière ne laisserait rien défiler.
+    (( ! $1 && _LIGNES_TTY >= 4 )) && [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
     horloge; _TEMOIN_T0=$HORLOGE
     # Les images sont calculées une fois : un segment épais ━ — celui de
     # la barre d'avancement du bandeau — qui glisse sur une piste fine ─,
@@ -1860,17 +1868,15 @@ temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
     # relaie un kill —, la ligne est rendue, sans rien fêter.
     # Ses sleep sont en arrière-plan et attendus : un wait s'interrompt
     # sur un signal, un sleep au premier plan le ferait attendre.
-    { local -a img=(); local i=0 p g m d montre=0
+    { local -a img=(); local i=0 p g m d bas=$(( _LIGNES_TTY - 1 ))
       temoin_sortie() {   # <fêter 0/1>
           kill "$!" 2>/dev/null
-          if (( montre && $1 )); then
-              repeter '━' "$_TEMOIN_LARG"; temoin_ligne "$C_ACCENT$REPET$C0"; sleep 0.4
-          fi
-          # La ligne réservée est effacée et rendue au défilement.
-          (( montre )) && printf '\0337\033[%d;1H\033[K\0338\033[r' "$_LIGNES_TTY"
-          exit 0
+          if (( $1 )); then repeter '━' "$_TEMOIN_LARG"; temoin_ligne "$C_ACCENT$REPET$C0"; sleep 0.4; fi
+          temoin_rendre_ligne; exit 0
       }
-      trap 'temoin_sortie 1' USR1; trap 'temoin_sortie 0' TERM HUP
+      # Tant que rien n'est dessiné, il n'y a rien à rendre : partir, en
+      # emportant le sleep. Les vrais traps viennent avec la région.
+      trap 'kill "$!" 2>/dev/null; exit 0' USR1 TERM HUP
       for (( p = 0; p <= _TEMOIN_LARG - 3; p++ )); do
           repeter '─' "$p";                        g="$REPET"
           repeter '━' 3;                           m="$REPET"
@@ -1879,12 +1885,12 @@ temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
       done
       for (( p = _TEMOIN_LARG - 4; p >= 1; p-- )); do img+=( "${img[$p]}" ); done
       sleep "$TK_TEMOIN" & wait "$!"
-      # La dernière ligne sort du défilement : un saut de ligne pour ne pas
-      # écrire sur la sortie en cours, puis la région, puis le curseur au
-      # bas de celle-ci — là où la sortie doit reprendre.
-      (( _LIGNES_TTY >= 4 )) || exit 0
-      printf '\n\033[1;%dr\033[%d;1H' $(( _LIGNES_TTY - 1 )) $(( _LIGNES_TTY - 1 ))
-      montre=1
+      # Le \n d'abord : si le curseur est en bas, la dernière ligne porte du
+      # texte, et la réserver telle quelle l'effacerait. Il le fait monter.
+      # Ce \n peut lui-même tomber au milieu d'une ligne en cours — une
+      # fois par étape, au lieu d'une fois par ligne.
+      printf '\n\033[1;%dr\033[%d;1H' "$bas" "$bas"
+      trap 'temoin_sortie 1' USR1; trap 'temoin_sortie 0' TERM HUP
       while :; do
           temoin_ligne "${img[$i]}"; i=$(( (i + 1) % ${#img[@]} ))
           sleep 0.16 & wait "$!"
@@ -1901,8 +1907,7 @@ temoin_arret() {
     while kill -0 "$_TEMOIN_PID" 2>/dev/null && (( n++ < 40 )); do sleep 0.05; done
     # Tué net, il n'a rien rendu : le terminal garderait sa région.
     kill -0 "$_TEMOIN_PID" 2>/dev/null \
-        && { kill -KILL "$_TEMOIN_PID" 2>/dev/null
-             printf '\0337\033[%d;1H\033[K\0338\033[r' "$_LIGNES_TTY" > /dev/tty 2>/dev/null; }
+        && { kill -KILL "$_TEMOIN_PID" 2>/dev/null; temoin_rendre_ligne > /dev/tty 2>/dev/null; }
     _TEMOIN_PID=0
     return 0
 }
@@ -2118,7 +2123,10 @@ recap() {
     ecrire_rapport
 }
 # Le shell d'abord : un « set -e » laissé par une commande tuerait le récapitulatif.
-au_revoir() { retablir_shell; trap '' TERM HUP; temoin_arret HUP; recap; }
+# La région est rendue quoi qu'il soit arrivé au témoin (tué par un pkill
+# des deux, par exemple) : \033[r nu, sans effacer — sans témoin, la
+# dernière ligne peut être de la vraie sortie.
+au_revoir() { retablir_shell; trap '' TERM HUP; temoin_arret HUP; printf '\0337\033[r\0338' > /dev/tty 2>/dev/null; recap; }
 trap au_revoir EXIT
 
 # Au-delà de dix itérations, seules celles qui ont mal tourné sont montrées.
