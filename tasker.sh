@@ -1115,6 +1115,8 @@ aide() {
     h_titre "Dialoguer"
     h_opt "-a, --ask"            "confirmer chaque étape, même les « false »"
     h_opt "-y, --yes"            "ne rien demander (sudo ? faites « sudo -v » avant)"
+    h_ligne "-y prend la 1re valeur d'une liste ; une valeur libre encore"
+    h_ligne "vide est quand même demandée — sans elle rien ne tournerait."
     h_opt "    --color MODE"     "auto, always ou never  ·  --no-color"
     h_opt "-h, --help [SUJET]"      "cette aide ; SUJET = un chapitre, voir plus bas"
     h_titre "Pendant l'exécution"
@@ -1423,9 +1425,12 @@ poser_traps() {
 poser_traps
 
 # lire <invite> <variable> : Entrée vide = défaut ; Ctrl-D = arrêt.
+# -y répond « rien » à tout — sauf à une question forcée : voir
+# demander_valeur, où une valeur manquante n'a pas de réponse par défaut.
+_QUESTION_FORCEE=0
 lire() {
     local rc
-    [[ "$_SANS_QUESTION" == "true" ]] && { printf -v "$2" '%s' ""; return 0; }
+    [[ "$_SANS_QUESTION" == "true" && $_QUESTION_FORCEE -eq 0 ]] && { printf -v "$2" '%s' ""; return 0; }
     EN_SAISIE=1
     # shellcheck disable=SC2229
     read -r -p "$1" "$2" < "$_ENTREE"; rc=$?
@@ -1630,8 +1635,18 @@ demander_valeur() {
         printf '    %s│%s  %s p%s  %spasser cette étape%s   %s q%s  %squitter%s\n' "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
     fi
 
+    # -y ne demande rien — mais ici il n'y a rien à deviner : une liste
+    # aurait donné sa première valeur, une valeur libre n'a pas de défaut,
+    # et la commande ne peut pas tourner sans elle. Faire échouer l'étape
+    # laisserait l'opérateur devant une erreur qu'il ne peut pas corriger
+    # sans tout relancer : on la demande, cette fois-là seulement. Sans
+    # terminal (cron, tube), personne ne répondrait : là, c'est une erreur.
     if [[ "$_SANS_QUESTION" == "true" ]]; then
-        erreur "[[$nom]] n'a pas de valeur et -y interdit de la demander : --var $nom=…"; exit 1
+        [[ "$_INTERACTIF" == "oui" ]] \
+            || { erreur "[[$nom]] n'a pas de valeur, et aucun terminal pour la demander : --var $nom=…"; exit 1; }
+        printf '    %s│%s  %s-y : celle-ci ne se devine pas  ·  --var %s=… pour ne plus l'"'"'avoir à taper%s\n' \
+               "$C_BOITE" "$C0" "$C_WARN" "$nom" "$C0"
+        _QUESTION_FORCEE=1
     fi
     # Après « a », p et q sont des valeurs comme les autres.
     _VALEUR=""
@@ -1639,12 +1654,13 @@ demander_valeur() {
         lire "    $C_BOITE└─$C0 valeur ${GRAS}›${C0} " _VALEUR
         if (( ! libre )); then
             case "${_VALEUR,,}" in
-                p) _ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
+                p) _QUESTION_FORCEE=0; _ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
                 q) quitter ;;
             esac
         fi
         valeur_valide "$_VALEUR" && break
     done
+    _QUESTION_FORCEE=0
     printf '\n'; return 0
 }
 
