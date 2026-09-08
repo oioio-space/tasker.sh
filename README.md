@@ -571,7 +571,7 @@ valeurs.
 | `-f`, `--from` | `4` | partir de l'étape 4 |
 | `-r`, `--resume` | | reprendre la dernière exécution : ses étapes réussies sont sautées |
 | `-a`, `--ask` | | confirmer chaque étape, même les `false` |
-| `-y`, `--yes` | | ne rien demander — mais une valeur libre encore vide est quand même demandée, sans elle la commande ne tournerait pas ; sans terminal, c'est une erreur |
+| `-y`, `--yes` | | répondre le défaut à chaque question ; une valeur libre encore vide n'en a pas et reste demandée |
 | `--color` | `auto` `always` `never` | couleur ; `--no-color` = `never` ; la variable `NO_COLOR` est respectée |
 
 ```bash

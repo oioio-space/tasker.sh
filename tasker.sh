@@ -933,6 +933,8 @@ aide_valeurs() {
     h_ligne "Demandée une fois, réutilisée par toutes les étapes qui l'écrivent."
     h_code '"Récents|true|find / -mtime -[[jours]]"'
     h_ligne "Fournie d'avance : --var jours=7   ·   la ressaisir : touche r"
+    h_ligne "Avec -y elle est quand même demandée : c'est la seule question"
+    h_ligne "sans défaut, et la commande ne tournerait pas sans elle."
     h_ligne "Le même [[nom]] dans le titre s'affiche avec la valeur, une fois"
     h_ligne "connue. TOUJOURS entre apostrophes : '[[nom]]', même collé à une"
     h_ligne "option : -o '[[offset]]' ou -mtime -'[[jours]]'. C'est ce qui rend"
@@ -1114,9 +1116,7 @@ aide() {
     h_opt "-r, --resume"         "sauter les étapes déjà réussies"
     h_titre "Dialoguer"
     h_opt "-a, --ask"            "confirmer chaque étape, même les « false »"
-    h_opt "-y, --yes"            "ne rien demander (sudo ? faites « sudo -v » avant)"
-    h_ligne "-y prend la 1re valeur d'une liste ; une valeur libre encore"
-    h_ligne "vide est quand même demandée — sans elle rien ne tournerait."
+    h_opt "-y, --yes"            "répondre le défaut partout (sudo ? faites « sudo -v » avant)"
     h_opt "    --color MODE"     "auto, always ou never  ·  --no-color"
     h_opt "-h, --help [SUJET]"      "cette aide ; SUJET = un chapitre, voir plus bas"
     h_titre "Pendant l'exécution"
@@ -1425,12 +1425,11 @@ poser_traps() {
 poser_traps
 
 # lire <invite> <variable> : Entrée vide = défaut ; Ctrl-D = arrêt.
-# -y répond « rien » à tout — sauf à une question forcée : voir
-# demander_valeur, où une valeur manquante n'a pas de réponse par défaut.
-_QUESTION_FORCEE=0
+# -y rend la réponse vide, et chaque appelant en fait son défaut : le premier
+# choix d'une liste, oui, la première touche d'un menu.
 lire() {
     local rc
-    [[ "$_SANS_QUESTION" == "true" && $_QUESTION_FORCEE -eq 0 ]] && { printf -v "$2" '%s' ""; return 0; }
+    [[ "$_SANS_QUESTION" == "true" ]] && { printf -v "$2" '%s' ""; return 0; }
     EN_SAISIE=1
     # shellcheck disable=SC2229
     read -r -p "$1" "$2" < "$_ENTREE"; rc=$?
@@ -1635,18 +1634,15 @@ demander_valeur() {
         printf '    %s│%s  %s p%s  %spasser cette étape%s   %s q%s  %squitter%s\n' "$C_BOITE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0" "$GRAS" "$C0" "$ESTOMPE" "$C0"
     fi
 
-    # -y ne demande rien — mais ici il n'y a rien à deviner : une liste
-    # aurait donné sa première valeur, une valeur libre n'a pas de défaut,
-    # et la commande ne peut pas tourner sans elle. Faire échouer l'étape
-    # laisserait l'opérateur devant une erreur qu'il ne peut pas corriger
-    # sans tout relancer : on la demande, cette fois-là seulement. Sans
-    # terminal (cron, tube), personne ne répondrait : là, c'est une erreur.
+    # Une valeur libre est la seule question sans défaut : -y n'a rien à
+    # répondre à sa place, et la commande ne tournera pas sans elle. On la
+    # pose donc quand même — le local rend -y à la sortie de la fonction.
+    # Si personne n'est là pour répondre, lire le dit et arrête, comme
+    # partout ailleurs.
     if [[ "$_SANS_QUESTION" == "true" ]]; then
-        [[ "$_INTERACTIF" == "oui" ]] \
-            || { erreur "[[$nom]] n'a pas de valeur, et aucun terminal pour la demander : --var $nom=…"; exit 1; }
-        printf '    %s│%s  %s-y : celle-ci ne se devine pas  ·  --var %s=… pour ne plus l'"'"'avoir à taper%s\n' \
+        printf '    %s│%s  %s-y ne peut pas deviner celle-ci  ·  --var %s=… pour la donner d'"'"'avance%s\n' \
                "$C_BOITE" "$C0" "$C_WARN" "$nom" "$C0"
-        _QUESTION_FORCEE=1
+        local _SANS_QUESTION="false"
     fi
     # Après « a », p et q sont des valeurs comme les autres.
     _VALEUR=""
@@ -1654,13 +1650,12 @@ demander_valeur() {
         lire "    $C_BOITE└─$C0 valeur ${GRAS}›${C0} " _VALEUR
         if (( ! libre )); then
             case "${_VALEUR,,}" in
-                p) _QUESTION_FORCEE=0; _ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
+                p) _ETAPE_PASSEE=1; printf '    %sétape passée%s\n' "$ESTOMPE" "$C0"; return 1 ;;
                 q) quitter ;;
             esac
         fi
         valeur_valide "$_VALEUR" && break
     done
-    _QUESTION_FORCEE=0
     printf '\n'; return 0
 }
 
@@ -2287,7 +2282,7 @@ entete "journal"  "$_LOG"
 (( CREES > 0 )) && info "$CREES dossier$(pluriel "$CREES") créé$(pluriel "$CREES")"
 [[ -n "$_CONF" ]]                 && entete "config"     "$_CONF"
 [[ "$_SIMULATION" == "true" ]]    && entete "dry-run"    "rien ne sera exécuté"
-[[ "$_SANS_QUESTION" == "true" ]] && entete "-y"         "aucune question ne sera posée"
+[[ "$_SANS_QUESTION" == "true" ]] && entete "-y"         "le défaut partout, sauf une valeur libre encore vide"
 [[ "$TK_TOUT_VALIDER" == "true" ]]  && entete "-a"         "chaque étape sera confirmée"
 [[ "$_REPRENDRE" == "true" ]]     && entete "resume"     "les étapes déjà réussies seront sautées"
 [[ -n "$_FILTRE_ETAPES" ]]        && entete "only"       "étapes $_FILTRE_ETAPES"
