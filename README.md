@@ -666,7 +666,7 @@ exécution, pas le cumul de toutes.
 | `sudo` avec `-y` | le script prévient au départ : faites `sudo -v` avant |
 | script lancé sous `sudo` | le rapport note `SUDO_USER` et « (root) » |
 | programme plein écran interrompu | le terminal est rendu tel qu'il était |
-| terminal fermé, `kill` | récapitulatif et journal quand même écrits, une fois la commande en cours terminée |
+| terminal fermé, `kill` | la commande en cours est arrêtée sur-le-champ, récapitulatif et journal quand même écrits |
 
 ---
 
