@@ -502,7 +502,7 @@ shell est écarté au démarrage — vos commandes ne l'héritent plus non plus.
 | `TK_OPERATEUR` | qui a lancé, noté au bandeau, au journal et au rapport | texte ; `${SUDO_USER:-$USER}` prend la vraie personne sous sudo |
 | `TK_TOUT_VALIDER` | confirmer chaque étape, même les `false` | `true` / `false` (ou `-a`) |
 | `TK_MAX_ITERATIONS` | plafond d'une étape répétée, au-delà elle est tronquée | entier ≥ 1 |
-| `TK_TEMOIN` | secondes avant le témoin d'attente, un segment qui glisse, réécrit sur place ; `,ecran` l'écarte d'une étape | entier ≥ 0, `0` = jamais |
+| `TK_TEMOIN` | secondes avant le témoin d'attente : un segment qui glisse sur la dernière ligne du terminal, qu'il se réserve — la sortie défile au-dessus sans être touchée ; `,ecran` l'écarte d'une étape | entier ≥ 0, `0` = jamais |
 | `TK_REQUIS` | binaires vérifiés au départ ; absents = avertissement | tableau : `(du df)` |
 | `TK_INTRO` | texte affiché après le bandeau (facultatif) | texte, plusieurs lignes possibles |
 

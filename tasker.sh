@@ -511,7 +511,7 @@ INTERROMPU=0; EN_SAISIE=0
 C0=""; GRAS=""; ESTOMPE=""; COULEURS=0
 C_ACCENT=""; C_OK=""; C_KO=""; C_WARN=""; C_SIM=""; C_PROG=""; C_CMD=""
 C_BOUCLE=""; C_CLE=""; C_BOITE=""; C_TITRE=""; SORTIE_GRISE=""
-_LARGEUR=80; _LARGEUR_TTY=80
+_LARGEUR=80; _LARGEUR_TTY=80; _LIGNES_TTY=24
 NOM_SCRIPT="${0##*/}"
 
 # Jamais de couleur de fond, jamais de gris fixe : « estompé » est
@@ -563,12 +563,15 @@ init_affichage() {
 # Appelée entre deux étapes : la fenêtre a pu changer de taille. Pas de
 # [[ =~ ]] ici, il écraserait le BASH_REMATCH d'un appelant.
 suivre_fenetre() {
-    local taille cols="${COLUMNS:-}"      # posé à la main : il gagne
-    if [[ -z "$cols" && -t 1 ]]; then
+    local taille cols="${COLUMNS:-}" lignes="${LINES:-}"      # posés à la main : ils gagnent
+    if [[ ( -z "$cols" || -z "$lignes" ) && -t 1 ]]; then
         taille="$(stty size 2>/dev/null < /dev/tty)"
-        cols="${taille#* }"
+        [[ -n "$cols" ]]   || cols="${taille#* }"
+        [[ -n "$lignes" ]] || lignes="${taille%% *}"
     fi
     case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+    case "$lignes" in ''|*[!0-9]*) lignes=24 ;; esac
+    _LIGNES_TTY="$lignes"       # la hauteur : le témoin s'y réserve la dernière ligne
     _LARGEUR_TTY="$cols"        # celle du terminal, avant la borne à 100 de la mise en page
     _LARGEUR="$cols"
     poser_largeur
@@ -1813,14 +1816,15 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU _
 # pendant des minutes.
 #
 # Il n'apparaît qu'après TK_TEMOIN secondes, et ce délai suffit aux
-# commandes courtes. Il ne sait PAS si la commande a déjà écrit : il ne
-# voit pas sa sortie. Une commande bavarde — tar -v — garde donc le témoin
-# au bout des lignes qu'elle écrit pendant qu'il est affiché : « …/auth.log
-# ──━ 15s ». C'est cosmétique, jamais une perte, et c'est le prix d'un
-# témoin qui ne s'empile pas. Une commande qui OCCUPE l'écran — photorec —
-# ou qui attend une réponse de l'opérateur, en revanche, ne doit pas être
-# dérangée : c'est le drapeau « ecran » de l'étape. TK_TEMOIN=0 pour s'en
-# passer partout.
+# commandes courtes. Il ne voit pas la sortie de la commande et ne peut
+# donc pas savoir quand elle écrit : partagée, la ligne se salissait —
+# « chaine trouvee 33      ━━━──── 2s » sur chaque ligne d'un strings.
+# Il ne la partage donc plus. Le terminal se voit réserver sa dernière
+# ligne (région de défilement) : la sortie défile au-dessus sans jamais
+# la toucher, le témoin y écrit seul, et la région est rendue quand il
+# s'en va. Une commande qui OCCUPE l'écran — photorec — ou qui attend une
+# réponse, en revanche, ne doit pas être dérangée du tout : c'est le
+# drapeau « ecran » de l'étape. TK_TEMOIN=0 pour s'en passer partout.
 #
 # Le témoin écrit sur /dev/tty : ni le journal, ni les fichiers écrits par
 # tee ne le voient. Il est détaché (disown) : un « wait » nu dans une
@@ -1828,19 +1832,17 @@ analyser_validation() {   # "true,log" -> _F_VALIDER _F_LOG _F_STOP _F_CONTINU _
 _TEMOIN_PID=0
 _TEMOIN_T0=0
 _TEMOIN_LARG=9   # la piste ; la ligne fait _TEMOIN_LARG + 1 espace + 5 de durée
-# temoin_ligne <image> : la ligne du témoin, posée À DROITE, sur la sortie
-# standard. \r et non \n : la ligne est réécrite, jamais empilée. Le \033[K
-# efface ce qu'une durée plus longue laisserait derrière elle (« 1m00s »
-# après « 59s »), et le curseur revient colonne 0. La sortie de la
-# commande, qui part de la gauche, ne heurte le témoin que si elle atteint
-# le bord — et l'écrase alors proprement. À gauche, elle le traverserait :
-# les tabulations d'un fls sautent sans effacer, et le témoin resterait
-# dans le trou. Le SORTIE_GRISE final rend à la sortie de la commande
-# l'estompage que le C0 de l'image a annulé.
+# temoin_ligne <image> : le témoin sur SA ligne, la dernière du terminal,
+# posé à droite. \0337 et \0338 mettent le curseur de côté et le rendent
+# où il était : la sortie de la commande reprend sans s'apercevoir de
+# rien. Le \033[K efface ce qu'une durée plus longue laisserait derrière
+# elle (« 1m00s » après « 59s »), et le SORTIE_GRISE final rend à la
+# sortie l'estompage que le C0 de l'image a annulé.
 temoin_ligne() {
     horloge; duree $(( HORLOGE - _TEMOIN_T0 ))
     repeter ' ' $(( _LARGEUR_TTY - _TEMOIN_LARG - 6 ))
-    printf '\r%s%s %s%s%s\033[K\r%s' "$REPET" "$1" "$ESTOMPE" "$DUREE_TXT" "$C0" "$SORTIE_GRISE"
+    printf '\0337\033[%d;1H\033[K%s%s %s%s%s\0338%s' \
+           "$_LIGNES_TTY" "$REPET" "$1" "$ESTOMPE" "$DUREE_TXT" "$C0" "$SORTIE_GRISE"
 }
 temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
     (( ! $1 )) && [[ -t 1 && "$TK_TEMOIN" =~ ^[0-9]+$ ]] && (( TK_TEMOIN > 0 )) || return 0
@@ -1864,7 +1866,9 @@ temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
           if (( montre && $1 )); then
               repeter '━' "$_TEMOIN_LARG"; temoin_ligne "$C_ACCENT$REPET$C0"; sleep 0.4
           fi
-          printf '\r\033[K'; exit 0
+          # La ligne réservée est effacée et rendue au défilement.
+          (( montre )) && printf '\0337\033[%d;1H\033[K\0338\033[r' "$_LIGNES_TTY"
+          exit 0
       }
       trap 'temoin_sortie 1' USR1; trap 'temoin_sortie 0' TERM HUP
       for (( p = 0; p <= _TEMOIN_LARG - 3; p++ )); do
@@ -1875,8 +1879,14 @@ temoin_debut() {   # <écran 0/1> : 1 = l'étape occupe l'écran, pas de témoin
       done
       for (( p = _TEMOIN_LARG - 4; p >= 1; p-- )); do img+=( "${img[$p]}" ); done
       sleep "$TK_TEMOIN" & wait "$!"
+      # La dernière ligne sort du défilement : un saut de ligne pour ne pas
+      # écrire sur la sortie en cours, puis la région, puis le curseur au
+      # bas de celle-ci — là où la sortie doit reprendre.
+      (( _LIGNES_TTY >= 4 )) || exit 0
+      printf '\n\033[1;%dr\033[%d;1H' $(( _LIGNES_TTY - 1 )) $(( _LIGNES_TTY - 1 ))
+      montre=1
       while :; do
-          temoin_ligne "${img[$i]}"; montre=1; i=$(( (i + 1) % ${#img[@]} ))
+          temoin_ligne "${img[$i]}"; i=$(( (i + 1) % ${#img[@]} ))
           sleep 0.16 & wait "$!"
       done; } > /dev/tty 2>/dev/null &
     _TEMOIN_PID=$!
@@ -1889,7 +1899,10 @@ temoin_arret() {
     local n=0
     kill -"$1" "$_TEMOIN_PID" 2>/dev/null
     while kill -0 "$_TEMOIN_PID" 2>/dev/null && (( n++ < 40 )); do sleep 0.05; done
-    kill -KILL "$_TEMOIN_PID" 2>/dev/null
+    # Tué net, il n'a rien rendu : le terminal garderait sa région.
+    kill -0 "$_TEMOIN_PID" 2>/dev/null \
+        && { kill -KILL "$_TEMOIN_PID" 2>/dev/null
+             printf '\0337\033[%d;1H\033[K\0338\033[r' "$_LIGNES_TTY" > /dev/tty 2>/dev/null; }
     _TEMOIN_PID=0
     return 0
 }
