@@ -1,0 +1,78 @@
+{
+  "$schema": "https://charm.land/crush.json",
+
+  "_commentaire": [
+    "Configuration Crush pour les deux skills, avec Nemotron 3 Super servi en local",
+    "(vLLM, NIM ou TRT-LLM, tous compatibles OpenAI). À copier dans ~/.config/crush/crush.json",
+    "ou dans le dossier de travail de l'analyse (~/analyse/crush.json), jamais dans les scellés.",
+    "",
+    "Réglages tirés de la carte du modèle : temperature 1.0 et top_p 0.95 pour toutes les",
+    "tâches ; le raisonnement s'active par chat_template_kwargs.enable_thinking ; contexte",
+    "natif 1M, servi par défaut à 262144 par vLLM. Voir README.md §Crush."
+  ],
+
+  "providers": {
+    "dgx": {
+      "name": "Nemotron 3 Super (DGX)",
+      "type": "openai-compat",
+      "base_url": "http://dgx.local:8000/v1",
+      "api_key": "sans-objet",
+      "discover_models": false,
+      "extra_body": {
+        "chat_template_kwargs": { "enable_thinking": true }
+      },
+      "models": [
+        {
+          "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+          "name": "Nemotron 3 Super 120B-A12B",
+          "context_window": 262144,
+          "default_max_tokens": 32000,
+          "can_reason": true,
+          "supports_attachments": false,
+          "cost_per_1m_in": 0,
+          "cost_per_1m_out": 0
+        }
+      ]
+    }
+  },
+
+  "models": {
+    "large": {
+      "provider": "dgx",
+      "model": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "max_tokens": 32000
+    },
+    "small": {
+      "provider": "dgx",
+      "model": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "max_tokens": 16000
+    }
+  },
+
+  "permissions": {
+    "allowed_tools": ["view", "ls", "grep", "glob", "agent"]
+  },
+
+  "options": {
+    "skills_paths": ["~/.config/crush/skills"],
+    "disabled_tools": ["fetch", "web_search", "sourcegraph"],
+    "data_directory": "~/analyse/.crush",
+    "disable_provider_auto_update": true,
+    "disable_metrics": true
+  },
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "name": "garde des scellés",
+        "matcher": "^(edit|write|multiedit|bash)$",
+        "command": "~/.config/crush/garde-scelles.sh",
+        "timeout": 5
+      }
+    ]
+  }
+}

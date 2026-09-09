@@ -38,6 +38,13 @@
 #   horaire:    les heures ouvrées, au format « lun-ven 08:00-19:00 ».
 #               Toute session ouverte en dehors devient un constat.
 #               Demande --faits (le fichier du skill forensic-linux).
+#   chaine:     une chaîne ou une expression, cherchée dans TOUTES les pièces
+#               texte — historiques, inventaires, paquets, journal du poste
+#   controle:   un contrôle que le script fait déjà de lui-même — partage,
+#               secrets, durcissement, authentification, comptes — ou
+#               « thème/début du libellé ». Ses constats reçoivent le numéro
+#               de la règle. C'est ainsi qu'une règle s'adosse à un contrôle
+#               qui ne s'écrit pas en un motif.
 #
 # CE QU'UN INDICE PROUVE. Un domaine dans un historique prouve une
 # CONSULTATION, jamais un téléchargement ni un transfert. Un programme dans
@@ -120,3 +127,14 @@ wifi: (?i)(ibis|novotel|mercure|accor|hotel|campanile|b&b_)               # hôt
 wifi: (?i)(mcdonalds.?free|free.?wifi|wifi.?gratuit|guest|invit[ée])      # accès public
 wifi: (?i)(iphone|android.?ap|galaxy|partage.?de.?connexion|hotspot)      # partage de connexion
 horaire: lun-ven 08:00-19:00
+
+regle: R7
+titre: Usage du compte d'un autre
+texte: Le compte est strictement personnel ; nul ne se sert du compte d'un autre.
+portee: compte
+# Le script cherche déjà les traces d'un compte servi par un autre : fichiers
+# d'un autre propriétaire dans le dossier personnel, su ou sudo -u vers un
+# compte local, clé SSH commune à deux comptes, deux origines à quelques
+# minutes. Cette règle les reprend à son compte.
+controle: partage
+commande: (?i)^\s*(su|sudo\s+-u)\s+\S+       # à recouper avec la liste des comptes locaux

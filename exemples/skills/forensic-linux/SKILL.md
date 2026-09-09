@@ -46,6 +46,19 @@ fait `limite` dit combien de pages restent dehors. Les sites pour lesquels un
 mot de passe est enregistré sont relevés — **le site seul** : ni l'identifiant
 ni le secret ne sont lus.
 
+Le même contenu sort en `faits.csv`, pour un tableur. Et si l'on sait déjà ce
+que l'on cherche — une empreinte, une adresse, un nom —, `--indicateurs
+fichier.txt` le cherche dans toute la collecte : `references/indicateurs.md`.
+
+**Les dates.** Chaque fait porte son horodatage tel que la pièce le donne :
+en UTC (suffixe `Z`) quand elle compte en epoch — `wtmp`, les bases de
+navigateur, NetworkManager —, avec son décalage quand elle l'écrit
+(`journalctl`), sans rien quand elle ne le dit pas (une ligne syslog, `dpkg.log`
+— c'est alors l'heure du poste). Le binaire `wtmp` passe avant la sortie texte
+de `last` : il porte l'epoch, le texte porte l'heure du poste d'analyse. Le
+brouillon met tout dans le fuseau du poste ; **vous ne convertissez rien à la
+main**.
+
 Deux fiches à lire, dans cet ordre :
 
 - `references/artefacts.md` — **ce que sont** les pièces. Vous travaillez hors
@@ -191,13 +204,27 @@ Ne partez pas d'une page blanche. Faites d'abord produire le brouillon :
 python3 scripts/brouillon.py faits.jsonl -o rapport-forensic-<PREFIX>.md
 ```
 
-Il contient les **dix sections dans l'ordre**, avec tous les tableaux déjà
+Il contient les **sections dans l'ordre**, avec tous les tableaux déjà
 remplis depuis les faits — la machine, les comptes et leurs sessions, le
-réseau, la chronologie datée, les domaines les plus visités par compte, les
-cookies sans page d'historique, les téléchargements, les supports, les
-suspects, les limites, l'annexe — et des passages marqués **« À rédiger »**
-qui disent ce qu'il faut écrire à cet endroit. Toutes les dates y sont dans le
-fuseau du poste.
+réseau, **ce qui s'est passé session par session**, les domaines les plus
+visités par compte, les cookies sans page d'historique, les téléchargements,
+les supports, les suspects et les indicateurs cherchés, les limites avec la
+demande de reprise toute prête, l'annexe, un lexique — et des passages marqués
+**« À rédiger »** qui disent ce qu'il faut écrire à cet endroit. Toutes les
+dates y sont dans le fuseau du poste.
+
+Chaque ligne d'événement répond à **quand, qui, quoi, où, comment** : la date,
+le compte, le fait, le terminal ou l'origine ou le chemin, la pièce et le
+geste. Les événements sont rangés par **session** — ce qui arrive pendant
+qu'un compte est ouvert lui est rapproché. Quand deux sessions se chevauchent,
+la ligne dit « ? (session simultanée) » : **ne l'attribuez à personne** sans
+une autre trace (le chemin `/run/media/<compte>/`, le compte d'un sudo).
+
+Le brouillon s'ouvre sur **« En bref »** : cinq phrases pour qui ne lira que
+cela, sans jargon — le lexique de la fin est là pour le reste. Un rapport doit
+se lire par quelqu'un qui n'est pas du métier, et se vérifier par quelqu'un
+qui l'est : les phrases sont pour le premier, les identifiants et les tableaux
+pour le second.
 
 Ce que vous faites du brouillon :
 

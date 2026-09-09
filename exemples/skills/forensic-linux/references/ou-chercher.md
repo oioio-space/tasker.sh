@@ -64,6 +64,26 @@ d'abord les volumes (`vgchange -ay`). Et si l'image porte plusieurs volumes —
 un `/home` séparé —, **montez-les tous** sous le point de montage avant de
 rejouer : la collecte les traite alors comme la racine.
 
+## Où poser une pièce reprise à la main
+
+Si vous ne rejouez pas l'étape mais recopiez le fichier depuis l'image, posez-le
+dans le dossier de la collecte **sous le nom que l'extracteur attend**, puis
+relancez l'extraction. Il sera lu comme si la collecte l'avait emporté, et le
+manifeste en portera l'empreinte.
+
+| pièce | où la poser | nom attendu |
+|---|---|---|
+| un journal texte (`auth.log`, `secure`, `messages.3.gz`) | `JOURNAUX/` | tel quel — tout fichier de `JOURNAUX/` qui n'est ni l'archive ni `_journal.txt` est lu comme un journal, décompressé s'il le faut |
+| `wtmp`, `wtmp.1`, `btmp` | `CONNEXIONS/` | tel quel — le nom doit commencer par `wtmp` ou `btmp` |
+| `lastlog` | `CONNEXIONS/` | `lastlog` |
+| `wtmp.db`, `lastlog2.db` | `CONNEXIONS/` | tel quel |
+| `passwd` | `COMPTES/` | `PREFIX_passwd.txt` |
+| les fichiers d'un compte | `COMPTES/` | une archive `PREFIX_<compte>_artefacts.tar.gz` ou `_profils.tar.gz` — `tar -czf … -C /mnt/investigation/home/<compte> .mozilla .config …` |
+| le journal systemd | `JOURNAUX/` | `PREFIX_journal.txt`, sortie de `journalctl -D var/log/journal -o short-iso` |
+
+Le PREFIX est celui du dossier. Une pièce mal nommée n'est pas lue, et rien ne
+le dira : vérifiez qu'elle apparaît dans `faits-manifeste.json`.
+
 ## Où chaque pièce vit sur le système
 
 Ce que l'étape de collecte va chercher, pour aller la prendre à la main si

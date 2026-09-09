@@ -34,7 +34,7 @@ du rapport.
 |---|---|---|---|---|
 | comptes locaux | `/etc/passwd` | `COMPTES/passwd` | oui | exister ≠ avoir servi |
 | comptes du domaine | cache SSSD | `COMPTES/…_domaine.tar.gz` → `var/lib/sss/db` | oui | **indispensable** : `/etc/passwd` ne les a pas |
-| sessions ouvertes | `wtmp` **et ses rotations** | texte de `last`, **ou les binaires** | oui | la collecte prend `wtmp`, `wtmp.1` **et** `wtmp-20190901` : les deux styles de rotation, donc des mois d'historique en plus |
+| sessions ouvertes | `wtmp` **et ses rotations** | **les binaires d'abord**, le texte de `last` à défaut | oui | le binaire porte l'epoch : l'heure exacte, en UTC. Le texte de `last` a été écrit par le poste d'analyse dans **son** fuseau — un fait qui en vient est marqué « forte », pas « certaine ». La collecte prend `wtmp`, `wtmp.1` **et** `wtmp-20190901` : les deux styles de rotation |
 | échecs | `btmp` et ses rotations | texte de `lastb`, **ou les binaires** | oui | souvent vide ou désactivé |
 | SSH, sudo, su (Debian, Ubuntu) | `var/log/auth.log` | `JOURNAUX/…_var_log.tar.gz` | oui | **la ligne syslog n'a pas d'année** : elle est déduite de la date du fichier, et le fait est marqué « forte », pas « certaine » |
 | SSH, sudo, su (RHEL ancien) | `var/log/secure` | idem | oui | même remarque sur l'année |

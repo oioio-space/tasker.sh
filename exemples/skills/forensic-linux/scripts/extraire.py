@@ -10,12 +10,25 @@ recoupement et le jugement sont le travail du rapport.
 Bibliothèque standard seulement. La collecte n'est jamais modifiée : les
 archives sont lues en flux, jamais dépaquetées sur place.
 """
-import argparse, bz2, gzip, hashlib, io, json, lzma, os, re, sqlite3, sys, tarfile, tempfile
-import struct
+import argparse, bz2, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
+import sqlite3, struct, sys, tarfile, tempfile
 from datetime import datetime, timezone
+
+COLONNES_CSV = ("id", "categorie", "fait", "valeur", "horodatage", "acteur", "confiance",
+                "source", "methode", "note")
 
 FAITS = []
 _N = [0]
+
+
+RE_CONTROLE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+
+def _propre(v):
+    """Une valeur tirée d'une pièce peut porter des octets de contrôle — un
+    contexte pris dans une base binaire, un nom de fichier forgé. Ils n'ont
+    rien à faire dans un rapport, un CSV ou un terminal : un point médian."""
+    return RE_CONTROLE.sub("·", v) if isinstance(v, str) else v
 
 
 def fait(categorie, quoi, valeur, source, methode, horodatage=None, acteur=None,
@@ -23,9 +36,9 @@ def fait(categorie, quoi, valeur, source, methode, horodatage=None, acteur=None,
     """Pose un fait. source = chemin dans la collecte ; methode = le geste."""
     _N[0] += 1
     f = {"id": f"F{_N[0]:04d}", "categorie": categorie, "fait": quoi,
-         "valeur": valeur, "source": source, "methode": methode}
+         "valeur": _propre(valeur), "source": source, "methode": methode}
     for k, v in (("horodatage", horodatage), ("acteur", acteur),
-                 ("confiance", confiance), ("note", note)):
+                 ("confiance", confiance), ("note", _propre(note))):
         if v is not None:
             f[k] = v
     FAITS.append(f)
@@ -42,10 +55,12 @@ def _compte_de(chemin, suffixe):
 class Collecte:
     """Le dossier PREFIX/ produit par collecte-linux."""
 
-    def __init__(self, racine):
+    def __init__(self, racine, visites=5000):
         self.racine = os.path.abspath(racine)
         self.prefix = os.path.basename(self.racine)
         self.lus = set()          # ce qui a servi, pour le manifeste
+        self.mtimes = {}          # archive → {membre: date}, rempli en lisant
+        self.visites = visites    # pages retenues par historique de navigateur
         if not os.path.isdir(self.racine):
             sys.exit(f"pas un dossier : {self.racine}")
 
@@ -76,33 +91,36 @@ class Collecte:
 
     def dates_tar(self, archive):
         """La date de chaque membre. tar la conserve : c'est souvent la seule
-        façon de dater une pièce dont le contenu n'est pas horodaté."""
-        dates = {}
-        try:
-            with tarfile.open(archive, "r:gz") as t:
-                for m in t:
-                    if m.isfile():
-                        nom = m.name[2:] if m.name.startswith("./") else m.name
-                        dates[nom] = m.mtime
-        except (tarfile.TarError, OSError, EOFError):
-            pass
-        return dates
+        façon de dater une pièce dont le contenu n'est pas horodaté.
+        Une archive déjà lue ne se relit pas : membres_tar a noté les dates."""
+        if archive not in self.mtimes:
+            for _ in self.membres_tar(archive, lambda nom: False):
+                pass
+        return self.mtimes.get(archive, {})
 
-    def membres_tar(self, archive):
-        """(nom, contenu binaire) de chaque fichier régulier d'un .tar.gz."""
+    def membres_tar(self, archive, garde=None):
+        """(nom, contenu) des fichiers d'un .tar.gz — ceux que garde(nom) accepte.
+
+        Le filtre passe AVANT la lecture : /var/log porte des journaux binaires
+        de centaines de Mo qu'aucun motif ne regarde. Les dates de TOUS les
+        membres sont notées au passage, dans self.mtimes.
+        """
         self.lus.add(archive)
+        dates = self.mtimes.setdefault(archive, {})
         try:
             with tarfile.open(archive, "r:gz") as t:
                 for m in t:
                     if not m.isfile():
                         continue
-                    fh = t.extractfile(m)
-                    if fh is None:
-                        continue
                     # lstrip("./") mangerait le point d'un fichier caché :
                     # « ./.viminfo » deviendrait « viminfo ».
                     nom = m.name[2:] if m.name.startswith("./") else m.name
-                    yield nom, fh.read()
+                    dates[nom] = m.mtime
+                    if garde and not garde(nom):
+                        continue
+                    fh = t.extractfile(m)
+                    if fh is not None:
+                        yield nom, fh.read()
         except (tarfile.TarError, OSError, EOFError) as e:
             print(f"  ! archive illisible {os.path.basename(archive)} : {e}",
                   file=sys.stderr)
@@ -369,7 +387,12 @@ def comptes(c):
 
 
 def _last(c, chemin, categorie, quoi, methode):
-    """Rend le nombre de lignes retenues : zéro appelle le lecteur binaire."""
+    """Lit la sortie TEXTE de last. Rend le nombre de lignes retenues.
+
+    Ce texte a été écrit par le poste d'analyse, dans SON fuseau, sans le
+    dire : c'est une date de second rang. Le binaire wtmp, lui, porte l'epoch.
+    On ne vient donc ici que quand le binaire manque, et chaque fait le dit.
+    """
     if not chemin:
         return 0
     poses = 0
@@ -390,7 +413,9 @@ def _last(c, chemin, categorie, quoi, methode):
         if g.get("fin"):
             note += f", fin {lire_date(g['fin']) or g['fin']}"
         fait(categorie, quoi, acteur, c.rel(chemin), methode,
-             horodatage=iso or g["debut"], acteur=acteur, note=note)
+             horodatage=iso or g["debut"], acteur=acteur, confiance="forte",
+             note=note + " — heure écrite par le poste d'analyse dans son fuseau, "
+                         "le binaire wtmp manquant")
         poses += 1
     return poses
 
@@ -472,14 +497,17 @@ def _bases_connexion(c):
 
 
 def sessions(c):
-    if not _last(c, c.un("_sessions.txt", "CONNEXIONS"), "evenement",
-                 "ouverture de session", "last -F -f wtmp"):
-        _utmp_brut(c, "wtmp", "evenement", "ouverture de session")
-    if not _last(c, c.un("_echecs.txt", "CONNEXIONS"), "evenement",
-                 "échec d'authentification", "lastb -F -f btmp"):
-        _utmp_brut(c, "btmp", "evenement", "échec d'authentification")
-    _last(c, c.un("_reboots.txt", "CONNEXIONS"), "evenement",
-          "démarrage ou arrêt de la machine", "last -F -x -f wtmp reboot shutdown")
+    """Le binaire wtmp d'abord : il porte l'epoch, donc l'heure exacte, et il
+    contient aussi les démarrages et les arrêts. La sortie texte de last ne
+    sert que s'il manque."""
+    if not _utmp_brut(c, "wtmp", "evenement", "ouverture de session"):
+        _last(c, c.un("_sessions.txt", "CONNEXIONS"), "evenement",
+              "ouverture de session", "last -F -f wtmp")
+        _last(c, c.un("_reboots.txt", "CONNEXIONS"), "evenement",
+              "démarrage ou arrêt de la machine", "last -F -x -f wtmp reboot shutdown")
+    if not _utmp_brut(c, "btmp", "evenement", "échec d'authentification"):
+        _last(c, c.un("_echecs.txt", "CONNEXIONS"), "evenement",
+              "échec d'authentification", "lastb -F -f btmp")
     _bases_connexion(c)
 
     # lastlog n'a pas de forme texte dans la collecte : il se lit ici ou nulle
@@ -620,26 +648,44 @@ def journaux(c):
                 "journalctl -D var/log/journal -o short-iso, puis motifs")
     tarlog = c.un("_var_log.tar.gz", "JOURNAUX")
     if tarlog:
-        interessants = ("secure", "auth.log", "messages", "syslog", "dmesg",
-                        "boot.log", "cron", "audit", "maillog", "yum.log")
-        dates = c.dates_tar(tarlog)
-        for nom, blob in c.membres_tar(tarlog):
-            base = os.path.basename(nom)
-            fin = (datetime.fromtimestamp(dates[nom], timezone.utc)
-                   if dates.get(nom) else None)
-            if not any(base.startswith(i) for i in interessants):
+        garde = lambda nom: os.path.basename(nom).startswith(JOURNAUX_LUS)     # noqa: E731
+        for nom, blob in c.membres_tar(tarlog, garde):
+            quand = c.mtimes[tarlog].get(nom)
+            _journal_brut(c, f"{c.rel(tarlog)} → {nom}", nom, blob, "tar -xO, puis motifs",
+                          datetime.fromtimestamp(quand, timezone.utc) if quand else None)
+    # Une pièce reprise à la main — un auth.log recopié depuis l'image, un
+    # secure.3.gz — se pose telle quelle dans JOURNAUX/ : elle est lue comme
+    # si la collecte l'avait emportée.
+    dossier = os.path.join(c.racine, "JOURNAUX")
+    if os.path.isdir(dossier):
+        for base in sorted(os.listdir(dossier)):
+            chemin = os.path.join(dossier, base)
+            if not os.path.isfile(chemin) or base.endswith((".tar.gz", "_journal.txt")):
                 continue
-            if nom.endswith((".gz", ".xz", ".lzma", ".bz2", ".zst")):
-                clair = decomprimer(nom, blob)
-                if clair is None:
-                    fait("limite", "journal tourné non décompressé", nom,
-                         f"{c.rel(tarlog)} → {nom}", "compresseur non disponible",
-                         confiance="à vérifier",
-                         note="son contenu n'est PAS dans l'analyse")
-                    continue
-                blob = clair
-            journal(c, f"{c.rel(tarlog)} → {nom}",
-                    blob.decode("utf-8", "replace"), "tar -xO, puis motifs", fin)
+            with open(chemin, "rb") as fh:
+                blob = fh.read()
+            c.lus.add(chemin)
+            _journal_brut(c, c.rel(chemin), base, blob,
+                          "fichier posé à la main dans JOURNAUX/, puis motifs",
+                          datetime.fromtimestamp(os.path.getmtime(chemin), timezone.utc))
+
+
+JOURNAUX_LUS = ("secure", "auth.log", "messages", "syslog", "dmesg",
+                "boot.log", "cron", "audit", "maillog", "yum.log")
+
+
+def _journal_brut(c, source, nom, blob, methode, fin):
+    if nom.endswith((".gz", ".xz", ".lzma", ".bz2", ".zst")):
+        clair = decomprimer(nom, blob)
+        if clair is None:
+            fait("limite", "journal tourné non décompressé", nom, source,
+                 "compresseur non disponible", confiance="à vérifier",
+                 note="son contenu n'est PAS dans l'analyse")
+            return
+        blob = clair
+    if b"\x00" in blob[:4096]:
+        return                       # un journal binaire (systemd) n'est pas du texte
+    journal(c, source, blob.decode("utf-8", "replace"), methode, fin)
 
 
 # ── 5 · réseau ────────────────────────────────────────────────────────
@@ -703,23 +749,40 @@ def reseau(c):
 
 
 # ── 6 · navigation et téléchargements ─────────────────────────────────
-def _sqlite_lire(blob, requetes):
-    """Ouvre une base sqlite tenue en mémoire, rend (nom, lignes)."""
+@contextlib.contextmanager
+def _sqlite(blob):
+    """Une base sqlite copiée hors des scellés, ouverte immuable : rien n'est
+    jamais écrit dans la pièce, pas même un journal -wal."""
     with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
         tmp.write(blob)
         tmp.flush()
         try:
             cx = sqlite3.connect(f"file:{tmp.name}?mode=ro&immutable=1", uri=True)
         except sqlite3.Error:
+            yield None
             return
         try:
-            for nom, sql in requetes:
-                try:
-                    yield nom, cx.execute(sql).fetchall()
-                except sqlite3.Error:
-                    continue
+            yield cx
         finally:
             cx.close()
+
+
+def _lignes(cx, sql, params=()):
+    if cx is None:
+        return []
+    try:
+        return cx.execute(sql, params).fetchall()
+    except sqlite3.Error:
+        return []
+
+
+def _sqlite_lire(blob, requetes):
+    """(nom, lignes) pour chaque requête d'une même base."""
+    with _sqlite(blob) as cx:
+        for nom, sql in requetes:
+            lignes = _lignes(cx, sql)
+            if lignes:
+                yield nom, lignes
 
 
 # Les visites sont bornées, et la borne est un fait : quand elle est atteinte,
@@ -728,18 +791,18 @@ def _sqlite_lire(blob, requetes):
 # par --visites. Chaque page porte son nombre de visites et la première : ce
 # qui distingue un passage d'une habitude.
 FF_EPOCH = "datetime(v.last_visit_date/1000000,'unixepoch')"
-REQ_FIREFOX = [
-    ("total", "SELECT COUNT(*) FROM moz_places WHERE last_visit_date IS NOT NULL"),
-    ("visite", f"SELECT {FF_EPOCH}, v.url, v.title, v.visit_count, "
-               "(SELECT datetime(MIN(h.visit_date)/1000000,'unixepoch') "
-               " FROM moz_historyvisits h WHERE h.place_id=v.id) "
-               "FROM moz_places v WHERE v.last_visit_date IS NOT NULL "
-               "ORDER BY v.last_visit_date DESC LIMIT {limite}"),
-    ("telechargement",
-     "SELECT datetime(a.dateAdded/1000000,'unixepoch'), a.content, p.url "
-     "FROM moz_annos a JOIN moz_places p ON p.id=a.place_id "
-     "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC LIMIT {limite}"),
-]
+REQ_FIREFOX = {
+    "total": "SELECT COUNT(*) FROM moz_places WHERE last_visit_date IS NOT NULL",
+    "visite": f"SELECT {FF_EPOCH}, v.url, v.title, v.visit_count, "
+              "(SELECT datetime(MIN(h.visit_date)/1000000,'unixepoch') "
+              " FROM moz_historyvisits h WHERE h.place_id=v.id) "
+              "FROM moz_places v WHERE v.last_visit_date IS NOT NULL "
+              "ORDER BY v.last_visit_date DESC LIMIT ?",
+    "telechargement":
+        "SELECT datetime(a.dateAdded/1000000,'unixepoch'), a.content, p.url "
+        "FROM moz_annos a JOIN moz_places p ON p.id=a.place_id "
+        "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC LIMIT ?",
+}
 # Un cookie prouve une visite même quand l'historique a été vidé : les deux
 # bases sont indépendantes. On regroupe par domaine — un profil en compte des
 # milliers — et on ne sort JAMAIS la colonne « value » : c'est un jeton de
@@ -762,18 +825,18 @@ REQ_COOKIES_CHROME = [
                "FROM cookies GROUP BY host_key ORDER BY MAX(last_access_utc) DESC LIMIT 300"),
 ]
 
-REQ_CHROME = [
-    ("total", "SELECT COUNT(*) FROM urls WHERE last_visit_time > 0"),
-    ("visite", "SELECT datetime(u.last_visit_time/1000000-11644473600,'unixepoch'), "
-               "u.url, u.title, u.visit_count, "
-               "(SELECT datetime(MIN(x.visit_time)/1000000-11644473600,'unixepoch') "
-               " FROM visits x WHERE x.url=u.id) "
-               "FROM urls u WHERE u.last_visit_time > 0 "
-               "ORDER BY u.last_visit_time DESC LIMIT {limite}"),
-    ("telechargement",
-     "SELECT datetime(start_time/1000000-11644473600,'unixepoch'), target_path, tab_url "
-     "FROM downloads ORDER BY start_time DESC LIMIT {limite}"),
-]
+REQ_CHROME = {
+    "total": "SELECT COUNT(*) FROM urls WHERE last_visit_time > 0",
+    "visite": "SELECT datetime(u.last_visit_time/1000000-11644473600,'unixepoch'), "
+              "u.url, u.title, u.visit_count, "
+              "(SELECT datetime(MIN(x.visit_time)/1000000-11644473600,'unixepoch') "
+              " FROM visits x WHERE x.url=u.id) "
+              "FROM urls u WHERE u.last_visit_time > 0 "
+              "ORDER BY u.last_visit_time DESC LIMIT ?",
+    "telechargement":
+        "SELECT datetime(start_time/1000000-11644473600,'unixepoch'), target_path, tab_url "
+        "FROM downloads ORDER BY start_time DESC LIMIT ?",
+}
 
 # Les mots de passe enregistrés : on lit le SITE, jamais l'identifiant ni le
 # secret. Que « intranet.example » ait un mot de passe enregistré dans Firefox
@@ -783,7 +846,16 @@ REQ_LOGINS_CHROME = [
     ("identifiant", "SELECT origin_url, date_created, date_last_used FROM logins"),
 ]
 
-BASES_NAVIGATEUR = ("places.sqlite", "cookies.sqlite", "History", "Cookies")
+# Le fichier, le navigateur, ce qu'on en fait. C'est LA liste des bases de
+# navigateur : la garde des fichiers -wal s'y réfère aussi.
+NAVIGATEURS = {
+    "places.sqlite": ("Firefox", "historique", REQ_FIREFOX),
+    "History": ("Chromium/Chrome", "historique", REQ_CHROME),
+    "cookies.sqlite": ("Firefox (moz_cookies)", "cookies", REQ_COOKIES_FF),
+    "Cookies": ("Chromium/Chrome", "cookies", REQ_COOKIES_CHROME),
+    "logins.json": ("Firefox", "identifiants", None),
+    "Login Data": ("Chromium/Chrome", "identifiants", REQ_LOGINS_CHROME),
+}
 
 
 def _iso_z(ts):
@@ -818,34 +890,64 @@ def _cookies(c, prof, nom, compte, blob, requetes, outil, depuis_1601):
     return False
 
 
-def _identifiants(c, prof, nom, compte, blob, base):
+def _logins_firefox(c, source, compte, blob):
     """Les sites pour lesquels un mot de passe est enregistré. Le site seul."""
-    if base == "logins.json":
-        try:
-            entrees = json.loads(blob.decode("utf-8", "replace")).get("logins", [])
-        except (ValueError, AttributeError):
-            return
-        for e in entrees:
-            if not isinstance(e, dict) or not e.get("hostname"):
-                continue
+    try:
+        entrees = json.loads(blob.decode("utf-8", "replace")).get("logins", [])
+    except (ValueError, AttributeError):
+        return
+    for e in entrees:
+        if isinstance(e, dict) and e.get("hostname"):
             cree, vu = e.get("timeCreated"), e.get("timeLastUsed")
             fait("usage", "mot de passe enregistré dans le navigateur", e["hostname"],
-                 f"{c.rel(prof)} → {nom}",
-                 "champ hostname de logins.json (identifiant et mot de passe non lus)",
-                 horodatage=_date_us(vu * 1000, False) if vu else None, acteur=compte,
-                 note=f"enregistré le {_date_us(cree * 1000, False)}" if cree else None)
-    else:
-        for _, lignes in _sqlite_lire(blob, REQ_LOGINS_CHROME):
-            for site, cree, vu in lignes:
-                fait("usage", "mot de passe enregistré dans le navigateur", site,
-                     f"{c.rel(prof)} → {nom}",
-                     "colonne origin_url de la table logins (identifiant et mot de "
-                     "passe non lus)",
-                     horodatage=_date_us(vu, True), acteur=compte,
-                     note=f"enregistré le {_date_us(cree, True)}" if cree else None)
+                 source, "champ hostname de logins.json (identifiant et mot de passe non lus)",
+                 horodatage=_date_us(vu * 1000) if vu else None, acteur=compte,
+                 note=f"enregistré le {_date_us(cree * 1000)}" if cree else None)
 
 
-def navigation(c, limite=5000):
+def _logins_chrome(c, source, compte, blob):
+    for _, lignes in _sqlite_lire(blob, REQ_LOGINS_CHROME):
+        for site, cree, vu in lignes:
+            fait("usage", "mot de passe enregistré dans le navigateur", site, source,
+                 "colonne origin_url de la table logins (identifiant et mot de passe non lus)",
+                 horodatage=_date_us(vu, True), acteur=compte,
+                 note=f"enregistré le {_date_us(cree, True)}" if cree else None)
+
+
+def _historique_navigateur(c, source, compte, blob, outil, req, limite):
+    with _sqlite(blob) as cx:
+        total = (_lignes(cx, req["total"]) or [[None]])[0][0]
+        visites = _lignes(cx, req["visite"], (limite,))
+        for ts, url, titre, combien, premiere in visites:
+            ts, premiere = _iso_z(ts), _iso_z(premiere)
+            note = f"{combien} visite(s)" if combien else ""
+            if premiere and premiere != ts:
+                note += f", la première le {premiere}"
+            if titre:
+                note = f"{note} — {titre}" if note else titre
+            fait("navigation", "page visitée", url, source,
+                 f"sqlite3 sur l'historique {outil}", horodatage=ts, acteur=compte,
+                 note=note or None)
+        for ts, cible, origine in _lignes(cx, req["telechargement"], (limite,)):
+            fait("telechargement", "fichier téléchargé", cible, source,
+                 f"sqlite3 sur les téléchargements {outil}", horodatage=_iso_z(ts),
+                 acteur=compte, note=f"depuis {origine}" if origine else None)
+    if total and total > len(visites):
+        fait("limite", "historique de navigation tronqué",
+             f"{len(visites)} pages sur {total}", source,
+             f"COUNT(*) sur l'historique {outil}, borne --visites {limite}",
+             acteur=compte, confiance="certaine",
+             note="les pages les plus anciennes ne sont pas dans les faits ; "
+                  "relancez avec --visites plus grand pour les avoir")
+
+
+def _garde_navigation(nom):
+    base = os.path.basename(nom)
+    return (base in NAVIGATEURS or base == "recently-used.xbel"
+            or base.removesuffix("-wal").removesuffix("-journal") in NAVIGATEURS)
+
+
+def navigation(c):
     """Les navigateurs. Ils vivent dans DEUX archives, et l'oublier fait
     manquer un navigateur entier : Firefox est dans ~/.mozilla, donc dans
     _profils ; Chrome ou Chromium installés par paquet sont dans ~/.config,
@@ -854,71 +956,32 @@ def navigation(c, limite=5000):
     for suffixe in ("_profils.tar.gz", "_artefacts.tar.gz"):
         for prof in c.chercher(suffixe, "COMPTES"):
             compte = _compte_de(prof, suffixe[1:])
-            for nom, blob in c.membres_tar(prof):
+            for nom, blob in c.membres_tar(prof, _garde_navigation):
                 base = os.path.basename(nom)
-                if base.endswith(("-wal", "-journal")) and len(blob) > 32 \
-                        and base.rsplit("-", 1)[0] in BASES_NAVIGATEUR:
-                    fait("limite", "base de navigateur copiée à chaud", nom,
-                         f"{c.rel(prof)} → {nom}", "présence d'un fichier -wal non vide",
-                         acteur=compte, confiance="à vérifier",
-                         note="les visites les plus récentes sont dans ce journal, "
-                              "pas dans la base : elles manquent à l'analyse")
-                    continue
-                if base == "places.sqlite":
-                    jeu, outil = REQ_FIREFOX, "Firefox"
-                elif base == "cookies.sqlite":
-                    _cookies(c, prof, nom, compte, blob, REQ_COOKIES_FF,
-                             "Firefox (moz_cookies)", False)
-                    continue
-                elif base == "Cookies":
-                    _cookies(c, prof, nom, compte, blob, REQ_COOKIES_CHROME,
-                             "Chromium/Chrome", True)
-                    continue
-                elif base == "History" and ("chrom" in nom.lower() or "Default" in nom):
-                    jeu, outil = REQ_CHROME, "Chromium/Chrome"
-                elif base in ("logins.json", "Login Data"):
-                    _identifiants(c, prof, nom, compte, blob, base)
-                    continue
-                else:
+                source = f"{c.rel(prof)} → {nom}"
+                if base not in NAVIGATEURS:
                     if base == "recently-used.xbel":
                         for m2 in re.finditer(r'href="([^"]+)"[^>]*(?:added|modified)="([^"]+)"',
                                               blob.decode("utf-8", "replace")):
-                            fait("usage", "fichier ouvert récemment", m2.group(1),
-                                 f"{c.rel(prof)} → {nom}", "grep href= recently-used.xbel",
+                            fait("usage", "fichier ouvert récemment", m2.group(1), source,
+                                 "grep href= recently-used.xbel",
                                  horodatage=m2.group(2), acteur=compte)
+                    elif len(blob) > 32:            # un -wal ou -journal non vide
+                        fait("limite", "base de navigateur copiée à chaud", nom, source,
+                             "présence d'un fichier -wal non vide",
+                             acteur=compte, confiance="à vérifier",
+                             note="les visites les plus récentes sont dans ce journal, "
+                                  "pas dans la base : elles manquent à l'analyse")
                     continue
-                total = None
-                requetes = [(g, q.replace("{limite}", str(limite))) for g, q in jeu]
-                for genre, lignes in _sqlite_lire(blob, requetes):
-                    if genre == "total":
-                        total = lignes[0][0] if lignes else None
-                        continue
-                    for l in lignes:
-                        ts, a, b, combien, premiere = (list(l) + [None] * 5)[:5]
-                        ts, premiere = _iso_z(ts), _iso_z(premiere)
-                        if genre == "visite":
-                            note = f"{combien} visite(s)" if combien else None
-                            if premiere and premiere != ts:
-                                note += f", la première le {premiere}"
-                            if b:
-                                note = f"{note} — {b}" if note else b
-                            fait("navigation", "page visitée", a,
-                                 f"{c.rel(prof)} → {nom}",
-                                 f"sqlite3 sur l'historique {outil}",
-                                 horodatage=ts, acteur=compte, note=note)
-                        else:
-                            fait("telechargement", "fichier téléchargé", a,
-                                 f"{c.rel(prof)} → {nom}",
-                                 f"sqlite3 sur les téléchargements {outil}",
-                                 horodatage=ts, acteur=compte,
-                                 note=f"depuis {b}" if b else None)
-                    if genre == "visite" and total and total > len(lignes):
-                        fait("limite", "historique de navigation tronqué",
-                             f"{len(lignes)} pages sur {total}", f"{c.rel(prof)} → {nom}",
-                             f"COUNT(*) sur l'historique {outil}, borne --visites {limite}",
-                             acteur=compte, confiance="certaine",
-                             note="les pages les plus anciennes ne sont pas dans les "
-                                  "faits ; relancez avec --visites plus grand pour les avoir")
+                outil, genre, req = NAVIGATEURS[base]
+                if genre == "historique":
+                    _historique_navigateur(c, source, compte, blob, outil, req, c.visites)
+                elif genre == "cookies":
+                    _cookies(c, prof, nom, compte, blob, req, outil, base == "Cookies")
+                elif base == "logins.json":
+                    _logins_firefox(c, source, compte, blob)
+                else:
+                    _logins_chrome(c, source, compte, blob)
 
 
 # ── 7 · ce qui se relance seul, et les supprimés ──────────────────────
@@ -933,6 +996,11 @@ SUSPECT = [
     (re.compile(r'\bnohup\b.*&\s*$'), "processus détaché"),
     (re.compile(r'ssh-keygen|authorized_keys'), "clé SSH manipulée"),
 ]
+
+
+ARTEFACTS_LUS = ("_history", ".lesshst", ".wget-hsts", "known_hosts", ".viminfo",
+                 "authorized_keys")
+RE_HISTO_EPOCH = re.compile(r'^#(\d{9,11})$')
 
 
 def persistance(c):
@@ -958,9 +1026,10 @@ def persistance(c):
                          f"motif « {motif.pattern} » dans le fichier",
                          confiance="à vérifier")
 
+    garde = lambda nom: os.path.basename(nom).endswith(ARTEFACTS_LUS)         # noqa: E731
     for art in c.chercher("_artefacts.tar.gz", "COMPTES"):
         compte = _compte_de(art, "artefacts.tar.gz")
-        for nom, blob in c.membres_tar(art):
+        for nom, blob in c.membres_tar(art, garde):
             base = os.path.basename(nom)
             txt = blob.decode("utf-8", "replace")
             if base.endswith(("_history", ".lesshst", ".wget-hsts")):
@@ -968,9 +1037,13 @@ def persistance(c):
                 # bash n'écrit de dates que si HISTTIMEFORMAT était posé : une
                 # ligne « #<epoch> » avant chaque commande. Sans elles,
                 # l'historique n'est PAS datable — c'est un fait à dire.
-                horos = [int(m.group(1)) for m in
-                         re.finditer(r'^#(\d{9,11})$', txt, re.M)]
-                commandes = [l for l in lignes if l.strip() and not l.startswith("#")]
+                horos, commandes = [], []
+                for l in lignes:
+                    m = RE_HISTO_EPOCH.match(l)
+                    if m:
+                        horos.append(int(m.group(1)))
+                    elif l.strip() and not l.startswith("#"):
+                        commandes.append(l)
                 if horos:
                     borne = (datetime.fromtimestamp(min(horos), timezone.utc)
                              .isoformat().replace("+00:00", "Z"),
@@ -991,7 +1064,7 @@ def persistance(c):
                               "ces commandes sans une autre source")
                 horo_courant = None
                 for l in lignes:
-                    m = re.match(r'^#(\d{9,11})$', l)
+                    m = RE_HISTO_EPOCH.match(l)
                     if m:
                         horo_courant = (datetime.fromtimestamp(int(m.group(1)),
                                         timezone.utc).isoformat().replace("+00:00", "Z"))
@@ -1304,6 +1377,141 @@ def completude(c):
              confiance="à vérifier", note=note)
 
 
+# ── 10 · ce qu'on vient chercher : chaînes, empreintes, adresses ─────
+# L'analyste sait parfois ce qu'il cherche — l'empreinte d'un fichier vu
+# ailleurs, une adresse, un nom. Le fichier d'indicateurs se lit à la main :
+# une ligne par indicateur, « type: valeur », un # pour l'étiquette.
+#
+#   sha256: / sha1: / md5:   une empreinte, comparée à CHAQUE fichier de la
+#                            collecte — membres des archives et fichiers posés,
+#                            photorec compris
+#   texte:                   une chaîne, cherchée telle quelle, sans la casse
+#   regex:                   une expression, cherchée dans les octets
+#   ip: / domaine:           une adresse ou un nom, cherchés comme un texte
+#   fichier:                 un nom ou un motif de nom (« *.torrent », « id_rsa »)
+TYPES_INDICATEUR = ("sha256", "sha1", "md5", "texte", "regex", "ip", "domaine", "fichier")
+
+
+def lire_indicateurs(chemin):
+    liste = []
+    with open(chemin, encoding="utf-8") as fh:
+        for num, ligne in enumerate(fh, 1):
+            nue = ligne.strip()
+            if not nue or nue.startswith("#"):
+                continue
+            etiquette = None
+            coupe = re.search(r'\s+#\s*(.*)$', nue)
+            if coupe:
+                etiquette, nue = coupe.group(1).strip() or None, nue[:coupe.start()].strip()
+            if ":" not in nue:
+                sys.exit(f"{chemin}:{num} : attendu « type: valeur » — {nue}")
+            genre, valeur = (x.strip() for x in nue.split(":", 1))
+            genre = genre.lower()
+            if genre not in TYPES_INDICATEUR:
+                sys.exit(f"{chemin}:{num} : type « {genre} » inconnu — attendu "
+                         + ", ".join(TYPES_INDICATEUR))
+            if genre in ("sha256", "sha1", "md5"):
+                valeur = valeur.lower()
+                if not re.fullmatch(r'[0-9a-f]{%d}' % {"sha256": 64, "sha1": 40, "md5": 32}[genre], valeur):
+                    sys.exit(f"{chemin}:{num} : {genre} mal formée — {valeur}")
+                motif = None
+            elif genre == "regex":
+                try:
+                    motif = re.compile(valeur.encode("utf-8"))
+                except re.error as e:
+                    sys.exit(f"{chemin}:{num} : expression illisible ({e}) — {valeur}")
+            elif genre == "fichier":
+                motif = None
+            else:
+                motif = re.compile(re.escape(valeur.encode("utf-8")), re.I)
+            liste.append({"genre": genre, "valeur": valeur, "motif": motif,
+                          "etiquette": etiquette})
+    if not liste:
+        sys.exit(f"{chemin} : aucun indicateur lisible")
+    return liste
+
+
+def indicateurs(c, liste):
+    """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier."""
+    empreintes = {g: {x["valeur"]: x for x in liste if x["genre"] == g}
+                  for g in ("sha256", "sha1", "md5")}
+    algos = [g for g in empreintes if empreintes[g]]
+    noms = [x for x in liste if x["genre"] == "fichier"]
+    motifs = [x for x in liste if x["motif"] is not None]
+    trouves = set()
+
+    def examiner(source, nom, blob):
+        base = os.path.basename(nom)
+        for x in noms:
+            if fnmatch.fnmatch(base, x["valeur"]) or fnmatch.fnmatch(nom, x["valeur"]):
+                trouves.add(id(x))
+                fait("indicateur", "fichier au nom recherché", nom, source,
+                     f"nom comparé au motif « {x['valeur']} »",
+                     note=x["etiquette"])
+        if algos:
+            calc = {g: hashlib.new(g, blob).hexdigest() for g in algos}
+            for g, h in calc.items():
+                if h in empreintes[g]:
+                    trouves.add(id(empreintes[g][h]))
+                    fait("indicateur", f"fichier à l'empreinte {g} recherchée", nom, source,
+                         f"{g} du fichier = {h}", note=empreintes[g][h]["etiquette"])
+        for x in motifs:
+            n = 0
+            for m in x["motif"].finditer(blob):
+                n += 1
+                if n == 1:
+                    d, f = max(0, m.start() - 60), min(len(blob), m.end() + 60)
+                    contexte = blob[d:f].decode("utf-8", "replace").replace("\n", " ")
+            if n:
+                trouves.add(id(x))
+                fait("indicateur", f"{x['genre']} recherché présent dans un fichier",
+                     x["valeur"], source,
+                     f"motif « {x['valeur']} » cherché dans les octets du fichier",
+                     note=f"{n} occurrence(s) ; autour de la première : « {contexte} »"
+                          + (f" — {x['etiquette']}" if x["etiquette"] else ""))
+
+    for d, _, fichiers in os.walk(c.racine):
+        for f in sorted(fichiers):
+            chemin = os.path.join(d, f)
+            if chemin.endswith(".tar.gz"):
+                for nom, blob in c.membres_tar(chemin):
+                    examiner(f"{c.rel(chemin)} → {nom}", nom, blob)
+            else:
+                try:
+                    with open(chemin, "rb") as fh:
+                        blob = fh.read()
+                except OSError:
+                    continue
+                c.lus.add(chemin)
+                examiner(c.rel(chemin), c.rel(chemin), blob)
+    for x in liste:
+        if id(x) not in trouves:
+            fait("indicateur", f"{x['genre']} recherché ABSENT de la collecte", x["valeur"],
+                 c.prefix, "recherche dans chaque fichier et chaque membre d'archive",
+                 note="absent des pièces collectées, pas forcément du poste : la "
+                      "collecte ne prend pas tout"
+                      + (f" — {x['etiquette']}" if x["etiquette"] else ""))
+
+
+def _csv_sain(v):
+    """Une cellule qu'un tableur affichera, sans jamais l'exécuter : un nom
+    de fichier « =HYPERLINK(...) » deviendrait une formule dans Excel."""
+    if v is None:
+        return ""
+    t = str(v).replace("\r", " ").replace("\n", " ")
+    return "'" + t if t[:1] in ("=", "+", "-", "@", "\t", "|") else t
+
+
+def ecrire_csv(chemin, lignes, colonnes):
+    """Le même contenu que le .jsonl, pour un tableur : « ; » et BOM, ce
+    qu'Excel et LibreOffice ouvrent sans dialogue en français."""
+    with open(chemin, "w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh, delimiter=";", quoting=csv.QUOTE_ALL)
+        w.writerow(colonnes)
+        for x in lignes:
+            w.writerow([_csv_sain(x.get(k)) for k in colonnes])
+
+
 def empreinte(chemin, taille_bloc=1 << 20):
     """SHA-256 d'un fichier, lu par blocs."""
     h = hashlib.sha256()
@@ -1354,14 +1562,16 @@ def main():
                     help="pages retenues par historique de navigateur, les plus "
                          "récentes d'abord (défaut 5000) ; au-delà, un fait "
                          "« limite » le dit")
+    ap.add_argument("--indicateurs", metavar="FICHIER",
+                    help="chaînes, empreintes, adresses à chercher dans toute la "
+                         "collecte, une par ligne : voir references/indicateurs.md")
     args = ap.parse_args()
 
-    c = Collecte(args.collecte)
+    c = Collecte(args.collecte, visites=args.visites)
     for etape, fn in (("complétude", completude),
                       ("machine", machine), ("comptes et domaine", comptes),
                       ("sessions", sessions), ("journaux", journaux),
-                      ("réseau", reseau),
-                      ("navigation", lambda c: navigation(c, args.visites)),
+                      ("réseau", reseau), ("navigation", navigation),
                       ("historique des paquets", historique_paquets),
                       ("persistance", persistance), ("supprimés", supprimes),
                       ("timeline", timeline)):
@@ -1371,10 +1581,15 @@ def main():
         except Exception as e:                                    # noqa: BLE001
             print(f"  ! {etape} : {type(e).__name__} {e}", file=sys.stderr)
         print(f"  {etape:22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
+    if args.indicateurs:
+        avant = len(FAITS)
+        indicateurs(c, lire_indicateurs(args.indicateurs))
+        print(f"  {'indicateurs':22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:
         for f in FAITS:
             fh.write(json.dumps(f, ensure_ascii=False) + "\n")
+    ecrire_csv(os.path.splitext(args.sortie)[0] + ".csv", FAITS, COLONNES_CSV)
 
     chemin_man = os.path.splitext(args.sortie)[0] + "-manifeste.json"
     with open(chemin_man, "w", encoding="utf-8") as fh:
@@ -1385,7 +1600,7 @@ def main():
     par_cat = {}
     for f in FAITS:
         par_cat[f["categorie"]] = par_cat.get(f["categorie"], 0) + 1
-    print(f"\n{len(FAITS)} faits → {args.sortie}", file=sys.stderr)
+    print(f"\n{len(FAITS)} faits → {args.sortie}  (+ .csv)", file=sys.stderr)
     print(f"  empreintes des pièces lues → {chemin_man}", file=sys.stderr)
     print("  " + "  ".join(f"{k}={v}" for k, v in sorted(par_cat.items())),
           file=sys.stderr)

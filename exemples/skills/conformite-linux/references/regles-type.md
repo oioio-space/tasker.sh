@@ -19,6 +19,7 @@ ce que le contrôle **ne prouve pas**.
 | règle courante | constat | ce que ça ne prouve pas |
 |---|---|---|
 | « chaque agent dispose d'un compte nominatif » | plusieurs comptes partagent le même dossier | qui s'en est servi — un dossier partagé rend justement l'attribution impossible |
+| « nul ne se sert du compte d'un autre » | thème `partage` : fichiers d'un autre propriétaire dans le dossier personnel ; `su` ou `sudo -u` vers un compte local ; une clé SSH acceptée par deux comptes ; deux origines pour le même compte à quelques minutes | **qui tenait le clavier**. Un fichier de B chez A dit que B a écrit là — par sa session ou par sudo. Deux origines peuvent être une personne et deux machines. Chaque trace se cite avec sa limite |
 | « les comptes à privilèges sont déclarés et nominatifs » | compte disposant des droits de root (uid 0) | que le compte soit illégitime : il peut être déclaré |
 | « les comptes inutilisés sont désactivés » | *pas de contrôle direct* — croiser les comptes de `passwd` avec les sessions de `faits.jsonl` | — |
 

@@ -66,7 +66,15 @@ python3 scripts/controles.py <dossier PREFIX/> \
         --faits faits.jsonl -o constats.jsonl
 ```
 
-Les constats portent alors le numéro de la règle cherchée. Voir le §3.
+Les constats portent alors le numéro de la règle cherchée. Voir le §3. Le
+même contenu sort en `constats.csv`, pour un tableur.
+
+Parmi les contrôles fixes, le thème **`partage`** cherche ce qui trahit un
+compte servi par un autre : des fichiers appartenant à un autre compte dans le
+dossier personnel, un `su` ou `sudo -u` vers un compte local dans l'historique
+ou le journal, une même clé SSH acceptée par deux comptes, deux ouvertures du
+même compte depuis deux origines à quelques minutes. Aucune de ces traces ne
+prouve seule le partage ; chacune se cite avec sa limite.
 
 ### 2 · Lire les règles
 
@@ -98,7 +106,10 @@ fois. `references/regles/` contient des fichiers où la traduction est écrite,
 **à la main et en clair** : une règle par bloc, sa phrase recopiée de la charte,
 puis les indices à chercher — un domaine dans un navigateur, un programme dans
 la liste des paquets, un fichier dans le dossier personnel, une commande dans
-l'historique de l'interpréteur, un réseau sans fil, des heures ouvrées.
+l'historique de l'interpréteur, un réseau sans fil, des heures ouvrées, une
+chaîne dans toutes les pièces texte (`chaine:`), ou un **contrôle fixe** du
+script (`controle: partage`) : la règle s'adosse alors aux constats que le
+script pose déjà, et ils reçoivent son numéro.
 
     regle: R2
     titre: Logiciels de jeu vidéo
@@ -160,11 +171,14 @@ python3 scripts/brouillon.py constats.jsonl --faits faits.jsonl \
         -o rapport-conformite-<PREFIX>.md
 ```
 
-Le brouillon contient les huit sections dans l'ordre, avec les tableaux déjà
-remplis : le périmètre et les empreintes, la table règle → indices → constats
-du §3, les constats rattachés à chaque règle, les observations sans règle, les
-règles non vérifiées, ce qui est conforme, les limites, l'annexe. Des passages
-**« À rédiger »** disent ce qu'il faut écrire à chaque endroit.
+Le brouillon contient les sections dans l'ordre, avec les tableaux déjà
+remplis : « En bref » pour qui ne lira que cela, le périmètre et les
+empreintes, la table règle → indices → constats du §3, les constats rattachés
+à chaque règle, les observations sans règle, les règles non vérifiées, ce qui
+est conforme, les limites — avec les indicateurs cherchés par le skill
+forensic —, l'annexe, un lexique. Des passages **« À rédiger »** disent ce
+qu'il faut écrire à chaque endroit. Les dates y sont dans le fuseau du poste,
+y compris celles des notes : vous ne convertissez rien.
 
 Vous écrivez la prose et vous **rayez** les constats qui ne tiennent pas, avec
 le motif. Vous ne réécrivez jamais une cellule : une date, une valeur, un
