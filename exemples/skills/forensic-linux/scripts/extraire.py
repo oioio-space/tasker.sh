@@ -451,15 +451,36 @@ MOTIFS_JOURNAL = [
     ("support", "support amovible USB branché",
      re.compile(r'usb\s+([\d.-]+):\s+New USB device found,\s*(.*)$'),
      lambda m: (None, f"port {m.group(1)}, {m.group(2).strip()}")),
-    ("support", "modèle du support USB",
-     re.compile(r'usb\s+[\d.-]+:\s+(?:Product|Manufacturer|SerialNumber):\s*(.+)$'),
+    # Le numéro de série est LA pièce d'identité du support : c'est lui qui
+    # permet de dire que la même clé a servi sur une autre machine. Il ne doit
+    # pas partager son étiquette avec le modèle.
+    ("support", "numéro de série du support USB",
+     re.compile(r'usb\s+[\d.-]+:\s+SerialNumber:\s*(.+)$'),
      lambda m: (None, m.group(1).strip())),
+    ("support", "modèle du support USB",
+     re.compile(r'usb\s+[\d.-]+:\s+Product:\s*(.+)$'),
+     lambda m: (None, m.group(1).strip())),
+    ("support", "fabricant du support USB",
+     re.compile(r'usb\s+[\d.-]+:\s+Manufacturer:\s*(.+)$'),
+     lambda m: (None, m.group(1).strip())),
+    ("support", "support USB débranché",
+     re.compile(r'usb\s+([\d.-]+):\s+USB disconnect, device number (\d+)'),
+     lambda m: (None, f"port {m.group(1)}, appareil {m.group(2)}")),
+    ("support", "support reconnu par SCSI",
+     re.compile(r'scsi\s+[\d:]+:\s+Direct-Access\s+(.+?)\s+PQ:'),
+     lambda m: (None, re.sub(r'\s{2,}', " ", m.group(1).strip()))),
     ("support", "disque amovible reconnu",
      re.compile(r'\[(sd[a-z]+)\]\s+Attached SCSI removable disk'),
      lambda m: (None, f"/dev/{m.group(1)}")),
+    # .*? et non .* : glouton, il partirait du « /media » de « /run/media ».
+    # Le compte est dans le chemin — c'est l'attribution la plus directe qui
+    # existe pour un support amovible.
     ("support", "système de fichiers amovible monté",
-     re.compile(r'(?:mount|gvfs|udisks).*((?:/run)?/media/\S+)'),
-     lambda m: (None, m.group(1))),
+     re.compile(r'(?:mount|gvfs|udisks).*?((?:/run)?/media/([^/\s]+)/\S*)'),
+     lambda m: (m.group(2), m.group(1))),
+    ("support", "montage demandé par un compte",
+     re.compile(r'on behalf of uid (\d+)'),
+     lambda m: (None, f"uid {m.group(1)}")),
     ("reseau", "adresse obtenue en DHCP",
      re.compile(r'dhclient|dhcp4.*address\s+(\d+\.\d+\.\d+\.\d+)', re.I),
      lambda m: (None, m.group(1) if m.lastindex else "bail DHCP")),
@@ -703,18 +724,50 @@ def persistance(c):
         for nom, blob in c.membres_tar(art):
             base = os.path.basename(nom)
             txt = blob.decode("utf-8", "replace")
-            if base.endswith("_history") or base in (".bash_history", ".zsh_history"):
-                for l in txt.splitlines():
+            if base.endswith(("_history", ".lesshst", ".wget-hsts")):
+                lignes = txt.splitlines()
+                # bash n'écrit de dates que si HISTTIMEFORMAT était posé : une
+                # ligne « #<epoch> » avant chaque commande. Sans elles,
+                # l'historique n'est PAS datable — c'est un fait à dire.
+                horos = [int(m.group(1)) for m in
+                         re.finditer(r'^#(\d{9,11})$', txt, re.M)]
+                commandes = [l for l in lignes if l.strip() and not l.startswith("#")]
+                if horos:
+                    borne = (datetime.fromtimestamp(min(horos), timezone.utc)
+                             .isoformat().replace("+00:00", "Z"),
+                             datetime.fromtimestamp(max(horos), timezone.utc)
+                             .isoformat().replace("+00:00", "Z"))
+                    fait("usage", "historique daté (HISTTIMEFORMAT posé)",
+                         f"{len(commandes)} commandes, {len(horos)} datées",
+                         f"{c.rel(art)} → {nom}",
+                         "comptage des lignes « #<epoch> » de l'historique",
+                         acteur=compte, horodatage=borne[1],
+                         note=f"de {borne[0]} à {borne[1]}")
+                else:
+                    fait("usage", "historique NON daté",
+                         f"{len(commandes)} commandes", f"{c.rel(art)} → {nom}",
+                         "absence de lignes « #<epoch> » dans l'historique",
+                         acteur=compte, confiance="certaine",
+                         note="aucune date dans le fichier : ne datez aucune de "
+                              "ces commandes sans une autre source")
+                horo_courant = None
+                for l in lignes:
+                    m = re.match(r'^#(\d{9,11})$', l)
+                    if m:
+                        horo_courant = (datetime.fromtimestamp(int(m.group(1)),
+                                        timezone.utc).isoformat().replace("+00:00", "Z"))
+                        continue
                     for motif, quoi in SUSPECT:
                         if motif.search(l):
                             fait("suspect", quoi, l.strip(),
                                  f"{c.rel(art)} → {nom}",
-                                 f"motif « {motif.pattern} » dans l'historique du shell",
-                                 acteur=compte, confiance="à vérifier")
+                                 f"motif « {motif.pattern} » dans l'historique",
+                                 acteur=compte, horodatage=horo_courant,
+                                 confiance="à vérifier",
+                                 note=None if horo_courant else
+                                      "commande non datée : sa position dans le "
+                                      "fichier ne prouve pas son moment")
                             break
-                fait("usage", "historique de commandes présent",
-                     f"{len(txt.splitlines())} lignes", f"{c.rel(art)} → {nom}",
-                     "wc -l sur l'historique du shell", acteur=compte)
             elif base == "known_hosts":
                 for l in txt.splitlines():
                     if not l.strip() or l.startswith("#"):

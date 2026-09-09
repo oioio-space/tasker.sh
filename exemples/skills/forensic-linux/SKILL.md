@@ -48,6 +48,10 @@ Deux fiches à lire, dans cet ordre :
   dates Chrome depuis 1601. **Lisez-le dès qu'un nom de fichier ne vous dit pas
   immédiatement ce qu'il prouve** — et n'inventez jamais la signification d'un
   artefact que vous n'y trouvez pas : dites que vous ne savez pas.
+- `references/inventaire.md` — **question par question** : la trace, la pièce
+  qui la porte, si elle est lue, et ce qui manque. À consulter avant d'écrire
+  « on ne sait pas » : la réponse y est peut-être. Et avant d'affirmer, pour
+  vérifier que la pièce dit bien ce que vous lui faites dire.
 - `references/sources.md` — **où** chaque réponse se trouve, et ce qu'aucune
   pièce ne dit.
 
@@ -72,9 +76,14 @@ sources à chaque fois :
 
 - une **session** (`wtmp`) et ce qui s'est passé pendant sa fenêtre : sudo,
   branchement USB, navigation, écriture de fichier dans la timeline ;
-- un **support amovible** branché et les fichiers apparus ou lus dans la
-  minute qui suit (timeline, `recently-used.xbel`) — c'est ainsi qu'on montre
-  une copie ;
+- un **support amovible** et sa chaîne complète : branchement, **numéro de
+  série**, modèle, `/dev/sdX` obtenu, montage — dont le chemin
+  `/run/media/<compte>/` **nomme le compte** —, puis débranchement. Entre les
+  deux, les fichiers apparus ou lus sous ce chemin (timeline,
+  `recently-used.xbel`) : c'est ainsi qu'on montre une copie. Sans
+  environnement graphique il n'y a pas de `/run/media/` : l'attribution passe
+  alors par la session ouverte à cet instant, et c'est un rapprochement, pas
+  une preuve — dites-le ;
 - un **téléchargement** et l'apparition du fichier dans la timeline ;
 - une **adresse IP** vue dans un `Accepted password ... from` et les comptes
   qui s'en servent ;
@@ -140,6 +149,11 @@ Distinguez les deux, et dites-le dans l'annexe :
 - **Ne classez pas « suspect » ce qui est banal.** `sudo yum install` un mardi
   matin n'est pas une intrusion. Gardez ce mot pour ce qui le mérite, et
   justifiez-le à chaque emploi.
+- **Ne datez jamais une commande d'un historique non daté.** L'extraction
+  distingue « historique daté » de « historique NON daté » : dans le second
+  cas, la position d'une ligne dans le fichier ne prouve rien de son moment.
+  Recoupez avec une session ou une trace datée, ou dites que la date est
+  inconnue.
 - **Ne masquez pas votre incertitude.** Le champ `confiance` vaut `certaine`,
   `forte` ou `à vérifier` : reportez-le. Un fait à vérifier signalé comme tel
   vaut mieux qu'une certitude fausse.
