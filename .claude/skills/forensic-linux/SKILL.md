@@ -36,8 +36,20 @@ archives sans les extraire et écrit un fait par ligne :
  "source":"JOURNAUX/PREFIX_journal.txt","methode":"journalctl -D var/log/journal -o short-iso, puis motifs"}
 ```
 
-Lisez `references/sources.md` : il dit quel artefact répond à quelle question,
-et surtout **ce qu'aucun artefact ne dit**.
+Il écrit aussi `faits-manifeste.json` : l'empreinte SHA-256 de chaque pièce
+lue, celle de l'extracteur, celle du fichier de faits. C'est ce qui prouve
+**quels octets** ont été analysés.
+
+Deux fiches à lire, dans cet ordre :
+
+- `references/artefacts.md` — **ce que sont** les pièces. Vous travaillez hors
+  ligne : ce fichier est la seule source sur le format d'un `places.sqlite`, la
+  raison pour laquelle un `.bash_history` n'est pas daté, ou la conversion des
+  dates Chrome depuis 1601. **Lisez-le dès qu'un nom de fichier ne vous dit pas
+  immédiatement ce qu'il prouve** — et n'inventez jamais la signification d'un
+  artefact que vous n'y trouvez pas : dites que vous ne savez pas.
+- `references/sources.md` — **où** chaque réponse se trouve, et ce qu'aucune
+  pièce ne dit.
 
 ### 2 · Vérifier avant d'écrire
 
@@ -97,8 +109,25 @@ l'indicatif, sans jargon inutile :
    une compromission : montrez ce qui la rendrait vraie ou fausse.
 9. **Les limites** — ce que la collecte ne contient pas, les trous de journaux,
    les dates douteuses, les étapes rouges du journal de collecte.
-10. **Annexe : méthode** — la version de la collecte, la commande d'extraction,
-    le nombre de faits, et la table `id → source` pour tout vérifier.
+10. **Annexe : méthode** — la commande d'extraction, le nombre de faits, les
+    empreintes recopiées de `faits-manifeste.json` (extracteur, fichier de
+    faits, et les pièces citées dans le rapport), et la table `id → source`.
+
+## Reproductibilité
+
+Distinguez les deux, et dites-le dans l'annexe :
+
+- **L'extraction est reproductible à l'octet près.** Même collecte, même
+  extracteur, même `faits.jsonl` — l'ordre est fixé, les dates sont lues sans
+  dépendre de la langue du poste, rien n'est daté de l'exécution. Le manifeste,
+  lui, porte la date du jour : il décrit l'exécution, pas les pièces. Deux
+  analystes qui comparent leurs `faits_sha256` doivent trouver la même valeur ;
+  s'ils ne la trouvent pas, la collecte a bougé.
+- **Le rapport ne l'est pas** : c'est un texte, il variera d'une rédaction à
+  l'autre. Ce qui doit être stable, c'est sa **structure** — les dix sections
+  ci-dessus, dans cet ordre — et ses **appuis** : chaque affirmation renvoie à
+  un identifiant `F0123`, donc à une ligne vérifiable. Un lecteur ne relit pas
+  votre prose, il rejoue vos faits.
 
 ## Ce qu'il ne faut pas faire
 

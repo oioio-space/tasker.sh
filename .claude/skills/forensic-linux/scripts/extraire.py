@@ -10,7 +10,7 @@ recoupement et le jugement sont le travail du rapport.
 Bibliothèque standard seulement. La collecte n'est jamais modifiée : les
 archives sont lues en flux, jamais dépaquetées sur place.
 """
-import argparse, gzip, io, json, os, re, sqlite3, sys, tarfile, tempfile
+import argparse, gzip, hashlib, io, json, os, re, sqlite3, sys, tarfile, tempfile
 from datetime import datetime, timezone
 
 FAITS = []
@@ -38,6 +38,7 @@ class Collecte:
     def __init__(self, racine):
         self.racine = os.path.abspath(racine)
         self.prefix = os.path.basename(self.racine)
+        self.lus = set()          # ce qui a servi, pour le manifeste
         if not os.path.isdir(self.racine):
             sys.exit(f"pas un dossier : {self.racine}")
 
@@ -61,12 +62,14 @@ class Collecte:
     def texte(self, chemin, limite=8_000_000):
         try:
             with open(chemin, "rb") as fh:
+                self.lus.add(chemin)
                 return fh.read(limite).decode("utf-8", "replace")
         except OSError:
             return ""
 
     def membres_tar(self, archive):
         """(nom, contenu binaire) de chaque fichier régulier d'un .tar.gz."""
+        self.lus.add(archive)
         try:
             with tarfile.open(archive, "r:gz") as t:
                 for m in t:
@@ -81,14 +84,87 @@ class Collecte:
                   file=sys.stderr)
 
 
-def horo(*formats_valeur):
-    """Première date qui se laisse lire, en ISO. (valeur, format) …"""
-    for valeur, fmt in formats_valeur:
-        try:
-            return datetime.strptime(valeur.strip(), fmt).isoformat()
-        except (ValueError, AttributeError):
-            continue
-    return None
+# Les dates de « last » et de « rpm --last » sortent dans la langue du poste
+# COLLECTEUR — « lun. sept.  2 » sur un poste français. strptime, lui, lit
+# dans la langue du poste ANALYSTE : deux machines réglées autrement ne
+# tireraient pas les mêmes faits de la même collecte. On lit donc les dates
+# soi-même, sans locale : c'est ce qui rend l'extraction reproductible.
+_ACCENTS = str.maketrans("àâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ",
+                         "aaaeeeeiioouuucAAAEEEEIIOOUUUC")
+
+
+def _plier(mot):
+    """Minuscules, sans accent ni point : « Août. » devient « aout »."""
+    return mot.translate(_ACCENTS).lower().strip(".").strip()
+
+
+MOIS_NOMS = {}
+for _i, _noms in enumerate(
+        [("janvier", "january"), ("fevrier", "february"), ("mars", "march"),
+         ("avril", "april"), ("mai", "may"), ("juin", "june"),
+         ("juillet", "july"), ("aout", "august"), ("septembre", "september"),
+         ("octobre", "october"), ("novembre", "november"),
+         ("decembre", "december")], 1):
+    for _n in _noms:
+        for _forme in (_n, _n[:4], _n[:3]):
+            MOIS_NOMS.setdefault(_forme, _i)
+
+RE_HMS = re.compile(r'\b(\d{1,2}):(\d{2}):(\d{2})\b')
+_MOT = r"[^\W\d_]{2,10}\.?"
+# « lun. sept.  2 11:44:03 2019 » — la date de last -F, toutes langues
+RE_BLOC_LAST = re.compile(rf'({_MOT}\s+{_MOT}\s+\d{{1,2}}\s+\d{{2}}:\d{{2}}:\d{{2}}\s+\d{{4}})')
+# « mar. 27 août 2019 17:19:45 » — celle de rpm -qa --last
+RE_BLOC_RPM = re.compile(rf'({_MOT}\s+\d{{1,2}}\s+{_MOT}\s+\d{{4}}\s+\d{{2}}:\d{{2}}:\d{{2}})')
+
+
+def lire_date(blob):
+    """Une date écrite dans n'importe quelle langue, en ISO. None si illisible.
+
+    Le jour de la semaine n'est pas reconnu : il vient toujours en tête, dans
+    « last » comme dans « rpm --last », donc on l'écarte — le mois est le mot
+    qui reste. Cela évite d'avoir à distinguer « mar. » (mardi) de « mars ».
+    """
+    if not blob:
+        return None
+    hms = RE_HMS.search(blob)
+    an = re.search(r'\b(\d{4})\b', blob)
+    if not (hms and an):
+        return None
+    mots = re.findall(r'[^\W\d_]+', blob)
+    mois = None
+    for mot in (mots[1:] if len(mots) > 1 else mots):
+        mois = MOIS_NOMS.get(_plier(mot))
+        if mois:
+            break
+    if not mois:
+        return None
+    # Les nombres de 1 à 31 hors heure : le premier restant est le quantième.
+    heure = [int(hms.group(i)) for i in (1, 2, 3)]
+    reste = blob.replace(hms.group(0), " ", 1).replace(an.group(1), " ", 1)
+    jours = [int(j) for j in re.findall(r'\b(\d{1,2})\b', reste) if 1 <= int(j) <= 31]
+    if not jours:
+        return None
+    try:
+        return datetime(int(an.group(1)), mois, jours[0], *heure).isoformat()
+    except ValueError:
+        return None
+
+
+def lire_ligne_last(ligne):
+    """« qui tty depuis <date> - <date> (durée) », dans n'importe quelle langue."""
+    blocs = RE_BLOC_LAST.findall(ligne)
+    if not blocs:
+        return None
+    tete = ligne[:ligne.index(blocs[0])].split()
+    if not tete:
+        return None
+    duree = re.search(r'\(([^)]*)\)\s*$', ligne)
+    return {"qui": tete[0],
+            "tty": tete[1] if len(tete) > 1 else "",
+            "ou": tete[2] if len(tete) > 2 else "",
+            "debut": blocs[0],
+            "fin": blocs[1] if len(blocs) > 1 else None,
+            "duree": duree.group(1) if duree else None}
 
 
 # ── 1 · la machine ────────────────────────────────────────────────────
@@ -141,12 +217,12 @@ def machine(c):
         lignes = [l for l in c.texte(pk).splitlines() if l.strip()]
         dates = []
         for l in lignes:
-            m = re.search(r'\b(\w{3}\s+\d{1,2}\s+\w{3}\s+\d{4}\s+\d\d:\d\d:\d\d)', l)
+            m = RE_BLOC_RPM.search(l)
             if m:
                 dates.append((m.group(1), l.split()[0]))
         if dates:
             vieux, paquet = dates[-1]
-            iso = horo((vieux, "%a %d %b %Y %H:%M:%S"))
+            iso = lire_date(vieux)
             fait("machine", "installation du système (plus ancien paquet posé)",
                  paquet, c.rel(pk), "rpm -qa --last | tail -n 1",
                  horodatage=iso or vieux, confiance="forte",
@@ -154,7 +230,7 @@ def machine(c):
             recent, paquet_r = dates[0]
             fait("machine", "dernier paquet installé", paquet_r, c.rel(pk),
                  "rpm -qa --last | head -n 1",
-                 horodatage=horo((recent, "%a %d %b %Y %H:%M:%S")) or recent,
+                 horodatage=lire_date(recent) or recent,
                  note="borne basse de la dernière utilisation administrative")
         fait("machine", "paquets installés (nombre)", str(len(lignes)), c.rel(pk),
              "wc -l")
@@ -229,11 +305,6 @@ def comptes(c):
 
 
 # ── 3 · sessions, démarrages, arrêts ──────────────────────────────────
-MOIS = dict(zip("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(), range(1, 13)))
-RE_LAST = re.compile(
-    r'^(?P<qui>\S+)\s+(?P<tty>\S+)\s+(?P<ou>\S*)\s*'
-    r'(?P<debut>\w{3}\s+\w{3}\s+\d{1,2}\s+\d\d:\d\d:\d\d\s+\d{4})'
-    r'(?:\s+-\s+(?P<fin>\S.*?))?\s*(?:\((?P<duree>[^)]*)\))?\s*$')
 
 
 def _last(c, chemin, categorie, quoi, methode):
@@ -242,11 +313,10 @@ def _last(c, chemin, categorie, quoi, methode):
     for ligne in c.texte(chemin).splitlines():
         if not ligne.strip() or ligne.startswith(("wtmp begins", "btmp begins")):
             continue
-        m = RE_LAST.match(ligne)
-        if not m:
+        g = lire_ligne_last(ligne)
+        if not g:
             continue
-        g = m.groupdict()
-        iso = horo((g["debut"], "%a %b %d %H:%M:%S %Y"))
+        iso = lire_date(g["debut"])
         depuis = g["ou"] or ""
         acteur = g["qui"]
         note = f"tty {g['tty']}"
@@ -255,7 +325,7 @@ def _last(c, chemin, categorie, quoi, methode):
         if g.get("duree"):
             note += f", durée {g['duree']}"
         if g.get("fin"):
-            note += f", fin {g['fin'].strip()}"
+            note += f", fin {lire_date(g['fin']) or g['fin']}"
         fait(categorie, quoi, acteur, c.rel(chemin), methode,
              horodatage=iso or g["debut"], acteur=acteur, note=note)
 
@@ -590,6 +660,47 @@ def timeline(c):
 
 
 # ── mise en ordre ─────────────────────────────────────────────────────
+def empreinte(chemin, taille_bloc=1 << 20):
+    """SHA-256 d'un fichier, lu par blocs."""
+    h = hashlib.sha256()
+    with open(chemin, "rb") as fh:
+        for bloc in iter(lambda: fh.read(taille_bloc), b""):
+            h.update(bloc)
+    return h.hexdigest()
+
+
+def manifeste(c, sortie, argv):
+    """Ce qui prouve QUELS octets ont été analysés, et par quel outil.
+
+    Le manifeste porte une date : il décrit l'exécution, pas les pièces. Les
+    faits, eux, ne dépendent que de la collecte — deux extractions de la même
+    collecte rendent le même fichier de faits, à l'octet près.
+    """
+    moi = os.path.abspath(__file__)
+    pieces = {}
+    for chemin in sorted(c.lus):
+        try:
+            pieces[c.rel(chemin)] = {"sha256": empreinte(chemin),
+                                     "octets": os.path.getsize(chemin)}
+        except OSError:
+            continue
+    par_cat = {}
+    for f in FAITS:
+        par_cat[f["categorie"]] = par_cat.get(f["categorie"], 0) + 1
+    return {
+        "collecte": c.prefix,
+        "chemin_analyse": c.racine,
+        "extracteur": {"fichier": os.path.basename(moi),
+                       "sha256": empreinte(moi)},
+        "commande": " ".join(argv),
+        "extrait_le": datetime.now().astimezone().isoformat(),
+        "faits": {"total": len(FAITS), "par_categorie": dict(sorted(par_cat.items()))},
+        "faits_sha256": hashlib.sha256(
+            open(sortie, "rb").read()).hexdigest(),
+        "pieces_lues": pieces,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -614,10 +725,17 @@ def main():
         for f in FAITS:
             fh.write(json.dumps(f, ensure_ascii=False) + "\n")
 
+    chemin_man = os.path.splitext(args.sortie)[0] + "-manifeste.json"
+    with open(chemin_man, "w", encoding="utf-8") as fh:
+        json.dump(manifeste(c, args.sortie, sys.argv), fh,
+                  ensure_ascii=False, indent=2, sort_keys=False)
+        fh.write("\n")
+
     par_cat = {}
     for f in FAITS:
         par_cat[f["categorie"]] = par_cat.get(f["categorie"], 0) + 1
     print(f"\n{len(FAITS)} faits → {args.sortie}", file=sys.stderr)
+    print(f"  empreintes des pièces lues → {chemin_man}", file=sys.stderr)
     print("  " + "  ".join(f"{k}={v}" for k, v in sorted(par_cat.items())),
           file=sys.stderr)
 
