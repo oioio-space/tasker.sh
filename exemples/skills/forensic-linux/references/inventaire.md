@@ -110,7 +110,7 @@ effaçable par son propriétaire.
 | visites les plus récentes | `places.sqlite-wal` | **non** — signalé comme limite | le navigateur tournait pendant la prise |
 | onglets ouverts | `recovery.jsonlz4` | **non** | format LZ4 propriétaire, hors bibliothèque standard |
 | **domaines ayant posé un cookie** (Firefox) | `moz_cookies` de `cookies.sqlite` | oui, **regroupé par domaine** | prouve une visite **même si l'historique a été vidé** ; la colonne `value` n'est jamais lue |
-| cookies Chrome | fichier `Cookies` | **non branché** | mêmes colonnes ; les valeurs y sont chiffrées de toute façon |
+| **domaines ayant posé un cookie** (Chrome) | table `cookies` de `Cookies` | oui, **regroupé par domaine** | lu dans `Default/` **et** `Default/Network/` (Chrome 96+) ; dates depuis 1601 ; valeurs chiffrées, non extraites |
 | mots de passe enregistrés | `logins.json`, `Login Data` | **non branché** | à demander, et à traiter comme un secret |
 
 ## Les paquets

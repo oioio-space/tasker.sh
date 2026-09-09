@@ -187,6 +187,18 @@ Base SQLite, dans `.config/google-chrome/Default/` ou `.config/chromium/Default/
 - **La table `downloads` est la meilleure pièce** pour un téléchargement : elle
   donne à la fois le fichier, sa provenance et l'heure.
 
+### `Cookies` (Chrome / Chromium / Edge)
+Base SQLite nommée `Cookies`, **sans extension**. Depuis Chrome 96 elle est
+sous `Default/Network/`, avant sous `Default/` — les deux sont lues. Table
+`cookies` : `host_key`, `name`, `creation_utc`, `last_access_utc`,
+`expires_utc`, et `encrypted_value`.
+
+- Mêmes usages que côté Firefox : un domaine ici et absent de `urls` est une
+  visite dont la trace d'historique a disparu.
+- **Dates depuis 1601**, comme `History`.
+- La valeur est **chiffrée** (`v10`/`v11`) par le trousseau du bureau — elle
+  serait illisible sans la clé, et elle n'est de toute façon pas extraite.
+
 ---
 
 ## Le réseau

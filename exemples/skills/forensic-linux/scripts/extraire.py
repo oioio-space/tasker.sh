@@ -738,6 +738,15 @@ REQ_COOKIES_FF = [
      "FROM moz_cookies GROUP BY baseDomain ORDER BY MAX(lastAccessed) DESC LIMIT 300"),
 ]
 
+# Chrome range ses cookies dans « Cookies » — sous Default/, ou sous
+# Default/Network/ depuis Chrome 96. Mêmes colonnes utiles que Firefox, mais
+# l'époque est celle de 1601. La valeur y est chiffrée par le trousseau du
+# bureau : illisible sans la clé, et on ne la lit pas davantage.
+REQ_COOKIES_CHROME = [
+    ("cookie", "SELECT host_key, COUNT(*), MIN(creation_utc), MAX(last_access_utc) "
+               "FROM cookies GROUP BY host_key ORDER BY MAX(last_access_utc) DESC LIMIT 300"),
+]
+
 REQ_CHROME = [
     ("visite", "SELECT datetime(last_visit_time/1000000-11644473600,'unixepoch'), url, title "
                "FROM urls ORDER BY last_visit_time DESC LIMIT 400"),
@@ -745,6 +754,33 @@ REQ_CHROME = [
      "SELECT datetime(start_time/1000000-11644473600,'unixepoch'), target_path, tab_url "
      "FROM downloads ORDER BY start_time DESC LIMIT 200"),
 ]
+
+
+def _date_us(v, depuis_1601=False):
+    """Microsecondes en ISO. Firefox compte depuis 1970, Chrome depuis 1601."""
+    if not isinstance(v, (int, float)) or not v:
+        return None
+    sec = v / 1_000_000 - (11_644_473_600 if depuis_1601 else 0)
+    try:
+        return (datetime.fromtimestamp(sec, timezone.utc)
+                .isoformat().replace("+00:00", "Z"))
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _cookies(c, prof, nom, compte, blob, requetes, outil, depuis_1601):
+    for _, lignes in _sqlite_lire(blob, requetes):
+        for hote, combien, cree, vu in lignes:
+            fait("navigation", "domaine ayant posé un cookie", hote,
+                 f"{c.rel(prof)} → {nom}",
+                 f"sqlite3 sur les cookies {outil}, regroupé par domaine "
+                 "(la valeur du cookie n'est pas lue)",
+                 horodatage=_date_us(vu, depuis_1601), acteur=compte,
+                 note=f"{combien} cookie(s), premier posé le "
+                      f"{_date_us(cree, depuis_1601)} — un cookie subsiste "
+                      "quand l'historique a été vidé")
+        return True
+    return False
 
 
 def navigation(c):
@@ -764,19 +800,12 @@ def navigation(c):
             if base == "places.sqlite":
                 jeu, outil = REQ_FIREFOX, "Firefox"
             elif base == "cookies.sqlite":
-                for _, lignes in _sqlite_lire(blob, REQ_COOKIES_FF):
-                    for hote, combien, cree, vu in lignes:
-                        def _us(v):
-                            return (datetime.fromtimestamp(v / 1_000_000, timezone.utc)
-                                    .isoformat().replace("+00:00", "Z")) if v else None
-                        fait("navigation", "domaine ayant posé un cookie", hote,
-                             f"{c.rel(prof)} → {nom}",
-                             "sqlite3 sur moz_cookies, regroupé par domaine "
-                             "(la colonne « value » n'est pas lue)",
-                             horodatage=_us(vu), acteur=compte,
-                             note=f"{combien} cookie(s), premier posé le {_us(cree)}"
-                                  " — un cookie subsiste quand l'historique a été vidé")
-                    break
+                _cookies(c, prof, nom, compte, blob, REQ_COOKIES_FF,
+                         "Firefox (moz_cookies)", False)
+                continue
+            elif base == "Cookies":
+                _cookies(c, prof, nom, compte, blob, REQ_COOKIES_CHROME,
+                         "Chromium/Chrome", True)
                 continue
             elif base == "History" and ("chrom" in nom.lower() or "Default" in nom):
                 jeu, outil = REQ_CHROME, "Chromium/Chrome"
