@@ -345,3 +345,43 @@ Les journaux du gestionnaire de paquets : `yum.log`, `dnf.log`,
 
 - **Ce que `rpm -qa` ne dit pas** : un paquet installé **puis retiré**. Ces
   journaux gardent la trace des suppressions (`Erased:`, `remove`).
+
+## La timeline mactime — la pièce qui confirme les autres
+
+`TIMELINE/PREFIX_mactime.csv` porte **une ligne par date de chaque fichier** du
+disque : `Date,Size,Type,Mode,UID,GID,Meta,File Name`. Sur un poste ordinaire,
+des millions de lignes — elle ne se lit pas, elle **se questionne**.
+
+La colonne `Type` est le cœur : quatre lettres **MACB**, celles qui s'appliquent
+à cette date.
+
+| lettre | ce qui a changé | ce que ça montre |
+|---|---|---|
+| `m` | le contenu (*modify*) | une écriture |
+| `a` | le dernier accès (*access*) | une lecture — souvent désactivée (`noatime`) : son absence ne prouve rien |
+| `c` | l'inode (*change*) : droits, nom, propriétaire | un `chmod`, un `mv`, une copie qui pose ses droits |
+| `b` | la naissance (*birth*) | la **création** du fichier — ext4, XFS et btrfs la gardent, pas ext3 |
+
+Un fichier qui apparaît **`...b` sous `/run/media/<compte>/`** pendant que la clé
+était montée, c'est une **copie vers le support**. Le même fichier `.a..` seul,
+c'est une lecture. C'est la différence entre « une clé a été branchée » et « ce
+fichier en est parti ».
+
+**La colonne `Meta` est l'inode.** Deux chemins de même inode sont le même
+fichier — un lien, ou un `mv`. Un inode réutilisé après suppression porte les
+dates du nouveau fichier : une date antérieure à la création apparente est
+normale, pas une manipulation.
+
+**Le fuseau.** mactime écrit ses dates dans le fuseau qu'on lui passe (`-z`),
+`UTC` par défaut dans `collecte-linux.conf`, et la collecte le note à côté dans
+`PREFIX_fuseau_timeline.txt`. Sans ce fichier — collecte ancienne — les dates de
+la timeline sont d'un fuseau inconnu : **ne les comparez pas à celles du journal
+sans le dire.**
+
+**Ce que l'extraction en tire.** Elle ne recopie pas la timeline. Elle lui pose
+les questions que les autres pièces ont soulevées : le fichier annoncé par le
+navigateur est-il sur le disque, et quand y est-il apparu ? qu'a-t-on écrit ou
+lu sous le point de montage du support amovible ? Chaque réponse est un fait qui
+porte `confirme: F0123` — l'identifiant du fait qu'elle confirme. Un
+téléchargement **non** retrouvé est un fait aussi : effacé depuis, renommé, ou
+sur un volume que la timeline ne couvre pas.

@@ -183,8 +183,15 @@ sources à chaque fois :
   `recently-used.xbel`) : c'est ainsi qu'on montre une copie. Sans
   environnement graphique il n'y a pas de `/run/media/` : l'attribution passe
   alors par la session ouverte à cet instant, et c'est un rapprochement, pas
-  une preuve — dites-le ;
-- un **téléchargement** et l'apparition du fichier dans la timeline ;
+  une preuve — dites-le. **Ce qui a été copié dessus est dans le brouillon** :
+  la timeline a été interrogée sous chaque point de montage, et un fichier
+  `...b` y est une création, donc une copie vers le support ; un `.a..` une
+  lecture. Aucune ligne sous le montage veut dire que le support lui-même n'a
+  pas été lu, pas qu'il n'a rien reçu ;
+- un **téléchargement** et l'apparition du fichier dans la timeline — c'est
+  déjà fait : l'extraction pose un fait `confirme: F0123` qui répond, et le
+  brouillon l'affiche en face du téléchargement. Reprenez la réponse, ne la
+  refaites pas ; un fichier **non** retrouvé se dit aussi ;
 - une **adresse IP** vue dans un `Accepted password ... from` et les comptes
   qui s'en servent ;
 - un **compte de domaine** trouvé dans le cache sss et une session à son nom ;

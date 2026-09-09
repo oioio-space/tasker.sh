@@ -11,6 +11,7 @@ Bibliothèque standard seulement. La collecte n'est jamais modifiée : les
 archives sont lues en flux, jamais dépaquetées sur place.
 """
 import argparse, bz2, collections, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
+import urllib.parse
 import sqlite3, struct, sys, tarfile, tempfile
 from datetime import datetime, timezone
 
@@ -337,6 +338,24 @@ def machine(c):
         compte_paquets = (len(noms), c.rel(apk), "compte des champs P: de lib/apk/db/installed",
                           "apk ne date pas les poses : voir etc/apk/world et var/log/apk.log")
 
+    # Les montages déclarés : quels volumes cette machine avait, y compris
+    # ceux qui ne sont pas dans la collecte (réseau, chiffrés, amovibles).
+    fs = c.un("fstab", "SYSTEME")
+    if fs:
+        for l in c.texte(fs).splitlines():
+            l = l.strip()
+            if not l or l.startswith("#"):
+                continue
+            ch = l.split()
+            if len(ch) < 3 or ch[1] == "none":
+                continue
+            quoi = ("montage réseau déclaré" if ch[2] in ("nfs", "nfs4", "cifs", "smbfs")
+                    else "montage déclaré")
+            fait("machine", quoi, f"{ch[0]} → {ch[1]} ({ch[2]})", c.rel(fs),
+                 "colonnes de /etc/fstab", confiance="certaine",
+                 note="déclaré au démarrage ; sa présence dans la collecte est une "
+                      "autre question" if ch[1] not in ("/", "swap") else None)
+
     # La plus vieille salve de paquets date l'installation.
     pk = c.un("_paquets.txt", "PAQUETS")
     if pk:
@@ -374,6 +393,29 @@ def machine(c):
 
 
 # ── 2 · comptes et domaine ────────────────────────────────────────────
+def _dates_dossiers(c):
+    """« stat » du dossier de chaque compte : quand il a été créé, et quand
+    quelque chose y a touché pour la dernière fois."""
+    for f in c.chercher("_stat.txt", "COMPTES"):
+        compte = _compte_de(f, "stat.txt")
+        for cle, quoi in (("Modify", "dernière écriture dans le dossier du compte"),
+                          ("Birth", "création du dossier du compte")):
+            m = re.search(rf'^\s*{cle}:\s*(\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d)', c.texte(f), re.M)
+            if m:
+                fait("compte", quoi, compte, c.rel(f), f"champ {cle} de stat",
+                     horodatage=m.group(1).replace(" ", "T"), acteur=compte,
+                     fuseau="poste d'analyse",
+                     note="lu par le poste d'analyse, dans son fuseau")
+    v = c.un("_disques_virtuels.txt", "MACHINES")
+    for l in (c.texte(v).splitlines() if v else []):
+        if l.strip():
+            fait("suspect", "disque de machine virtuelle sur le poste", l.strip(),
+                 c.rel(v), "find -iname '*.vmdk|*.vdi|*.ova|*.qcow2'",
+                 confiance="à vérifier",
+                 note="une machine virtuelle emporte son propre système : ce que "
+                      "l'on y a fait n'est pas dans cette collecte")
+
+
 def comptes(c):
     p = c.un("passwd", "COMPTES")
     humains = []
@@ -583,6 +625,8 @@ def sessions(c):
 
     # lastlog n'a pas de forme texte dans la collecte : il se lit ici ou nulle
     # part. Les uid viennent du passwd emporté à côté.
+    _dates_dossiers(c)
+
     ll = os.path.join(c.racine, "CONNEXIONS", "lastlog")
     if os.path.isfile(ll):
         noms = {}
@@ -1391,27 +1435,144 @@ def supprimes(c):
 
 
 # ── 8 · la timeline du système de fichiers ────────────────────────────
+# La timeline est la plus grosse pièce de la collecte et la plus riche : une
+# ligne par date de chaque fichier du disque. Elle ne sert à rien seule — des
+# millions de lignes ne se lisent pas. Elle sert à RÉPONDRE : ce fichier
+# téléchargé est-il arrivé sur le disque, et quand ? qu'a-t-on écrit sur cette
+# clé USB pendant qu'elle était montée ? C'est pour cela qu'elle est lue en
+# DERNIER — les autres faits ont posé les questions.
+
+RE_TL_ISO = re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
+MAX_PAR_SUPPORT = 40          # entrées citées par support amovible
+MAX_SENSIBLES = 300
+
+
+def _date_timeline(brut, fuseau):
+    """La date d'une ligne mactime : ISO avec « -y », « Sat Sep 02 2019
+    14:20:07 » sans. Le fuseau est celui passé à TZ_MACTIME à la collecte."""
+    m = RE_TL_ISO.match(brut)
+    iso = m.group(1) if m else lire_date(brut)
+    if iso and fuseau:
+        iso += "Z" if fuseau.upper() == "UTC" else ""
+    return iso
+
+
+def _questions_timeline():
+    """Ce que les autres faits demandent à la timeline.
+
+    Rend ({nom de fichier en minuscules: [faits]}, [(préfixe de montage, fait)]).
+    """
+    fichiers, montages = {}, []
+    for f in FAITS:
+        if f["categorie"] == "telechargement" or f["fait"] == "fichier ouvert récemment":
+            nom = urllib.parse.unquote(str(f["valeur"])).rstrip("/").rsplit("/", 1)[-1]
+            if len(nom) > 3:
+                fichiers.setdefault(nom.lower(), []).append(f)
+        elif f["fait"] == "système de fichiers amovible monté":
+            montages.append((str(f["valeur"]).rstrip("/"), f))
+    return fichiers, montages
+
+
+SENSIBLES = re.compile(r'/(\.ssh/|Downloads?/|T[ée]l[ée]chargements?/|media/|run/media/'
+                       r'|tmp/\.|\.bash_history|authorized_keys|/root/)', re.I)
+
+
 def timeline(c):
-    csv = c.un("_mactime.csv", "TIMELINE")
-    if not csv:
+    chemin = c.un("_mactime.csv", "TIMELINE")
+    if not chemin:
         return
-    interet = re.compile(r'/(\.ssh/|Downloads?/|T[ée]l[ée]chargements?/|media/|run/media/'
-                         r'|tmp/\.|\.bash_history|authorized_keys|/root/)', re.I)
+    tz = c.un("_fuseau_timeline.txt", "TIMELINE")
+    fuseau = c.texte(tz).strip() if tz else None
+    fichiers, montages = _questions_timeline()
+    trouves, sous_montage = {}, {}
     total, vus = 0, 0
-    for l in c.lignes(csv):
+
+    for ligne in c.lignes(chemin):
         total += 1
-        if total == 1 or vus >= 300 or not interet.search(l):
+        if total == 1:
             continue
-        ch = l.split(",", 7)
+        # Date,Size,Type,Mode,UID,GID,Meta,File Name — le nom garde ses virgules
+        ch = ligne.split(",", 7)
         if len(ch) < 8:
             continue
-        vus += 1
-        fait("timeline", "activité sur un chemin sensible", ch[7].strip('"'),
-             c.rel(csv), "grep de chemins d'intérêt dans la timeline mactime",
-             horodatage=ch[0], note=f"{ch[2]} {ch[3]}")
+        quand, genre, inode, fichier = ch[0], ch[2], ch[6], ch[7].strip().strip('"')
+        base, vise = fichier.rsplit("/", 1)[-1].lower(), False
+        if base in fichiers:
+            vise = True
+            # le même nom peut vivre à deux endroits — dans le dossier de
+            # téléchargement ET sur la clé USB : les deux sont des faits
+            ou = trouves.setdefault(base, [])
+            if len(ou) < 3 and not any(x[3] == fichier for x in ou):
+                ou.append((quand, genre, inode, fichier))
+        for prefixe, _ in montages:
+            if fichier.startswith(prefixe + "/"):
+                vise = True
+                liste = sous_montage.setdefault(prefixe, [])
+                if len(liste) < MAX_PAR_SUPPORT:
+                    liste.append((quand, genre, fichier))
+        # la pêche large ne redit pas ce qu'une question précise dira mieux
+        if not vise and vus < MAX_SENSIBLES and SENSIBLES.search(fichier):
+            vus += 1
+            fait("timeline", "activité sur un chemin sensible", fichier, c.rel(chemin),
+                 "chemins d'intérêt dans la timeline mactime",
+                 horodatage=_date_timeline(quand, fuseau), genre=genre, inode=inode or None,
+                 note=f"{genre} — {_GENRES.get(genre.replace('.', '') or '', 'dates du fichier')}")
+
     fait("timeline", "entrées dans la timeline du système de fichiers",
-         str(max(0, total - 1)), c.rel(csv), "mactime -b corps -d, puis wc -l",
-         note="corps lus sur le périphérique quand un lecteur existait")
+         str(max(0, total - 1)), c.rel(chemin), "mactime -b corps -d -y, puis wc -l",
+         note="corps lus sur le périphérique quand un lecteur existait"
+              + (f" ; dates écrites dans le fuseau {fuseau}" if fuseau else
+                 " ; fuseau de la timeline inconnu — TZ_MACTIME n'a pas été relevé"))
+
+    # ── ce que la timeline confirme, ou pas ──
+    for base, demandeurs in sorted(fichiers.items()):
+        for f in demandeurs:
+            if base in trouves:
+                for quand, genre, inode, fichier in trouves[base]:
+                    fait("timeline", "fichier retrouvé sur le disque", fichier, c.rel(chemin),
+                         f"nom du fichier de {f['id']} cherché dans la timeline",
+                         horodatage=_date_timeline(quand, fuseau), acteur=f.get("acteur"),
+                         confirme=f["id"], genre=genre, inode=inode or None,
+                         note=f"{_GENRES.get(genre.replace('.', '') or '', 'dates du fichier')}"
+                              f" — le fichier annoncé par {f['id']} existe bien sur le disque"
+                              + (f" ; {len(trouves[base])} emplacements portent ce nom"
+                                 if len(trouves[base]) > 1 else ""))
+            else:
+                fait("timeline", "fichier NON retrouvé sur le disque", base, c.rel(chemin),
+                     f"nom du fichier de {f['id']} cherché dans la timeline",
+                     acteur=f.get("acteur"), confirme=f["id"], confiance="à vérifier",
+                     note="effacé depuis, renommé, ou sur un volume que la timeline ne "
+                          "couvre pas — la timeline ne porte que les volumes lus")
+
+    for prefixe, f in montages:
+        entrees = sous_montage.get(prefixe, [])
+        if not entrees:
+            fait("timeline", "aucune trace de fichier sur ce support amovible", prefixe,
+                 c.rel(chemin), f"chemins sous « {prefixe}/ » dans la timeline",
+                 acteur=f.get("acteur"), confirme=f["id"], confiance="à vérifier",
+                 note="le contenu d'un support monté n'est dans la timeline que si le "
+                      "support lui-même a été lu : sans lui, on ne sait pas")
+            continue
+        for quand, genre, fichier in entrees:
+            ecrit = "b" in genre or "m" in genre
+            fait("timeline",
+                 "fichier écrit sur un support amovible" if ecrit
+                 else "fichier lu sur un support amovible",
+                 fichier, c.rel(chemin), f"chemins sous « {prefixe}/ » dans la timeline",
+                 horodatage=_date_timeline(quand, fuseau), acteur=f.get("acteur"),
+                 confirme=f["id"], genre=genre,
+                 note=_GENRES.get(genre.replace(".", "") or "", "dates du fichier")
+                      + " — c'est ainsi qu'une copie se montre")
+
+
+_GENRES = {
+    "m": "contenu modifié", "a": "contenu lu", "c": "droits ou nom changés",
+    "b": "fichier créé", "ma": "créé ou modifié, puis lu", "mac": "écrit puis lu",
+    "macb": "créé, écrit et lu à cette date", "mb": "créé et écrit",
+    "mc": "contenu et métadonnées changés", "mcb": "créé, écrit, métadonnées posées",
+    "ab": "créé puis lu", "ac": "lu, métadonnées changées", "acb": "créé, lu",
+    "cb": "créé, métadonnées posées",
+}
 
 
 # ── mise en ordre ─────────────────────────────────────────────────────

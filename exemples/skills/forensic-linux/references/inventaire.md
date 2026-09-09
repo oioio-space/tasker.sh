@@ -53,6 +53,16 @@ du rapport.
 | groupe SMB | `smb.conf` | idem | oui |
 | domaine deviné | `resolv.conf` `search` | `RESEAU/…_reseau.tar.gz` | oui |
 
+## Ce que la timeline confirme
+
+| question | trace | pièce | lu | limite |
+|---|---|---|---|---|
+| ce fichier téléchargé est-il arrivé sur le disque ? | nom du fichier dans la timeline | `TIMELINE/…_mactime.csv` | oui, le nom des faits `telechargement` y est cherché | un fichier effacé depuis n'y est plus ; le nom peut exister à deux endroits, et les deux sont dits |
+| qu'a-t-on copié sur la clé USB ? | chemins sous `/run/media/<compte>/`, drapeau `b` ou `m` | idem | oui, sous chaque point de montage relevé | **le support doit avoir été lu lui-même** : sans cela, aucune ligne, et c'est dit |
+| qu'a-t-on lu sans le modifier ? | drapeau `a` | idem | oui | `noatime` est courant : l'absence de `a` ne prouve pas l'absence de lecture |
+| quand ce fichier a-t-il été créé ? | drapeau `b` | idem | oui | ext3 n'a pas de date de création |
+| dans quel fuseau ? | `TIMELINE/…_fuseau_timeline.txt` | idem | oui | absent des collectes antérieures : le fuseau est alors inconnu |
+
 ## Le réseau
 
 | question | trace | pièce | lu | limite |

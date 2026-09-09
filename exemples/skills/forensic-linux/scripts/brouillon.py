@@ -131,7 +131,7 @@ def fuseau_des_faits(faits):
 # la machine. La navigation a sa section ; la timeline du système de fichiers
 # est trop volumineuse pour un tableau et se lit à part.
 EVENEMENTS = ("evenement", "support", "telechargement", "paquet", "suspect",
-              "persistance", "usage")
+              "persistance", "usage", "timeline")
 SESSION_MAX = timedelta(hours=12)      # une session sans fin connue ne dure pas plus
 RE_OU = re.compile(r'(tty [^\s,]+|depuis [^\s,]+|port [\d.-]+|/run/media/\S+|/dev/sd\w+)')
 RE_VISITES = re.compile(r'(\d+) visite')
@@ -155,6 +155,10 @@ LEXIQUE = {
     "SSID": "le nom d'un réseau sans fil",
     "machine-id": "l'identifiant unique de l'installation, tiré au sort à la pose du système",
     "timeline": "la liste datée de tous les fichiers du disque : création, modification, dernier accès",
+    "macb": "les quatre dates d'un fichier : m contenu modifié, a contenu lu, c droits ou nom "
+            "changés, b fichier créé — « ...b » est une création, « m.c. » une écriture",
+    "inode": "la fiche interne d'un fichier sur le disque ; deux noms de même inode sont le "
+             "même fichier",
     "epoch": "un nombre de secondes depuis le 1ᵉʳ janvier 1970 : la façon dont les systèmes "
              "notent une date, sans fuseau",
     "UTC": "le temps universel ; les dates en UTC sont converties dans le fuseau du poste "
@@ -244,9 +248,11 @@ def main():
     sortie = args.sortie or f"rapport-forensic-{prefix}.md"
     borne = args.lignes
 
-    par = {}
+    par, confirme = {}, {}
     for f in faits:
         par.setdefault(f.get("categorie"), []).append(f)
+        if f.get("confirme"):
+            confirme.setdefault(f["confirme"], []).append(f)
     H = Horloge(args.fuseau or fuseau_des_faits(faits))
     quand, T = H.quand, H.texte
 
@@ -405,9 +411,13 @@ def main():
             S.append(table(["domaine", "dernier accès", "id"],
                            [(f["valeur"], quand(f), f["id"]) for f in H.tri(orphelins)]))
         if charges:
-            S.append("**Téléchargements** :\n")
-            S.append(table(["date", "fichier", "origine", "id"],
+            S.append("**Téléchargements** — la colonne « sur le disque » vient de la "
+                     "timeline : elle dit si le fichier annoncé par le navigateur y est "
+                     "vraiment, et quand il y est apparu.\n")
+            S.append(table(["date", "fichier", "origine", "sur le disque", "id"],
                            [(quand(f), f["valeur"], (f.get("note") or "").replace("depuis ", ""),
+                             " ; ".join(f"{quand(t)} {t['fait'].replace('fichier ', '')} ({t['id']})"
+                                        for t in confirme.get(f["id"], [])) or "—",
                              f["id"]) for f in H.tri(charges)]))
         if secrets:
             S.append("**Sites avec un mot de passe enregistré dans le navigateur** "
@@ -425,11 +435,23 @@ def main():
     S.append(table(["date", "fait", "valeur", "compte", "id"],
                    [(quand(f), f["fait"], f["valeur"], f.get("acteur"), f["id"])
                     for f in H.tri(par.get("support", []))]))
+    montages = [f for f in par.get("support", []) if f["fait"] == "système de fichiers amovible monté"]
+    for m in montages:
+        lignes = H.tri(confirme.get(m["id"], []))
+        if not lignes:
+            continue
+        S.append(f"### Ce qui a été lu ou écrit sous {m['valeur']} ({m['id']})\n")
+        S.append(table(["date", "quoi", "fichier", "dates du fichier", "id"],
+                       [(quand(f), f["fait"].replace("fichier ", "").replace(" sur un support amovible", ""),
+                         f["valeur"], f.get("genre"), f["id"]) for f in lignes],
+                       quoi="fichiers de ce support"))
     S.append(a_rediger("par support : branchement, numéro de série, modèle, "
                        "montage (le chemin /run/media/<compte>/ nomme le compte), "
                        "débranchement — puis ce qui a été lu ou écrit dessus "
-                       "(timeline, recently-used.xbel). Sans cela : « ce qui y a "
-                       "été copié n'est pas établi »."))
+                       "(timeline, recently-used.xbel). Un fichier « créé » (b) sous le "
+                       "point de montage pendant la fenêtre du branchement est une COPIE "
+                       "vers le support ; un fichier seulement « lu » (a) est une lecture. "
+                       "Sans ligne de timeline : « ce qui y a été copié n'est pas établi »."))
 
     # ── 8 ──
     S.append("## 8 · Ce qui attire l'œil\n")
