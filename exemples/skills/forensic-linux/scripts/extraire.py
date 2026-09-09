@@ -1131,6 +1131,93 @@ def lire_lastlog(blob, noms_par_uid):
     return sorties
 
 
+# ── ce que la collecte devrait contenir ──────────────────────────────
+# (dossier, motif, ce que c'est, chemin D'ORIGINE sur le système, étape de
+#  collecte-linux.conf à rejouer, quand l'absence est normale)
+ATTENDU = [
+    ("SYSTEME", "hostname", "le nom de la machine", "/etc/hostname",
+     "Nom de la machine (/etc/hostname)", None),
+    ("SYSTEME", "os-release", "la distribution", "/etc/os-release",
+     "Distribution (/etc/os-release)", None),
+    ("SYSTEME", "_localtime.txt", "le fuseau du poste", "/etc/localtime",
+     "Fuseau horaire", None),
+    ("SYSTEME", "_installation.tar.gz", "l'identité et la pose du système",
+     "/etc/machine-id, /etc/adjtime, /var/log/anaconda, /var/log/installer",
+     "Identité et installation", None),
+    ("SYSTEME", "_fs_", "le système de fichiers", "le périphérique lui-même",
+     "Système de fichiers de {{volume}}", None),
+    ("PAQUETS", "_paquets.txt", "la liste des paquets",
+     "/var/lib/rpm ou /var/lib/dpkg",
+     "Paquets installés", "l'image n'a ni base RPM ni base dpkg"),
+    ("PAQUETS", "_historique.tar.gz", "l'historique du gestionnaire",
+     "/var/log/dpkg.log, /var/log/apt, /var/log/yum.log, /var/lib/dnf",
+     "Historique des installations", None),
+    ("COMPTES", "passwd", "les comptes locaux", "/etc/passwd",
+     "Comptes déclarés (/etc/passwd, /etc/group)", None),
+    ("COMPTES", "_droits.tar.gz", "shadow, sudoers, PAM, SELinux",
+     "/etc/shadow, /etc/sudoers, /etc/pam.d, /etc/selinux",
+     "Droits (shadow, sudoers, login.defs)", None),
+    ("COMPTES", "_domaine.tar.gz", "l'appartenance à un domaine",
+     "/etc/sssd, /etc/krb5.conf, /etc/samba, /var/lib/sss/db",
+     "Domaine et annuaire", None),
+    ("COMPTES", "_artefacts.tar.gz", "les traces des comptes",
+     "~/.bash_history, ~/.ssh, ~/.viminfo de chaque compte",
+     "Artefacts de {{compte}}", "aucun compte n'a de dossier sur l'image"),
+    ("COMPTES", "_profils.tar.gz", "les profils applicatifs",
+     "~/.mozilla, ~/.config, ~/.local, ~/snap, ~/.var/app",
+     "Caches et profils applicatifs de {{compte}}",
+     "aucun compte n'a de dossier, ou l'étape a été passée (elle est lourde)"),
+    ("CONNEXIONS", ("wtmp", "_sessions.txt"), "les sessions",
+     "/var/log/wtmp et ses rotations, ou /var/lib/wtmpdb/wtmp.db",
+     "Copie des fichiers de connexion",
+     "Fedora 40+ et Debian 13+ n'ont plus wtmp, mais wtmp.db"),
+    ("CONNEXIONS", ("btmp", "_echecs.txt"), "les échecs d'authentification",
+     "/var/log/btmp et ses rotations", "Copie des fichiers de connexion",
+     "btmp est souvent absent ou désactivé"),
+    ("JOURNAUX", "_journal.txt", "le journal systemd en clair",
+     "/var/log/journal/<machine-id>/*.journal", "Journal systemd, en clair",
+     "l'image n'a pas de journal persistant sur disque"),
+    ("JOURNAUX", "_var_log.tar.gz", "tout /var/log", "/var/log",
+     "Archive de /var/log", None),
+    ("RESEAU", "_reseau.tar.gz", "interfaces, DNS, pare-feu, ssh",
+     "/etc/NetworkManager, /etc/sysconfig/network-scripts, /etc/resolv.conf,"
+     " /etc/ssh, /var/lib/dhclient", "Réseau : profils, hosts, ssh, baux", None),
+    ("PERSISTANCE", "_persistance.tar.gz", "ce qui se relance seul",
+     "/etc/cron*, /etc/systemd, /etc/rc.local, /etc/ld.so.preload",
+     "Persistance", None),
+    ("TIMELINE", "_mactime.csv", "la chronologie du disque",
+     "le périphérique, ou le montage", "Timeline mactime", None),
+    ("TIMELINE", ("_body.mactime", "_mactime.csv"), "le corps de la timeline",
+     "le périphérique", "Corps de la timeline", None),
+]
+
+
+def completude(c):
+    """Ce qui manque, et où le reprendre.
+
+    Une pièce absente n'est pas la même chose selon la cause : ou bien le
+    système ne l'avait pas — et c'est un fait sur ce système —, ou bien la
+    collecte l'a ratée, et il faut y retourner. On ne peut pas trancher d'ici,
+    mais on peut donner au lecteur de quoi trancher : le chemin d'origine et
+    l'étape à rejouer.
+    """
+    for dossier, motif, quoi, origine, etape, normal in ATTENDU:
+        # Plusieurs motifs = plusieurs formes acceptables de la même pièce :
+        # le binaire wtmp OU la sortie texte de « last » suffisent.
+        motifs = motif if isinstance(motif, tuple) else (motif,)
+        if any(c.chercher(m, dossier) for m in motifs):
+            continue
+        note = (f"à reprendre sur l'image montée : {origine}. "
+                f"Étape de collecte-linux.conf : « {etape} » — "
+                f"la rejouer seule avec --only <numéro du plan>.")
+        if normal:
+            note += f" Absence normale si {normal}."
+        fait("limite", f"pièce absente de la collecte : {quoi}",
+             " ou ".join(f"{dossier}/…{m}" for m in motifs), dossier + "/",
+             "recherche du motif dans la collecte",
+             confiance="à vérifier", note=note)
+
+
 def empreinte(chemin, taille_bloc=1 << 20):
     """SHA-256 d'un fichier, lu par blocs."""
     h = hashlib.sha256()
@@ -1180,7 +1267,8 @@ def main():
     args = ap.parse_args()
 
     c = Collecte(args.collecte)
-    for etape, fn in (("machine", machine), ("comptes et domaine", comptes),
+    for etape, fn in (("complétude", completude),
+                      ("machine", machine), ("comptes et domaine", comptes),
                       ("sessions", sessions), ("journaux", journaux),
                       ("réseau", reseau), ("navigation", navigation),
                       ("historique des paquets", historique_paquets),

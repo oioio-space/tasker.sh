@@ -54,6 +54,9 @@ Deux fiches à lire, dans cet ordre :
   vérifier que la pièce dit bien ce que vous lui faites dire.
 - `references/sources.md` — **où** chaque réponse se trouve, et ce qu'aucune
   pièce ne dit.
+- `references/ou-chercher.md` — **quand une pièce manque** : son chemin sur le
+  système d'origine, l'étape à rejouer, et comment distinguer « le système ne
+  l'avait pas » de « la collecte l'a ratée ».
 
 ### 2 · Vérifier avant d'écrire
 
@@ -68,6 +71,40 @@ Trois contrôles, dans cet ordre. Ils changent la lecture de tout le reste.
 3. **Les trous.** Comparez la première et la dernière date de chaque source.
    Un `wtmp` qui commence trois jours avant l'arrêt ne prouve pas que la machine
    n'a servi que trois jours — il prouve que le fichier a été tourné. Dites-le.
+4. **Ce qui manque.** L'extraction pose un fait `limite` par pièce absente, avec
+   son chemin d'origine et l'étape à rejouer. Lisez-les **avant** de rédiger :
+   ils décident de ce que le rapport peut affirmer.
+
+## Quand une pièce manque
+
+Ne vous contentez jamais d'écrire « absent ». Une absence a deux causes, qui
+n'ont pas la même conséquence, et **vous ne pouvez pas trancher seul** :
+
+- **le système ne l'avait pas** — pas de `/var/log/secure` sur Fedora, pas de
+  `wtmp` sur Fedora 40+ : c'est un fait *sur ce système*, à écrire comme tel ;
+- **la collecte l'a ratée** — étape passée à la main, étape rouge, outil absent
+  du poste d'analyse, volume non monté : il faut y retourner.
+
+`references/ou-chercher.md` donne la liste des absences normales et par quoi
+la pièce a été remplacée. Quand le doute demeure :
+
+1. **Demandez le rapport de la collecte** — `PREFIX_rapport.txt` et
+   `PREFIX_script.log`. Ils disent, étape par étape, ce qui a réussi, échoué ou
+   été passé. **Ils ne sont pas dans le dossier de collecte** : ils sont là où
+   `tasker.sh` a été lancé. Réclamez-les, c'est la réponse directe.
+2. **Demandez la reprise**, en donnant à votre interlocuteur ce qu'il lui faut
+   pour agir, pas une plainte :
+
+   > Il manque le journal systemd (`JOURNAUX/PREFIX_journal.txt`). Sur l'image
+   > montée, il vit dans `/var/log/journal/<machine-id>/`. L'étape est
+   > « Journal systemd, en clair ». Pour la rejouer seule, relevez son numéro
+   > avec `-l` puis relancez avec `--only <numéro>`. Si l'image n'est plus
+   > montée, remontez-la en lecture seule.
+
+3. **Écrivez le rapport quand même**, avec ce que vous avez. Dites en « Les
+   limites » ce que la pièce manquante vous empêche de conclure — et ce que
+   vous auriez pu conclure si elle avait été là. Un rapport qui attend une
+   pièce ne sert personne ; un rapport qui masque ce qu'il ignore est pire.
 
 ### 3 · Répartir, quand la collecte est grosse
 
