@@ -32,6 +32,12 @@ def fait(categorie, quoi, valeur, source, methode, horodatage=None, acteur=None,
     return f
 
 
+def _compte_de(chemin, suffixe):
+    """PREFIX_<compte>_<suffixe> → compte."""
+    m = re.search(rf'_([^_]+)_{re.escape(suffixe)}$', os.path.basename(chemin))
+    return m.group(1) if m else "?"
+
+
 # ── accès à la collecte ───────────────────────────────────────────────
 class Collecte:
     """Le dossier PREFIX/ produit par collecte-linux."""
@@ -716,14 +722,23 @@ def _sqlite_lire(blob, requetes):
             cx.close()
 
 
+# Les visites sont bornées, et la borne est un fait : quand elle est atteinte,
+# un fait « limite » dit combien de pages restent hors des faits. Un profil
+# de plusieurs années en compte des dizaines de milliers ; la borne se règle
+# par --visites. Chaque page porte son nombre de visites et la première : ce
+# qui distingue un passage d'une habitude.
 FF_EPOCH = "datetime(v.last_visit_date/1000000,'unixepoch')"
 REQ_FIREFOX = [
-    ("visite", f"SELECT {FF_EPOCH}, v.url, v.title FROM moz_places v "
-               "WHERE v.last_visit_date IS NOT NULL ORDER BY v.last_visit_date DESC LIMIT 400"),
+    ("total", "SELECT COUNT(*) FROM moz_places WHERE last_visit_date IS NOT NULL"),
+    ("visite", f"SELECT {FF_EPOCH}, v.url, v.title, v.visit_count, "
+               "(SELECT datetime(MIN(h.visit_date)/1000000,'unixepoch') "
+               " FROM moz_historyvisits h WHERE h.place_id=v.id) "
+               "FROM moz_places v WHERE v.last_visit_date IS NOT NULL "
+               "ORDER BY v.last_visit_date DESC LIMIT {limite}"),
     ("telechargement",
      "SELECT datetime(a.dateAdded/1000000,'unixepoch'), a.content, p.url "
      "FROM moz_annos a JOIN moz_places p ON p.id=a.place_id "
-     "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC LIMIT 200"),
+     "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC LIMIT {limite}"),
 ]
 # Un cookie prouve une visite même quand l'historique a été vidé : les deux
 # bases sont indépendantes. On regroupe par domaine — un profil en compte des
@@ -748,12 +763,32 @@ REQ_COOKIES_CHROME = [
 ]
 
 REQ_CHROME = [
-    ("visite", "SELECT datetime(last_visit_time/1000000-11644473600,'unixepoch'), url, title "
-               "FROM urls ORDER BY last_visit_time DESC LIMIT 400"),
+    ("total", "SELECT COUNT(*) FROM urls WHERE last_visit_time > 0"),
+    ("visite", "SELECT datetime(u.last_visit_time/1000000-11644473600,'unixepoch'), "
+               "u.url, u.title, u.visit_count, "
+               "(SELECT datetime(MIN(x.visit_time)/1000000-11644473600,'unixepoch') "
+               " FROM visits x WHERE x.url=u.id) "
+               "FROM urls u WHERE u.last_visit_time > 0 "
+               "ORDER BY u.last_visit_time DESC LIMIT {limite}"),
     ("telechargement",
      "SELECT datetime(start_time/1000000-11644473600,'unixepoch'), target_path, tab_url "
-     "FROM downloads ORDER BY start_time DESC LIMIT 200"),
+     "FROM downloads ORDER BY start_time DESC LIMIT {limite}"),
 ]
+
+# Les mots de passe enregistrés : on lit le SITE, jamais l'identifiant ni le
+# secret. Que « intranet.example » ait un mot de passe enregistré dans Firefox
+# est un fait utile (une charte l'interdit souvent) ; le nom d'utilisateur
+# n'ajoute rien au fait, et le mot de passe est chiffré de toute façon.
+REQ_LOGINS_CHROME = [
+    ("identifiant", "SELECT origin_url, date_created, date_last_used FROM logins"),
+]
+
+BASES_NAVIGATEUR = ("places.sqlite", "cookies.sqlite", "History", "Cookies")
+
+
+def _iso_z(ts):
+    """« 2025-12-19 12:40:00 » de sqlite → « 2025-12-19T12:40:00Z » : c'est de l'UTC."""
+    return ts.replace(" ", "T") + "Z" if isinstance(ts, str) and len(ts) == 19 else ts
 
 
 def _date_us(v, depuis_1601=False):
@@ -783,55 +818,107 @@ def _cookies(c, prof, nom, compte, blob, requetes, outil, depuis_1601):
     return False
 
 
-def navigation(c):
-    for prof in c.chercher("_profils.tar.gz", "COMPTES"):
-        # PREFIX_<compte>_profils.tar.gz
-        m = re.search(r'_([^_]+)_profils\.tar\.gz$', os.path.basename(prof))
-        compte = m.group(1) if m else "?"
-        for nom, blob in c.membres_tar(prof):
-            base = os.path.basename(nom)
-            if base.endswith(("-wal", "-journal")) and len(blob) > 32:
-                fait("limite", "base de navigateur copiée à chaud", nom,
-                     f"{c.rel(prof)} → {nom}", "présence d'un fichier -wal non vide",
-                     acteur=compte, confiance="à vérifier",
-                     note="les visites les plus récentes sont dans ce journal, "
-                          "pas dans la base : elles manquent à l'analyse")
+def _identifiants(c, prof, nom, compte, blob, base):
+    """Les sites pour lesquels un mot de passe est enregistré. Le site seul."""
+    if base == "logins.json":
+        try:
+            entrees = json.loads(blob.decode("utf-8", "replace")).get("logins", [])
+        except (ValueError, AttributeError):
+            return
+        for e in entrees:
+            if not isinstance(e, dict) or not e.get("hostname"):
                 continue
-            if base == "places.sqlite":
-                jeu, outil = REQ_FIREFOX, "Firefox"
-            elif base == "cookies.sqlite":
-                _cookies(c, prof, nom, compte, blob, REQ_COOKIES_FF,
-                         "Firefox (moz_cookies)", False)
-                continue
-            elif base == "Cookies":
-                _cookies(c, prof, nom, compte, blob, REQ_COOKIES_CHROME,
-                         "Chromium/Chrome", True)
-                continue
-            elif base == "History" and ("chrom" in nom.lower() or "Default" in nom):
-                jeu, outil = REQ_CHROME, "Chromium/Chrome"
-            else:
-                if base == "recently-used.xbel":
-                    for m2 in re.finditer(r'href="([^"]+)"[^>]*(?:added|modified)="([^"]+)"',
-                                          blob.decode("utf-8", "replace")):
-                        fait("usage", "fichier ouvert récemment", m2.group(1),
-                             f"{c.rel(prof)} → {nom}", "grep href= recently-used.xbel",
-                             horodatage=m2.group(2), acteur=compte)
-                continue
-            for genre, lignes in _sqlite_lire(blob, jeu):
-                for l in lignes:
-                    ts, a, b = (list(l) + [None, None, None])[:3]
-                    if genre == "visite":
-                        fait("navigation", "page visitée", a,
-                             f"{c.rel(prof)} → {nom}",
-                             f"sqlite3 sur l'historique {outil}",
-                             horodatage=ts, acteur=compte,
-                             note=(b or None))
-                    else:
-                        fait("telechargement", "fichier téléchargé", a,
-                             f"{c.rel(prof)} → {nom}",
-                             f"sqlite3 sur les téléchargements {outil}",
-                             horodatage=ts, acteur=compte,
-                             note=f"depuis {b}" if b else None)
+            cree, vu = e.get("timeCreated"), e.get("timeLastUsed")
+            fait("usage", "mot de passe enregistré dans le navigateur", e["hostname"],
+                 f"{c.rel(prof)} → {nom}",
+                 "champ hostname de logins.json (identifiant et mot de passe non lus)",
+                 horodatage=_date_us(vu * 1000, False) if vu else None, acteur=compte,
+                 note=f"enregistré le {_date_us(cree * 1000, False)}" if cree else None)
+    else:
+        for _, lignes in _sqlite_lire(blob, REQ_LOGINS_CHROME):
+            for site, cree, vu in lignes:
+                fait("usage", "mot de passe enregistré dans le navigateur", site,
+                     f"{c.rel(prof)} → {nom}",
+                     "colonne origin_url de la table logins (identifiant et mot de "
+                     "passe non lus)",
+                     horodatage=_date_us(vu, True), acteur=compte,
+                     note=f"enregistré le {_date_us(cree, True)}" if cree else None)
+
+
+def navigation(c, limite=5000):
+    """Les navigateurs. Ils vivent dans DEUX archives, et l'oublier fait
+    manquer un navigateur entier : Firefox est dans ~/.mozilla, donc dans
+    _profils ; Chrome ou Chromium installés par paquet sont dans ~/.config,
+    donc dans _artefacts. Chromium en snap est dans ~/snap : _profils.
+    """
+    for suffixe in ("_profils.tar.gz", "_artefacts.tar.gz"):
+        for prof in c.chercher(suffixe, "COMPTES"):
+            compte = _compte_de(prof, suffixe[1:])
+            for nom, blob in c.membres_tar(prof):
+                base = os.path.basename(nom)
+                if base.endswith(("-wal", "-journal")) and len(blob) > 32 \
+                        and base.rsplit("-", 1)[0] in BASES_NAVIGATEUR:
+                    fait("limite", "base de navigateur copiée à chaud", nom,
+                         f"{c.rel(prof)} → {nom}", "présence d'un fichier -wal non vide",
+                         acteur=compte, confiance="à vérifier",
+                         note="les visites les plus récentes sont dans ce journal, "
+                              "pas dans la base : elles manquent à l'analyse")
+                    continue
+                if base == "places.sqlite":
+                    jeu, outil = REQ_FIREFOX, "Firefox"
+                elif base == "cookies.sqlite":
+                    _cookies(c, prof, nom, compte, blob, REQ_COOKIES_FF,
+                             "Firefox (moz_cookies)", False)
+                    continue
+                elif base == "Cookies":
+                    _cookies(c, prof, nom, compte, blob, REQ_COOKIES_CHROME,
+                             "Chromium/Chrome", True)
+                    continue
+                elif base == "History" and ("chrom" in nom.lower() or "Default" in nom):
+                    jeu, outil = REQ_CHROME, "Chromium/Chrome"
+                elif base in ("logins.json", "Login Data"):
+                    _identifiants(c, prof, nom, compte, blob, base)
+                    continue
+                else:
+                    if base == "recently-used.xbel":
+                        for m2 in re.finditer(r'href="([^"]+)"[^>]*(?:added|modified)="([^"]+)"',
+                                              blob.decode("utf-8", "replace")):
+                            fait("usage", "fichier ouvert récemment", m2.group(1),
+                                 f"{c.rel(prof)} → {nom}", "grep href= recently-used.xbel",
+                                 horodatage=m2.group(2), acteur=compte)
+                    continue
+                total = None
+                requetes = [(g, q.replace("{limite}", str(limite))) for g, q in jeu]
+                for genre, lignes in _sqlite_lire(blob, requetes):
+                    if genre == "total":
+                        total = lignes[0][0] if lignes else None
+                        continue
+                    for l in lignes:
+                        ts, a, b, combien, premiere = (list(l) + [None] * 5)[:5]
+                        ts, premiere = _iso_z(ts), _iso_z(premiere)
+                        if genre == "visite":
+                            note = f"{combien} visite(s)" if combien else None
+                            if premiere and premiere != ts:
+                                note += f", la première le {premiere}"
+                            if b:
+                                note = f"{note} — {b}" if note else b
+                            fait("navigation", "page visitée", a,
+                                 f"{c.rel(prof)} → {nom}",
+                                 f"sqlite3 sur l'historique {outil}",
+                                 horodatage=ts, acteur=compte, note=note)
+                        else:
+                            fait("telechargement", "fichier téléchargé", a,
+                                 f"{c.rel(prof)} → {nom}",
+                                 f"sqlite3 sur les téléchargements {outil}",
+                                 horodatage=ts, acteur=compte,
+                                 note=f"depuis {b}" if b else None)
+                    if genre == "visite" and total and total > len(lignes):
+                        fait("limite", "historique de navigation tronqué",
+                             f"{len(lignes)} pages sur {total}", f"{c.rel(prof)} → {nom}",
+                             f"COUNT(*) sur l'historique {outil}, borne --visites {limite}",
+                             acteur=compte, confiance="certaine",
+                             note="les pages les plus anciennes ne sont pas dans les "
+                                  "faits ; relancez avec --visites plus grand pour les avoir")
 
 
 # ── 7 · ce qui se relance seul, et les supprimés ──────────────────────
@@ -872,8 +959,7 @@ def persistance(c):
                          confiance="à vérifier")
 
     for art in c.chercher("_artefacts.tar.gz", "COMPTES"):
-        m = re.search(r'_([^_]+)_artefacts\.tar\.gz$', os.path.basename(art))
-        compte = m.group(1) if m else "?"
+        compte = _compte_de(art, "artefacts.tar.gz")
         for nom, blob in c.membres_tar(art):
             base = os.path.basename(nom)
             txt = blob.decode("utf-8", "replace")
@@ -1264,13 +1350,18 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("collecte", help="le dossier PREFIX/ produit par collecte-linux")
     ap.add_argument("-o", "--sortie", default="faits.jsonl")
+    ap.add_argument("--visites", type=int, default=5000, metavar="N",
+                    help="pages retenues par historique de navigateur, les plus "
+                         "récentes d'abord (défaut 5000) ; au-delà, un fait "
+                         "« limite » le dit")
     args = ap.parse_args()
 
     c = Collecte(args.collecte)
     for etape, fn in (("complétude", completude),
                       ("machine", machine), ("comptes et domaine", comptes),
                       ("sessions", sessions), ("journaux", journaux),
-                      ("réseau", reseau), ("navigation", navigation),
+                      ("réseau", reseau),
+                      ("navigation", lambda c: navigation(c, args.visites)),
                       ("historique des paquets", historique_paquets),
                       ("persistance", persistance), ("supprimés", supprimes),
                       ("timeline", timeline)):

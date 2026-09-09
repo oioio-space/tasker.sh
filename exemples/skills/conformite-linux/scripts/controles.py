@@ -361,7 +361,7 @@ def _chemins_inventaire(c):
     """
     for f in c.chercher("_inventaire.txt", "COMPTES"):
         compte = _compte_de(f, "inventaire.txt")
-        racine, courant, chemins = None, "", []
+        racine, courant, chemins, dates = None, "", [], {}
         for l in c.texte(f, 8_000_000).splitlines():
             # un en-tête de dossier finit par « : » et n'a pas la forme d'une
             # ligne de ls — un fichier peut très bien s'appeler « notes: »
@@ -378,14 +378,19 @@ def _chemins_inventaire(c):
                 continue
             if re.match(r'^\d{4}-\d{2}-\d{2}$', ch[5]):    # ls --time-style=long-iso
                 ch = l.split(None, 7)
-                nom = ch[7] if len(ch) > 7 else None
+                nom, quand = (ch[7] if len(ch) > 7 else None), " ".join(ch[5:7])
             else:                                          # « Jan  4 10:22 »
-                nom = ch[8] if len(ch) > 8 else None
+                nom, quand = (ch[8] if len(ch) > 8 else None), " ".join(ch[5:8])
             if not nom or nom in (".", ".."):
                 continue
             nom = nom.split(" -> ", 1)[0]
-            chemins.append(f"{courant}/{nom}" if courant else nom)
-        yield compte, c.rel(f), chemins
+            chemin = f"{courant}/{nom}" if courant else nom
+            chemins.append(chemin)
+            # la date telle que ls l'écrit, sans la convertir : elle n'a pas
+            # d'année quand elle est récente, et sa langue est celle du poste
+            # d'analyse. Elle se cite, elle ne se calcule pas.
+            dates[chemin] = quand
+        yield compte, c.rel(f), chemins, dates
 
 
 def _lignes_paquets(c):
@@ -415,6 +420,40 @@ def _lignes_paquets(c):
             if lignes:
                 yield f"{c.rel(arch)} → {nom}", \
                     "l'historique du gestionnaire de paquets", lignes
+
+
+def _historiques(c):
+    """Les commandes saisies par un compte. Rend (compte, source, [(date, ligne)]).
+
+    bash ne date que si HISTTIMEFORMAT était posé : une ligne « #<epoch> »
+    précède alors chaque commande. zsh, en mode étendu, écrit « : epoch:0;cmd ».
+    Sans cela la date est None, et le constat doit le dire : la position d'une
+    ligne dans le fichier ne prouve rien de son moment.
+    """
+    for art in c.chercher("_artefacts.tar.gz", "COMPTES"):
+        compte = _compte_de(art, "artefacts.tar.gz")
+        for nom, blob in c.membres_tar(art):
+            if not os.path.basename(nom).endswith("_history"):
+                continue
+            lignes, quand = [], None
+            for l in blob.decode("utf-8", "replace").splitlines():
+                m = re.match(r'^#(\d{9,11})$', l)
+                if m:
+                    quand = _epoch_iso(int(m.group(1)))
+                    continue
+                m = re.match(r'^: (\d{9,11}):\d+;(.*)$', l)
+                if m:
+                    lignes.append((_epoch_iso(int(m.group(1))), m.group(2)))
+                    continue
+                if l.strip():
+                    lignes.append((quand, l))
+                    quand = None
+            if lignes:
+                yield compte, f"{c.rel(art)} → {nom}", lignes
+
+
+def _epoch_iso(n):
+    return datetime.fromtimestamp(n, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _reseaux_sans_fil(c):
@@ -520,7 +559,7 @@ def usage(c):
                     question="la charte encadre-t-elle l'usage de supports "
                              "amovibles, et exige-t-elle qu'ils soient chiffrés ?")
 
-    for compte, source, chemins in _chemins_inventaire(c):
+    for compte, source, chemins, _ in _chemins_inventaire(c):
         for m in sorted({ch for ch in chemins
                          if re.search(r'\.(?:AppImage|deb|rpm|exe|msi)$', ch, re.I)}):
             constat("usage", "programme installable présent dans un dossier "
@@ -540,7 +579,7 @@ def usage(c):
 # Le format est décrit dans references/regles/usage-non-professionnel.regles.
 
 CLES_REGLE = ("regle", "titre", "texte", "portee", "theme")
-CLES_INDICE = ("domaine", "programme", "fichier", "wifi", "horaire")
+CLES_INDICE = ("domaine", "programme", "fichier", "commande", "wifi", "horaire")
 
 # Ce qu'un indice établit — et pas davantage. Chaque constat l'emporte avec lui
 # pour que le rapport ne puisse pas, par distraction, en dire plus.
@@ -551,6 +590,8 @@ PREUVE = {
                  "en a été fait",
     "fichier": "la PRÉSENCE d'un fichier dans le dossier du compte, pas qui "
                "l'y a mis ni ce qu'il contient",
+    "commande": "qu'une commande a été SAISIE dans l'interpréteur de ce compte "
+                "— datée seulement si l'historique l'est",
     "wifi": "que la machine s'est ASSOCIÉE au moins une fois à ce réseau — "
             "donc qu'elle est sortie du site",
     "horaire": "qu'une session a été OUVERTE hors des heures indiquées, pas "
@@ -671,6 +712,23 @@ def _grouper(textes, motif, exemples=True):
 
 
 _DEJA = set()
+_FUSEAU = [None]
+
+
+def _local(iso):
+    """Une date UTC (« …Z ») dans le fuseau du poste, quand on le connaît.
+
+    Les faits écrivent l'UTC ; un rapport se lit dans l'heure du poste. La
+    conversion est faite ici, une fois, pour toutes les dates d'un constat.
+    """
+    if not (isinstance(iso, str) and _FUSEAU[0] and
+            (iso.endswith("Z") or re.search(r'[+-]\d\d:\d\d$', iso))):
+        return iso
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")) \
+            .astimezone(_FUSEAU[0]).isoformat()
+    except ValueError:
+        return iso
 
 
 def _poser(r, cle, etiquette, brut, quoi, valeur, source, methode,
@@ -681,6 +739,7 @@ def _poser(r, cle, etiquette, brut, quoi, valeur, source, methode,
     if empreinte_c in _DEJA:
         return None
     _DEJA.add(empreinte_c)
+    date = _local(date)
     detail = f"ce que cet indice établit : {PREUVE[cle]}"
     if etiquette:
         detail = f"catégorie donnée par la règle : {etiquette}. " + detail
@@ -701,7 +760,10 @@ def appliquer_regles(c, regles, faits=None, fuseau=None):
     nav = list(_bases_navigateur(c)) if "domaine" in besoin else []
     inv = list(_chemins_inventaire(c)) if besoin & {"fichier", "programme"} else []
     paq = list(_lignes_paquets(c)) if "programme" in besoin else []
+    shell = list(_historiques(c)) if "commande" in besoin else []
     ondes = list(_reseaux_sans_fil(c)) if "wifi" in besoin else []
+    visites = _visites_par_compte(faits) if faits and "domaine" in besoin else {}
+    _FUSEAU[0] = fuseau
 
     for r in regles:
         avant, absentes = len(CONSTATS), []
@@ -713,20 +775,41 @@ def appliquer_regles(c, regles, faits=None, fuseau=None):
                 for compte, source, texte in nav:
                     for v, (n, _) in sorted(
                             _grouper([texte], motif, exemples=False).items()):
+                        date, note = None, f"{n} occurrence(s) dans la base"
+                        # les faits du skill forensic datent la visite — et
+                        # distinguent une visite d'un téléchargement
+                        liees = [f for f in visites.get(compte, ())
+                                 if v in (f["valeur"] + " " + (f.get("note") or "")).lower()]
+                        if liees:
+                            dates = sorted(f["horodatage"] for f in liees)
+                            date = dates[-1]
+                            note += (f" ; {len(liees)} fait(s) daté(s) dans faits.jsonl, "
+                                     f"du {_local(dates[0])} au {_local(dates[-1])} : "
+                                     + ", ".join(f["id"] for f in liees[:8]))
+                            charges = [f["id"] for f in liees
+                                       if f["categorie"] == "telechargement"]
+                            if charges:
+                                note += (" — dont un TÉLÉCHARGEMENT ("
+                                         + ", ".join(charges[:4]) + ") : plus qu'une "
+                                         "consultation, à citer comme tel")
+                        elif faits:
+                            note += (" ; aucun fait daté ne cite ce domaine : il "
+                                     "vient des cookies, d'un favori ou d'une page "
+                                     "libérée — pas d'une visite datée")
+                        else:
+                            note += " ; la date se lit avec --faits"
                         _poser(r, cle, etiquette, brut,
                                "domaine présent dans une base de navigateur",
                                v, source,
                                f"motif « {brut} » cherché dans les octets de la "
                                "base, sans l'ouvrir en SQL",
-                               acteur=compte,
-                               note=f"{n} occurrence(s) ; la date de la visite "
-                                    "se lit dans faits.jsonl (skill forensic-linux)")
+                               acteur=compte, date=date, note=note)
 
             elif cle == "fichier":
                 if not inv:
                     absentes.append("aucun inventaire de dossier personnel")
                     continue
-                for compte, source, chemins in inv:
+                for compte, source, chemins, dates in inv:
                     for v, (n, ex) in sorted(_grouper(chemins, motif).items()):
                         _poser(r, cle, etiquette, brut,
                                "fichier présent dans le dossier personnel",
@@ -735,7 +818,9 @@ def appliquer_regles(c, regles, faits=None, fuseau=None):
                                "l'inventaire (ls -lRa)",
                                acteur=compte,
                                note=f"{n} chemin(s), par exemple : "
-                                    + " ; ".join(ex))
+                                    + " ; ".join(_avec_date(x, dates) for x in ex)
+                                    + ". La date entre parenthèses est celle que "
+                                    "ls affiche : modification, sans année si récente")
 
             elif cle == "programme":
                 if not inv and not paq:
@@ -756,7 +841,7 @@ def appliquer_regles(c, regles, faits=None, fuseau=None):
                                note="la liste des paquets ne dit pas quel compte "
                                     "a demandé l'installation : la portée est "
                                     "le poste. Ligne : " + ligne.strip()[:120])
-                for compte, source, chemins in inv:
+                for compte, source, chemins, dates in inv:
                     for v, (n, ex) in sorted(_grouper(chemins, motif).items()):
                         _poser(r, cle, etiquette, brut,
                                "programme présent dans le dossier personnel",
@@ -765,7 +850,38 @@ def appliquer_regles(c, regles, faits=None, fuseau=None):
                                "l'inventaire (ls -lRa)",
                                acteur=compte,
                                note=f"{n} chemin(s), par exemple : "
-                                    + " ; ".join(ex))
+                                    + " ; ".join(_avec_date(x, dates) for x in ex))
+
+            elif cle == "commande":
+                if not shell:
+                    absentes.append("aucun historique d'interpréteur")
+                    continue
+                for compte, source, lignes in shell:
+                    trouve = {}
+                    for date, ligne in lignes:
+                        for m in motif.finditer(ligne):
+                            v = m.group(0).lower()
+                            n, ex, quand = trouve.get(v, (0, [], []))
+                            if len(ex) < 5:
+                                ex.append(ligne.strip()[:100])
+                            if date:
+                                quand.append(date)
+                            trouve[v] = (n + 1, ex, quand)
+                    for v, (n, ex, quand) in sorted(trouve.items()):
+                        quand.sort()
+                        if quand:
+                            note = (f"{n} saisie(s), {len(quand)} datée(s) du "
+                                    f"{_local(quand[0])} au {_local(quand[-1])} "
+                                    "(HISTTIMEFORMAT posé)")
+                        else:
+                            note = (f"{n} saisie(s), AUCUNE datée : l'historique "
+                                    "n'a pas de dates, ne lui en donnez pas")
+                        _poser(r, cle, etiquette, brut,
+                               "commande saisie dans l'interpréteur", v, source,
+                               f"motif « {brut} » cherché ligne à ligne dans "
+                               "l'historique de l'interpréteur",
+                               acteur=compte, date=quand[-1] if quand else None,
+                               note=note + ". Par exemple : " + " ; ".join(ex))
 
             elif cle == "wifi":
                 if not ondes:
@@ -775,16 +891,12 @@ def appliquer_regles(c, regles, faits=None, fuseau=None):
                     cible = " ".join(x for x in (o["ssid"], o["id"]) if x)
                     if not motif.search(cible):
                         continue
-                    quand = o["vu_le"]
-                    if quand and fuseau:
-                        quand = datetime.fromisoformat(
-                            quand.replace("Z", "+00:00")).astimezone(fuseau).isoformat()
                     _poser(r, cle, etiquette, brut,
                            "réseau sans fil enregistré sur le poste",
                            o["ssid"], o["source"],
                            f"motif « {brut} » cherché dans le SSID des profils "
                            "NetworkManager",
-                           acteur=o["acteur"], date=quand,
+                           acteur=o["acteur"], date=o["vu_le"],
                            portee="compte" if o["acteur"] else "poste",
                            note=("date de la dernière association, lue dans "
                                  "var/lib/NetworkManager/timestamps"
@@ -822,6 +934,20 @@ def appliquer_regles(c, regles, faits=None, fuseau=None):
                         note="aucun indice ne prouve pas le respect de la "
                              "règle : les indices sont ceux qu'on a su écrire, "
                              "et un historique s'efface")
+
+
+def _avec_date(chemin, dates):
+    return f"{chemin} ({dates[chemin]})" if dates.get(chemin) else chemin
+
+
+def _visites_par_compte(faits):
+    """Les faits de navigation datés, par compte : de quoi dater un domaine."""
+    par = {}
+    for f in faits:
+        if f.get("categorie") in ("navigation", "telechargement") and \
+                f.get("horodatage") and f.get("acteur"):
+            par.setdefault(f["acteur"], []).append(f)
+    return par
 
 
 def _horaires(c, r, cle, etiquette, brut, jours, deb, fin, faits, fuseau):

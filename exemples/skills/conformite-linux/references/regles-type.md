@@ -40,7 +40,7 @@ ce que le contrôle **ne prouve pas**.
 | « les clés privées sont protégées par une phrase de passe » | clé privée SSH sans phrase de passe | que la clé ait été volée |
 | « aucun identifiant n'est enregistré en clair » | `.netrc`, `.git-credentials`, fichier d'identifiants | que l'identifiant soit encore valide |
 | « les secrets ne sont pas saisis en argument de commande » | mot de passe ou jeton dans l'historique | **la date** : un historique n'est pas daté par défaut |
-| « les mots de passe ne sont pas enregistrés dans le navigateur » | *non branché* — `logins.json`, `Login Data` sont collectés | — |
+| « les mots de passe ne sont pas enregistrés dans le navigateur » | site avec un mot de passe enregistré, dans `faits.jsonl` (« mot de passe enregistré dans le navigateur ») | l'identifiant ni le secret : seul le **site** est lu. Un site professionnel enregistré peut être toléré, la charte le dit |
 
 ## Durcissement du poste
 

@@ -78,16 +78,26 @@ Ce fichier s'écrit à la main : une règle par bloc, la phrase de la charte
 recopiée, puis les indices à chercher. **Relisez-le contre la charte de
 l'entreprise avant de vous en servir** : il n'en est pas la copie.
 
-Puis ouvrez l'agent dans `~/analyse` et demandez-lui le rapport. Il n'a alors
-besoin que de **lire** `faits.jsonl` — pas d'exécuter quoi que ce soit.
+Puis faites produire les **brouillons** — les tableaux du rapport, remplis
+depuis les faits, avec des passages « À rédiger » :
+
+    python3 $K/forensic-linux/scripts/brouillon.py    ~/analyse/faits.jsonl    -o ~/analyse/rapport-forensic.md
+    python3 $K/conformite-linux/scripts/brouillon.py  ~/analyse/constats.jsonl -o ~/analyse/rapport-conformite.md
+
+Puis ouvrez l'agent dans `~/analyse` et demandez-lui de rédiger. Il n'a alors
+besoin que de **lire** les faits et d'**éditer** le brouillon — pas d'exécuter
+quoi que ce soit. C'est ce qui rend un modèle de taille moyenne fiable ici :
+il ne retape aucune date, aucun identifiant ; il écrit entre des tableaux
+qu'un script a remplis.
 
 C'est la méthode à préférer avec une configuration Crush restreinte, du genre :
 
 ```json
-"permissions": { "allowed_tools": ["view", "ls", "grep"] }
+"permissions": { "allowed_tools": ["view", "ls", "grep", "edit"] }
 ```
 
-Ces trois outils sont en lecture seule, et suffisent. **N'ajoutez pas `bash`
+`view`, `ls`, `grep` lisent ; `edit` sert à remplir le brouillon, passage par
+passage. Ils suffisent. **N'ajoutez pas `bash`
 à cette liste pour faire tourner l'extracteur** : ce serait accorder le droit
 d'écrire partout, y compris dans les scellés, pour une commande que vous pouvez
 lancer à la main.
@@ -106,6 +116,7 @@ puis donnez-lui le dossier de collecte — celui qui porte le PREFIX et contient
 
     faits.jsonl              un fait par ligne
     faits-manifeste.json     les empreintes de ce qui a été lu
+    rapport-forensic-….md    le brouillon : tableaux remplis, prose à écrire
 
 Un fait :
 
@@ -189,7 +200,7 @@ du rapport avant de commencer : une analyse s'interrompt, la liste dit où on en
 
 Sur un poste neuf, avant de s'en servir sur une vraie affaire :
 
-    python3 -m py_compile forensic-linux/scripts/extraire.py
+    python3 -m py_compile forensic-linux/scripts/*.py conformite-linux/scripts/*.py
     python3 forensic-linux/scripts/extraire.py --help
 
 Puis sur une collecte connue, deux fois de suite :
@@ -197,7 +208,9 @@ Puis sur une collecte connue, deux fois de suite :
     python3 … -o /tmp/a.jsonl && python3 … -o /tmp/b.jsonl && cmp /tmp/a.jsonl /tmp/b.jsonl
 
 Les deux doivent être identiques. S'ils diffèrent, quelque chose a bougé dans
-la collecte entre les deux lectures — c'est un fait en soi, et grave.
+la collecte entre les deux lectures — c'est un fait en soi, et grave. Le même
+test vaut pour `controles.py` et pour les deux `brouillon.py` : à faits
+identiques, brouillons identiques.
 
 ---
 

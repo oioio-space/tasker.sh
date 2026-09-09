@@ -111,7 +111,7 @@ effaçable par son propriétaire.
 | onglets ouverts | `recovery.jsonlz4` | **non** | format LZ4 propriétaire, hors bibliothèque standard |
 | **domaines ayant posé un cookie** (Firefox) | `moz_cookies` de `cookies.sqlite` | oui, **regroupé par domaine** | prouve une visite **même si l'historique a été vidé** ; la colonne `value` n'est jamais lue |
 | **domaines ayant posé un cookie** (Chrome) | table `cookies` de `Cookies` | oui, **regroupé par domaine** | lu dans `Default/` **et** `Default/Network/` (Chrome 96+) ; dates depuis 1601 ; valeurs chiffrées, non extraites |
-| mots de passe enregistrés | `logins.json`, `Login Data` | **non branché** | à demander, et à traiter comme un secret |
+| mots de passe enregistrés | `logins.json`, `Login Data` | oui — **le site seul** | l'identifiant et le secret ne sont pas lus : le fait dit pour quel site un mot de passe existe, et depuis quand |
 
 ## Les paquets
 

@@ -30,6 +30,9 @@
 #               et les chemins des dossiers personnels
 #   fichier:    dans l'inventaire des dossiers personnels — le chemin complet
 #               est reconstruit, « ~/Vidéos/Films/x.mkv »
+#   commande:   dans l'historique de l'interpréteur du compte (.bash_history,
+#               .zsh_history). C'est le seul indice qui prouve une EXÉCUTION —
+#               datée seulement si HISTTIMEFORMAT était posé
 #   wifi:       dans les réseaux sans fil enregistrés par NetworkManager ; la
 #               date de la dernière association est reprise quand elle existe
 #   horaire:    les heures ouvrées, au format « lun-ven 08:00-19:00 ».
@@ -70,6 +73,7 @@ programme: (?i)\b(dosbox|pcsx2|dolphin-emu|citra|yuzu|ppsspp|mame)\b
 programme: (?i)(com\.valvesoftware\.steam|net\.lutris\.lutris|org\.libretro)
 fichier: (?i)/(Games?|Jeux)/
 fichier: (?i)\.local/share/(Steam|lutris)/
+commande: (?i)^\s*(steam|lutris|minecraft-launcher|retroarch|dosbox)\b
 domaine: (?i)(store\.steampowered|epicgames\.com/store|gog\.com|itch\.io)
 
 regle: R3
@@ -80,6 +84,7 @@ programme: (?i)\b(transmission|qbittorrent|deluge|rtorrent|ktorrent|amule|vuze|a
 programme: (?i)(org\.qbittorrent|com\.transmissionbt)
 fichier: (?i)\.torrent$
 fichier: (?i)\.config/(qBittorrent|transmission|deluge)/
+commande: (?i)\b(transmission-(cli|gtk|daemon)|qbittorrent(-nox)?|deluged?|rtorrent|aria2c\s.*\.torrent)\b
 domaine: (?i)(thepiratebay|yggtorrent|1337x|rarbg|torrent9|nyaa\.si|torrentz)
 domaine: (?i)(tracker\.|announce\.torrent)
 
@@ -90,6 +95,7 @@ portee: compte
 fichier: (?i)\.(mkv|avi|mp4|mov|wmv|flv|m4v)$
 fichier: (?i)/(Films?|Movies?|S[ée]ries?|Musique|Music)/
 programme: (?i)\b(kodi|popcorn-time|stremio|vlc-plugin-|smplayer)\b
+commande: (?i)\b(vlc|mpv|mplayer|kodi)\b.*\.(mkv|avi|mp4)\b   # lecture d'un film depuis le terminal
 domaine: (?i)(streaming|voirfilms|papystreaming|wiflix|french-stream|zone-?t[ée]l[ée]chargement)
 
 regle: R5

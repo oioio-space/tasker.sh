@@ -40,6 +40,12 @@ Il écrit aussi `faits-manifeste.json` : l'empreinte SHA-256 de chaque pièce
 lue, celle de l'extracteur, celle du fichier de faits. C'est ce qui prouve
 **quels octets** ont été analysés.
 
+Les historiques de navigation sont bornés aux 5 000 pages les plus récentes
+par navigateur (`--visites` pour changer) ; quand la borne est atteinte, un
+fait `limite` dit combien de pages restent dehors. Les sites pour lesquels un
+mot de passe est enregistré sont relevés — **le site seul** : ni l'identifiant
+ni le secret ne sont lus.
+
 Deux fiches à lire, dans cet ordre :
 
 - `references/artefacts.md` — **ce que sont** les pièces. Vous travaillez hors
@@ -179,8 +185,32 @@ l'heure près, dites-le aussi — la précision fait partie du fait.
 
 ### 5 · Rédiger
 
-Écrivez `rapport-forensic-<PREFIX>.md` dans cet ordre, en français, à
-l'indicatif, sans jargon inutile :
+Ne partez pas d'une page blanche. Faites d'abord produire le brouillon :
+
+```bash
+python3 scripts/brouillon.py faits.jsonl -o rapport-forensic-<PREFIX>.md
+```
+
+Il contient les **dix sections dans l'ordre**, avec tous les tableaux déjà
+remplis depuis les faits — la machine, les comptes et leurs sessions, le
+réseau, la chronologie datée, les domaines les plus visités par compte, les
+cookies sans page d'historique, les téléchargements, les supports, les
+suspects, les limites, l'annexe — et des passages marqués **« À rédiger »**
+qui disent ce qu'il faut écrire à cet endroit. Toutes les dates y sont dans le
+fuseau du poste.
+
+Ce que vous faites du brouillon :
+
+- **vous écrivez la prose** aux endroits marqués, et vous retirez la marque ;
+- **vous élaguez les tableaux** — la chronologie surtout — en disant ce que
+  vous retirez et pourquoi ;
+- **vous ne réécrivez jamais une cellule.** Une date, une valeur, un
+  identifiant viennent du fichier de faits ; les retaper de mémoire est la
+  façon la plus sûre d'introduire une erreur qu'aucun lecteur ne détectera.
+  S'il manque une colonne, demandez-la au script, ne la remplissez pas à la
+  main.
+
+Le rapport suit cet ordre, en français, à l'indicatif, sans jargon inutile :
 
 1. **La machine** — nom, système, version, machine-id, fuseau, installation,
    dernier arrêt. Un tableau court suffit.
@@ -210,9 +240,10 @@ l'indicatif, sans jargon inutile :
 ## Écrire un rapport plus long que ce que le modèle peut sortir d'un coup
 
 Un rapport complet dépasse souvent la limite de sortie d'un modèle. N'essayez
-pas de tout produire d'un seul jet : **écrivez section par section**, en
-ajoutant à la fin du fichier à chaque fois. Les dix sections sont indépendantes,
-c'est fait pour.
+pas de tout produire d'un seul jet : le brouillon existe déjà sur disque,
+**remplacez un passage « À rédiger » à la fois**, avec l'outil d'édition, sans
+jamais réécrire le fichier entier. Les dix sections sont indépendantes, c'est
+fait pour.
 
 Si un outil de suivi de tâches est disponible — Crush a `todos` —, posez-y les
 dix sections avant de commencer. Une analyse longue s'interrompt ; la liste dit

@@ -97,8 +97,8 @@ Une règle que l'on rencontre à chaque dossier n'a pas à être retraduite chaq
 fois. `references/regles/` contient des fichiers où la traduction est écrite,
 **à la main et en clair** : une règle par bloc, sa phrase recopiée de la charte,
 puis les indices à chercher — un domaine dans un navigateur, un programme dans
-la liste des paquets, un fichier dans le dossier personnel, un réseau sans fil,
-des heures ouvrées.
+la liste des paquets, un fichier dans le dossier personnel, une commande dans
+l'historique de l'interpréteur, un réseau sans fil, des heures ouvrées.
 
     regle: R2
     titre: Logiciels de jeu vidéo
@@ -122,8 +122,13 @@ Trois choses à savoir pour le rapport :
   ne demande plus « quelle règle ? » mais « cette traduction est-elle fidèle ? ».
 - **Ce qu'un indice prouve est écrit dans le constat**, dans `note`. Un domaine
   prouve une consultation ; un paquet, une installation ; un fichier, une
-  présence ; un réseau sans fil, une association ; une heure, une ouverture de
-  session. **Recopiez cette limite dans le rapport** au lieu de la résumer.
+  présence ; une commande, une exécution ; un réseau sans fil, une
+  association ; une heure, une ouverture de session. **Recopiez cette limite
+  dans le rapport** au lieu de la résumer.
+- **Avec `--faits`, les constats sont datés.** Un domaine reçoit la date de la
+  visite tirée de `faits.jsonl`, et la note dit s'il s'agit d'un
+  **téléchargement** — plus qu'une consultation. Sans `--faits`, le constat le
+  dit aussi : « la date se lit avec --faits ». Ne datez pas à sa place.
 - **Une règle non cherchée n'est pas une règle respectée.** Quand la pièce
   manque, le constat est de thème `limite` (« règle R6 : aucun profil de
   connexion réseau ») ; quand la pièce est là et que rien n'a été trouvé, il est
@@ -148,7 +153,27 @@ Trois interdits sur cette table :
 
 ### 4 · Rédiger
 
-Écrivez `rapport-conformite-<PREFIX>.md` :
+Ne partez pas d'une page blanche :
+
+```bash
+python3 scripts/brouillon.py constats.jsonl --faits faits.jsonl \
+        -o rapport-conformite-<PREFIX>.md
+```
+
+Le brouillon contient les huit sections dans l'ordre, avec les tableaux déjà
+remplis : le périmètre et les empreintes, la table règle → indices → constats
+du §3, les constats rattachés à chaque règle, les observations sans règle, les
+règles non vérifiées, ce qui est conforme, les limites, l'annexe. Des passages
+**« À rédiger »** disent ce qu'il faut écrire à chaque endroit.
+
+Vous écrivez la prose et vous **rayez** les constats qui ne tiennent pas, avec
+le motif. Vous ne réécrivez jamais une cellule : une date, une valeur, un
+identifiant viennent des constats ; les retaper de mémoire est la façon la plus
+sûre d'introduire une erreur qu'aucun lecteur ne détectera. Un rapport long
+s'écrit un passage « À rédiger » à la fois, avec l'outil d'édition — jamais en
+réécrivant le fichier entier.
+
+Le rapport suit cet ordre :
 
 1. **Objet et périmètre** — la machine, la collecte, les règles employées avec
    leur date de version, et la phrase sur les comptes (ci-dessus).
@@ -157,7 +182,8 @@ Trois interdits sur cette table :
    conclusions.
 3. **Manquements établis** — un tableau : règle, constat, compte ou poste,
    date si elle est connue, identifiants `C0014` et `F0123`. Rien ici sans
-   règle en face.
+   règle en face. Le brouillon l'appelle « constats rattachés à une règle » :
+   c'est vous qui les confirmez un par un, et le titre change quand c'est fait.
 4. **Observations sans règle correspondante** — les mauvaises pratiques que la
    charte ne couvre pas. Ni accusation ni silence : une matière pour la
    prochaine version de la charte.
