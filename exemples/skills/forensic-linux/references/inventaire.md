@@ -23,7 +23,8 @@ du rapport.
 | identité unique | `/etc/machine-id` | `SYSTEME/…_installation.tar.gz` | oui | relie au dossier du journal systemd |
 | numéro de série matériel | — | — | — | **aucune pièce** : il faut le BIOS (`dmidecode`), machine allumée |
 | date d'installation | journaux anaconda / installer | `SYSTEME/…_installation.tar.gz` | oui, par la **date du membre dans l'archive** | la plus sûre : tar conserve la date, que le contenu ne porte pas |
-| date d'installation (à défaut) | plus ancien paquet | `PAQUETS/…_paquets.txt` | oui | fausse si le système a été migré |
+| date d'installation (Debian, Ubuntu) | 1ʳᵉ ligne de `var/log/dpkg.log` | `PAQUETS/…_historique.tar.gz` | oui | `dpkg-query -l` ne date **rien** : c'est ici que ça se lit |
+| date d'installation (à défaut) | plus ancien paquet `rpm -qa --last` | `PAQUETS/…_paquets.txt` | oui | RPM seulement ; fausse si le système a été migré |
 | dernier arrêt | `wtmp` | `CONNEXIONS/…_reboots.txt`, `wtmp` | oui | un arrêt brutal n'écrit rien |
 | fuseau, horloge RTC | `/etc/localtime`, `/etc/adjtime` | `SYSTEME/` | oui | |
 
@@ -35,6 +36,9 @@ du rapport.
 | comptes du domaine | cache SSSD | `COMPTES/…_domaine.tar.gz` → `var/lib/sss/db` | oui | **indispensable** : `/etc/passwd` ne les a pas |
 | sessions ouvertes | `wtmp` **et ses rotations** | texte de `last`, **ou les binaires** | oui | la collecte prend `wtmp`, `wtmp.1` **et** `wtmp-20190901` : les deux styles de rotation, donc des mois d'historique en plus |
 | échecs | `btmp` et ses rotations | texte de `lastb`, **ou les binaires** | oui | souvent vide ou désactivé |
+| SSH, sudo, su (Debian, Ubuntu) | `var/log/auth.log` | `JOURNAUX/…_var_log.tar.gz` | oui | **la ligne syslog n'a pas d'année** : elle est déduite de la date du fichier, et le fait est marqué « forte », pas « certaine » |
+| SSH, sudo, su (RHEL ancien) | `var/log/secure` | idem | oui | même remarque sur l'année |
+| SSH, sudo, su (Fedora, RHEL récent) | journal systemd | `JOURNAUX/…_journal.txt` | oui | date complète, avec fuseau |
 | dernière connexion | `lastlog`, `lastlog2.db` | `CONNEXIONS/` | oui (binaire 292 o et sqlite) | écrasée à chaque fois |
 | sessions (Fedora 40+) | `wtmp.db` sqlite | `CONNEXIONS/wtmp.db` | oui | |
 | qui était au clavier | — | — | — | **aucune pièce ne le dit jamais** |
@@ -113,7 +117,19 @@ effaçable par son propriétaire.
 |---|---|---|
 | installés maintenant | `rpm -qa --last`, `dpkg -l` | oui |
 | **posés puis retirés** | `yum.log`, `dnf.log`, `history.sqlite` | oui — seule trace d'un paquet absent de la liste |
-| dépôts ajoutés | `etc/yum.repos.d`, `sources.list.d` | **collectés, non analysés** | un dépôt ajouté par un intrus s'y verrait |
+| dépôts ajoutés | `etc/yum.repos.d`, `sources.list.d`, `etc/zypp/repos.d` | **collectés, non analysés** | un dépôt ajouté par un intrus s'y verrait |
+| commandes apt datées | blocs `Start-Date`/`Commandline` de `apt/history.log` | oui | ce que l'administrateur a réellement tapé |
+| snap installés (Ubuntu) | `var/lib/snapd/state.json` | **collecté, non analysé** | révisions et dates d'installation |
+| flatpak installés | `var/lib/flatpak/repo/config` | **collecté, non analysé** | |
+| paquets zypper (openSUSE) | `var/log/zypp/history` | collecté, retraits lus | |
+
+## La posture de sécurité
+
+| question | trace | pièce | lu |
+|---|---|---|---|
+| pare-feu | `firewalld`, `ufw`, `iptables`, `nftables` | `RESEAU/…_reseau.tar.gz` | **collecté, non analysé** |
+| SELinux (Fedora, RHEL) | `etc/selinux/config` | `COMPTES/…_droits.tar.gz` | **collecté, non analysé** |
+| AppArmor (Ubuntu, SUSE) | `etc/apparmor.d/` | idem | **collecté, non analysé** |
 
 ## Le disque
 

@@ -278,8 +278,17 @@ def machine(c):
                  "rpm -qa --last | head -n 1",
                  horodatage=lire_date(recent) or recent,
                  note="borne basse de la dernière utilisation administrative")
-        fait("machine", "paquets installés (nombre)", str(len(lignes)), c.rel(pk),
-             "wc -l")
+        # dpkg-query -l pose cinq lignes d'en-tête avant la liste : seules
+        # celles qui commencent par un état à deux lettres sont des paquets.
+        dpkg = [l for l in lignes if re.match(r'^[a-zA-Z]{2}\s+\S', l)]
+        if dpkg and not dates:
+            fait("machine", "paquets installés (nombre)", str(len(dpkg)), c.rel(pk),
+                 "compte des lignes d'état de dpkg-query -l",
+                 note="dpkg ne date pas les installations : voir le journal "
+                      "du gestionnaire pour les dates")
+        else:
+            fait("machine", "paquets installés (nombre)", str(len(lignes)), c.rel(pk),
+                 "wc -l")
 
 
 # ── 2 · comptes et domaine ────────────────────────────────────────────
@@ -548,20 +557,42 @@ RE_ISO = re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+\-]\d{4})\s+(\S+)\s+(.*)
 RE_SYSLOG = re.compile(r'^(\w{3})\s+(\d{1,2})\s+(\d\d:\d\d:\d\d)\s+(\S+)\s+(.*)$')
 
 
-def _ligne_journal(ligne):
-    """(horodatage ISO ou None, reste de la ligne)."""
+def _ligne_journal(ligne, fin_fichier=None):
+    """(horodatage ISO ou None, reste de la ligne, année devinée ?).
+
+    Une ligne syslog — « Jan  8 14:02:11 poste sshd[900]: … » — ne porte PAS
+    l'année. Sans elle, la ligne n'est pas datable, et c'est le format
+    principal de Debian, d'Ubuntu et de RHEL avant le tout-journal.
+    On prend alors l'année qui place la ligne juste avant la dernière écriture
+    du fichier : logrotate garantit qu'un journal couvre moins d'un an, donc
+    une seule année convient. C'est une déduction, elle est marquée comme telle.
+    """
     m = RE_ISO.match(ligne)
     if m:
-        return m.group(1), m.group(3)
+        return m.group(1), m.group(3), False
     m = RE_SYSLOG.match(ligne)
-    if m:
-        return None, m.group(5)
-    return None, ligne
+    if not m:
+        return None, ligne, False
+    if fin_fichier is None:
+        return None, m.group(5), False
+    mois = MOIS_NOMS.get(_plier(m.group(1)))
+    if not mois:
+        return None, m.group(5), False
+    h, mn, sec = (int(x) for x in m.group(3).split(":"))
+    for annee in (fin_fichier.year, fin_fichier.year - 1):
+        try:
+            d = datetime(annee, mois, int(m.group(2)), h, mn, sec,
+                         tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if d <= fin_fichier:
+            return d.isoformat().replace("+00:00", "Z"), m.group(5), True
+    return None, m.group(5), False
 
 
-def journal(c, source_rel, contenu, methode):
+def journal(c, source_rel, contenu, methode, fin_fichier=None):
     for ligne in contenu.splitlines():
-        ts, reste = _ligne_journal(ligne)
+        ts, reste, devine = _ligne_journal(ligne, fin_fichier)
         for categorie, quoi, motif, tire in MOTIFS_JOURNAL:
             m = motif.search(reste)
             if not m:
@@ -569,7 +600,10 @@ def journal(c, source_rel, contenu, methode):
             acteur, detail = tire(m)
             fait(categorie, quoi, detail, source_rel, methode,
                  horodatage=ts, acteur=acteur,
-                 note=None if ts else "date relevée dans la ligne brute")
+                 confiance="forte" if devine else "certaine",
+                 note="année déduite de la date du fichier : la ligne syslog "
+                      "ne la porte pas" if devine else
+                      (None if ts else "ligne sans date exploitable"))
             break
 
 
@@ -582,8 +616,11 @@ def journaux(c):
     if tarlog:
         interessants = ("secure", "auth.log", "messages", "syslog", "dmesg",
                         "boot.log", "cron", "audit", "maillog", "yum.log")
+        dates = c.dates_tar(tarlog)
         for nom, blob in c.membres_tar(tarlog):
             base = os.path.basename(nom)
+            fin = (datetime.fromtimestamp(dates[nom], timezone.utc)
+                   if dates.get(nom) else None)
             if not any(base.startswith(i) for i in interessants):
                 continue
             if nom.endswith((".gz", ".xz", ".lzma", ".bz2", ".zst")):
@@ -596,7 +633,7 @@ def journaux(c):
                     continue
                 blob = clair
             journal(c, f"{c.rel(tarlog)} → {nom}",
-                    blob.decode("utf-8", "replace"), "tar -xO, puis motifs")
+                    blob.decode("utf-8", "replace"), "tar -xO, puis motifs", fin)
 
 
 # ── 5 · réseau ────────────────────────────────────────────────────────
@@ -884,11 +921,35 @@ def historique_paquets(c):
             if clair is None:
                 continue
             blob = clair
-        for l in blob.decode("utf-8", "replace").splitlines():
+        txt = blob.decode("utf-8", "replace")
+        # dpkg.log commence chaque ligne par « AAAA-MM-JJ HH:MM:SS » : la plus
+        # ancienne date la pose du système, que dpkg-query -l ne donne pas.
+        if base.startswith("dpkg.log"):
+            horos = re.findall(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)', txt, re.M)
+            if horos:
+                vieux = min(horos)
+                fait("machine", "installation du système (plus ancienne ligne de dpkg.log)",
+                     vieux, f"{c.rel(t)} → {nom}", "première date de var/log/dpkg.log",
+                     horodatage=vieux.replace(" ", "T"), confiance="forte",
+                     note="sur Debian et Ubuntu, dpkg-query -l ne date rien : "
+                          "c'est ici que la pose du système se lit")
+        if base.startswith("history.log"):
+            for bloc in txt.split("Start-Date:"):
+                d = re.match(r'\s*(\d{4}-\d\d-\d\d)\s+(\d\d:\d\d:\d\d)', bloc)
+                cmd = re.search(r'^Commandline:\s*(.+)$', bloc, re.M)
+                if d and cmd:
+                    fait("paquet", "commande du gestionnaire de paquets",
+                         cmd.group(1).strip(), f"{c.rel(t)} → {nom}",
+                         "blocs Start-Date/Commandline de apt/history.log",
+                         horodatage=f"{d.group(1)}T{d.group(2)}")
+            continue
+        for l in txt.splitlines():
             if re.search(r'\b(Erased|Removed|remove|purge)\b', l):
+                m = re.match(r'^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)', l)
                 fait("paquet", "paquet retiré", l.strip()[:160],
                      f"{c.rel(t)} → {nom}",
                      "grep 'Erased|remove' dans le journal du gestionnaire",
+                     horodatage=f"{m.group(1)}T{m.group(2)}" if m else None,
                      confiance="forte",
                      note="absent de la liste des paquets installés : seule trace")
 
