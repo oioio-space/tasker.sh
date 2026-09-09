@@ -10,7 +10,8 @@ recoupement et le jugement sont le travail du rapport.
 Bibliothèque standard seulement. La collecte n'est jamais modifiée : les
 archives sont lues en flux, jamais dépaquetées sur place.
 """
-import argparse, gzip, hashlib, io, json, os, re, sqlite3, sys, tarfile, tempfile
+import argparse, bz2, gzip, hashlib, io, json, lzma, os, re, sqlite3, sys, tarfile, tempfile
+import struct
 from datetime import datetime, timezone
 
 FAITS = []
@@ -78,7 +79,10 @@ class Collecte:
                     fh = t.extractfile(m)
                     if fh is None:
                         continue
-                    yield m.name.lstrip("./"), fh.read()
+                    # lstrip("./") mangerait le point d'un fichier caché :
+                    # « ./.viminfo » deviendrait « viminfo ».
+                    nom = m.name[2:] if m.name.startswith("./") else m.name
+                    yield nom, fh.read()
         except (tarfile.TarError, OSError, EOFError) as e:
             print(f"  ! archive illisible {os.path.basename(archive)} : {e}",
                   file=sys.stderr)
@@ -308,8 +312,10 @@ def comptes(c):
 
 
 def _last(c, chemin, categorie, quoi, methode):
+    """Rend le nombre de lignes retenues : zéro appelle le lecteur binaire."""
     if not chemin:
-        return
+        return 0
+    poses = 0
     for ligne in c.texte(chemin).splitlines():
         if not ligne.strip() or ligne.startswith(("wtmp begins", "btmp begins")):
             continue
@@ -328,15 +334,104 @@ def _last(c, chemin, categorie, quoi, methode):
             note += f", fin {lire_date(g['fin']) or g['fin']}"
         fait(categorie, quoi, acteur, c.rel(chemin), methode,
              horodatage=iso or g["debut"], acteur=acteur, note=note)
+        poses += 1
+    return poses
+
+
+def _utmp_brut(c, nom_fichier, categorie, quoi_defaut):
+    """Lit le wtmp ou le btmp COPIÉ, quand aucune sortie texte n'existe.
+
+    La collecte fait tourner « last » quand il est là ; si l'image n'avait pas
+    de wtmp, ou si l'outil manquait, seul le binaire est arrivé. Le lire ici
+    rend l'analyse indépendante de ce qui tournait au moment de la collecte —
+    et donne des dates en epoch, donc sans locale ni année à deviner.
+    """
+    chemin = os.path.join(c.racine, "CONNEXIONS", nom_fichier)
+    if not os.path.isfile(chemin):
+        return 0
+    with open(chemin, "rb") as fh:
+        blob = fh.read()
+    c.lus.add(chemin)
+    lignes = lire_utmp(blob)
+    if not lignes and blob:
+        fait("limite", f"{nom_fichier} illisible", f"{len(blob)} octets",
+             c.rel(chemin), "lecture du struct utmp (384 octets)",
+             confiance="à vérifier",
+             note="taille non multiple de 384 : autre architecture, ou fichier tronqué")
+        return 0
+    for e in lignes:
+        note = f"tty {e['tty']}" if e["tty"] else ""
+        if e["ou"]:
+            note += f", depuis {e['ou']}"
+        if e["type"] == 8:
+            note = (note + ", " if note else "") + \
+                "fin de la session ouverte sur ce terminal"
+        fait(categorie, e["quoi"] if e["type"] != 7 else quoi_defaut,
+             e["qui"] or e["tty"] or e["quoi"], c.rel(chemin),
+             "lecture directe du binaire (struct utmp)",
+             horodatage=e["quand"], acteur=e["qui"] or None,
+             note=note or None)
+    return len(lignes)
+
+
+def _bases_connexion(c):
+    """lastlog2.db et wtmp.db : du sqlite, depuis Fedora 40 et Debian 13."""
+    for chemin in c.chercher(".db", "CONNEXIONS"):
+        if chemin.endswith(".txt"):
+            continue
+        with open(chemin, "rb") as fh:
+            blob = fh.read()
+        c.lus.add(chemin)
+        base = os.path.basename(chemin)
+        for nom_table, lignes in _sqlite_lire(blob, [
+                ("wtmp", "SELECT User, Login, Logout, TTY, RemoteHost FROM wtmp"),
+                ("lastlog2", "SELECT Name, Time, TTY, RemoteHost FROM Lastlog2")]):
+            for l in lignes:
+                qui, quand = l[0], l[1]
+                iso = (datetime.fromtimestamp(quand, timezone.utc).isoformat()
+                       .replace("+00:00", "Z")) if isinstance(quand, (int, float)) and quand else None
+                detail = f"tty {l[3]}" if len(l) > 3 and l[3] else ""
+                if len(l) > 4 and l[4]:
+                    detail += f", depuis {l[4]}"
+                fait("evenement",
+                     "ouverture de session" if nom_table == "wtmp"
+                     else "dernière connexion du compte",
+                     qui, c.rel(chemin), f"sqlite3 sur la table {nom_table} de {base}",
+                     horodatage=iso, acteur=qui, note=detail or None)
 
 
 def sessions(c):
-    _last(c, c.un("_sessions.txt", "CONNEXIONS"), "evenement",
-          "ouverture de session", "last -F -f wtmp")
-    _last(c, c.un("_echecs.txt", "CONNEXIONS"), "evenement",
-          "échec d'authentification", "lastb -F -f btmp")
+    if not _last(c, c.un("_sessions.txt", "CONNEXIONS"), "evenement",
+                 "ouverture de session", "last -F -f wtmp"):
+        _utmp_brut(c, "wtmp", "evenement", "ouverture de session")
+    if not _last(c, c.un("_echecs.txt", "CONNEXIONS"), "evenement",
+                 "échec d'authentification", "lastb -F -f btmp"):
+        _utmp_brut(c, "btmp", "evenement", "échec d'authentification")
     _last(c, c.un("_reboots.txt", "CONNEXIONS"), "evenement",
           "démarrage ou arrêt de la machine", "last -F -x -f wtmp reboot shutdown")
+    _bases_connexion(c)
+
+    # lastlog n'a pas de forme texte dans la collecte : il se lit ici ou nulle
+    # part. Les uid viennent du passwd emporté à côté.
+    ll = os.path.join(c.racine, "CONNEXIONS", "lastlog")
+    if os.path.isfile(ll):
+        noms = {}
+        p = c.un("passwd", "COMPTES")
+        if p:
+            for l in c.texte(p).splitlines():
+                ch = l.split(":")
+                if len(ch) > 2 and ch[2].isdigit():
+                    noms[int(ch[2])] = ch[0]
+        with open(ll, "rb") as fh:
+            blob = fh.read()
+        c.lus.add(ll)
+        for e in lire_lastlog(blob, noms):
+            note = f"tty {e['tty']}" if e["tty"] else ""
+            if e["ou"]:
+                note += f", depuis {e['ou']}"
+            fait("evenement", "dernière connexion du compte", e["qui"], c.rel(ll),
+                 "lecture directe du binaire (struct lastlog, 292 octets)",
+                 horodatage=e["quand"], acteur=e["qui"], note=note or None)
 
 
 # ── 4 · le journal systemd et /var/log ────────────────────────────────
@@ -406,16 +501,20 @@ def journaux(c):
     tarlog = c.un("_var_log.tar.gz", "JOURNAUX")
     if tarlog:
         interessants = ("secure", "auth.log", "messages", "syslog", "dmesg",
-                        "boot.log", "cron")
+                        "boot.log", "cron", "audit", "maillog", "yum.log")
         for nom, blob in c.membres_tar(tarlog):
             base = os.path.basename(nom)
             if not any(base.startswith(i) for i in interessants):
                 continue
-            if nom.endswith(".gz"):
-                try:
-                    blob = gzip.decompress(blob)
-                except OSError:
+            if nom.endswith((".gz", ".xz", ".lzma", ".bz2", ".zst")):
+                clair = decomprimer(nom, blob)
+                if clair is None:
+                    fait("limite", "journal tourné non décompressé", nom,
+                         f"{c.rel(tarlog)} → {nom}", "compresseur non disponible",
+                         confiance="à vérifier",
+                         note="son contenu n'est PAS dans l'analyse")
                     continue
+                blob = clair
             journal(c, f"{c.rel(tarlog)} → {nom}",
                     blob.decode("utf-8", "replace"), "tar -xO, puis motifs")
 
@@ -525,6 +624,13 @@ def navigation(c):
         compte = m.group(1) if m else "?"
         for nom, blob in c.membres_tar(prof):
             base = os.path.basename(nom)
+            if base.endswith(("-wal", "-journal")) and len(blob) > 32:
+                fait("limite", "base de navigateur copiée à chaud", nom,
+                     f"{c.rel(prof)} → {nom}", "présence d'un fichier -wal non vide",
+                     acteur=compte, confiance="à vérifier",
+                     note="les visites les plus récentes sont dans ce journal, "
+                          "pas dans la base : elles manquent à l'analyse")
+                continue
             if base == "places.sqlite":
                 jeu, outil = REQ_FIREFOX, "Firefox"
             elif base == "History" and ("chrom" in nom.lower() or "Default" in nom):
@@ -609,6 +715,24 @@ def persistance(c):
                 fait("usage", "historique de commandes présent",
                      f"{len(txt.splitlines())} lignes", f"{c.rel(art)} → {nom}",
                      "wc -l sur l'historique du shell", acteur=compte)
+            elif base == "known_hosts":
+                for l in txt.splitlines():
+                    if not l.strip() or l.startswith("#"):
+                        continue
+                    hote = l.split()[0]
+                    hache = hote.startswith("|1|")
+                    fait("reseau", "hôte SSH contacté depuis ce compte",
+                         "empreinte masquée" if hache else hote,
+                         f"{c.rel(art)} → {nom}", "cut -d' ' -f1 .ssh/known_hosts",
+                         acteur=compte, confiance="à vérifier" if hache else "forte",
+                         note="HashKnownHosts : le nom de l'hôte est illisible"
+                              if hache else None)
+            elif base == ".viminfo":
+                for m in re.finditer(r'^[:>]\s*e?\s*(/\S+)', txt, re.M):
+                    fait("usage", "fichier ouvert dans vim", m.group(1),
+                         f"{c.rel(art)} → {nom}", "grep des chemins dans .viminfo",
+                         acteur=compte,
+                         note="viminfo garde le chemin même après suppression")
             elif base == "authorized_keys" and txt.strip():
                 for l in txt.splitlines():
                     if l.strip() and not l.startswith("#"):
@@ -617,6 +741,44 @@ def persistance(c):
                              "cat .ssh/authorized_keys", acteur=compte,
                              confiance="certaine",
                              note="permet une entrée sans mot de passe")
+
+
+def historique_paquets(c):
+    """Les journaux du gestionnaire : ce qui a été posé PUIS RETIRÉ.
+
+    « rpm -qa » ne montre que ce qui est installé au moment de la collecte. Un
+    paquet posé pour l'occasion puis effacé n'y est plus — il est ici.
+    """
+    t = c.un("_historique.tar.gz", "PAQUETS")
+    if not t:
+        return
+    for nom, blob in c.membres_tar(t):
+        base = os.path.basename(nom)
+        if base.endswith((".sqlite", ".sqlite3")):
+            for table, lignes in _sqlite_lire(blob, [
+                    ("trans", "SELECT dt_begin, cmdline FROM trans ORDER BY dt_begin DESC LIMIT 200"),
+                    ("trans (dnf5)", "SELECT dt_start, cmdline FROM trans ORDER BY dt_start DESC LIMIT 200")]):
+                for quand, ligne in lignes:
+                    iso = None
+                    if isinstance(quand, (int, float)) and quand:
+                        iso = (datetime.fromtimestamp(quand, timezone.utc)
+                               .isoformat().replace("+00:00", "Z"))
+                    fait("paquet", "commande du gestionnaire de paquets", ligne,
+                         f"{c.rel(t)} → {nom}",
+                         f"sqlite3 sur la table {table} de {base}", horodatage=iso)
+            continue
+        if nom.endswith((".gz", ".xz", ".lzma", ".bz2", ".zst")):
+            clair = decomprimer(nom, blob)
+            if clair is None:
+                continue
+            blob = clair
+        for l in blob.decode("utf-8", "replace").splitlines():
+            if re.search(r'\b(Erased|Removed|remove|purge)\b', l):
+                fait("paquet", "paquet retiré", l.strip()[:160],
+                     f"{c.rel(t)} → {nom}",
+                     "grep 'Erased|remove' dans le journal du gestionnaire",
+                     confiance="forte",
+                     note="absent de la liste des paquets installés : seule trace")
 
 
 def supprimes(c):
@@ -660,6 +822,85 @@ def timeline(c):
 
 
 # ── mise en ordre ─────────────────────────────────────────────────────
+def decomprimer(nom, blob):
+    """Le contenu d'un journal tourné, quel que soit son compresseur.
+
+    logrotate emploie gzip par défaut, mais xz et bzip2 se rencontrent, et
+    zstd sur les distributions récentes. Rend None si on ne sait pas ouvrir :
+    l'appelant en fait un fait, pour que le silence ne passe pas pour une
+    absence de preuve.
+    """
+    try:
+        if nom.endswith(".gz"):
+            return gzip.decompress(blob)
+        if nom.endswith((".xz", ".lzma")):
+            return lzma.decompress(blob)
+        if nom.endswith(".bz2"):
+            return bz2.decompress(blob)
+        if nom.endswith(".zst"):
+            try:
+                from compression import zstd            # Python 3.14+
+                return zstd.decompress(blob)
+            except ImportError:
+                try:
+                    import zstandard                    # si le paquet est là
+                    return zstandard.ZstdDecompressor().stream_reader(
+                        io.BytesIO(blob)).read()
+                except ImportError:
+                    return None
+    except (OSError, EOFError, lzma.LZMAError, ValueError):
+        return None
+    return blob
+
+
+# ── les fichiers de connexion en binaire ─────────────────────────────
+# struct utmp (Linux, 64 bits) : 384 octets. ut_type tient sur un short
+# suivi de deux octets de bourrage — un int32 les lit d'un coup.
+UTMP = struct.Struct("<ii32s4s32s256shhiii16s20s")
+UTMP_TYPE = {1: "changement de niveau d'exécution", 2: "démarrage de la machine",
+             5: "service lancé", 6: "invite de connexion",
+             7: "ouverture de session", 8: "fermeture de session"}
+# struct lastlog : 292 octets, indexé par uid.
+LASTLOG = struct.Struct("<i32s256s")
+
+
+def _txt(champ):
+    return champ.split(b"\x00", 1)[0].decode("utf-8", "replace").strip()
+
+
+def lire_utmp(blob):
+    """Les enregistrements d'un wtmp ou d'un btmp. Rien si la taille ne colle pas."""
+    if not blob or len(blob) % UTMP.size:
+        return []
+    sorties = []
+    for pos in range(0, len(blob), UTMP.size):
+        (typ, _pid, ligne, _id, user, host, _t, _e, _s,
+         sec, _usec, _addr, _libre) = UTMP.unpack_from(blob, pos)
+        if typ not in UTMP_TYPE or not sec:
+            continue
+        sorties.append({"type": typ, "quoi": UTMP_TYPE[typ], "tty": _txt(ligne),
+                        "qui": _txt(user), "ou": _txt(host),
+                        "quand": datetime.fromtimestamp(sec, timezone.utc)
+                                         .isoformat().replace("+00:00", "Z")})
+    return sorties
+
+
+def lire_lastlog(blob, noms_par_uid):
+    """La dernière connexion de chaque compte. Une entrée de 292 octets par uid."""
+    if not blob or len(blob) % LASTLOG.size:
+        return []
+    sorties = []
+    for uid in range(len(blob) // LASTLOG.size):
+        sec, ligne, host = LASTLOG.unpack_from(blob, uid * LASTLOG.size)
+        if not sec:
+            continue
+        sorties.append({"uid": uid, "qui": noms_par_uid.get(uid, f"uid {uid}"),
+                        "tty": _txt(ligne), "ou": _txt(host),
+                        "quand": datetime.fromtimestamp(sec, timezone.utc)
+                                         .isoformat().replace("+00:00", "Z")})
+    return sorties
+
+
 def empreinte(chemin, taille_bloc=1 << 20):
     """SHA-256 d'un fichier, lu par blocs."""
     h = hashlib.sha256()
@@ -712,6 +953,7 @@ def main():
     for etape, fn in (("machine", machine), ("comptes et domaine", comptes),
                       ("sessions", sessions), ("journaux", journaux),
                       ("réseau", reseau), ("navigation", navigation),
+                      ("historique des paquets", historique_paquets),
                       ("persistance", persistance), ("supprimés", supprimes),
                       ("timeline", timeline)):
         avant = len(FAITS)

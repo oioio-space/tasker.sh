@@ -33,6 +33,19 @@ Le même, pour les **échecs** d'authentification. Se lit avec `lastb`.
   compte existant : `admin` dans `btmp` ne veut pas dire qu'un compte `admin`
   existe.
 
+### Le format binaire, et pourquoi il est lu directement
+`wtmp` et `btmp` sont des suites d'enregistrements de **384 octets**
+(`struct utmp`, Linux 64 bits) ; `lastlog`, de **292 octets** indexés par uid.
+La collecte les copie **et** en tire une version texte avec `last`. L'analyse
+lit le texte quand il est là, le binaire sinon — donc même si `last` manquait
+au moment de la collecte, ou si l'image n'avait que le binaire.
+
+Le binaire a un avantage : ses dates sont des **epoch**, sans langue ni année à
+deviner. Elles sont rendues en **UTC**, suffixées d'un `Z`.
+
+Un fichier dont la taille n'est pas un multiple de 384 est signalé comme
+illisible plutôt qu'ignoré : autre architecture, ou fichier tronqué.
+
 ### `lastlog` / `lastlog2.db`
 La **dernière** connexion de chaque compte, une entrée par compte, écrasée à
 chaque fois. `lastlog` est binaire et indexé par uid ; sur Fedora 40 et Debian
@@ -116,6 +129,13 @@ visionneuses). XML, avec les dates d'ajout et de modification.
 
 ---
 
+### `wtmp.db` (wtmpdb) et `lastlog2.db`
+Depuis Fedora 40 et Debian 13, ces bases **SQLite** remplacent les binaires.
+`wtmp.db` a une table `wtmp` (User, Login, Logout, TTY, RemoteHost),
+`lastlog2.db` une table `Lastlog2` (Name, Time, TTY, RemoteHost). Dates en
+epoch. La collecte les copie et les vide aussi en texte ; l'analyse lit la
+base, plus fidèle qu'un dump SQL.
+
 ## Les navigateurs
 
 ### `places.sqlite` (Firefox)
@@ -131,6 +151,11 @@ Base SQLite du profil Firefox, dans `.mozilla/firefox/<aléatoire>.default*/`.
   pas la première. `moz_historyvisits` garde le détail — utilisez-la si elle est
   présente.
 - **Piège** : l'historique peut avoir été vidé ; le fichier existe alors, vide.
+- **Piège majeur** : un fichier `places.sqlite-wal` **non vide** à côté signifie
+  que le navigateur tournait quand l'image a été prise. Les visites les plus
+  récentes sont dans ce journal d'écriture, **pas dans la base** — et l'analyse
+  ne les voit pas. Le cas est signalé comme une limite, jamais passé sous
+  silence. Même chose pour un `-journal` à côté d'un `History` Chrome.
 
 ### `History` (Chrome / Chromium / Edge)
 Base SQLite, dans `.config/google-chrome/Default/` ou `.config/chromium/Default/`.
@@ -276,6 +301,14 @@ La sortie de `rpm -qa --last` ou `dpkg-query -l`.
 - **Piège** : les dates sont écrites dans la **langue du poste collecteur**
   (« mar. 27 août 2019 »). L'extracteur les lit sans dépendre de la locale ;
   si vous lisez le fichier à la main, n'en soyez pas surpris.
+
+### Les journaux tournés : `.gz`, `.xz`, `.bz2`, `.zst`
+`logrotate` comprime les anciens journaux. `gzip` est le défaut, mais `xz` et
+`bzip2` se rencontrent, et `zstd` sur les distributions récentes. Les trois
+premiers s'ouvrent avec la bibliothèque standard de Python ; `zstd` demande
+Python 3.14 ou le paquet `zstandard`. Quand un journal ne peut pas être ouvert,
+c'est **écrit comme une limite** — un journal non lu ne doit jamais passer pour
+un journal sans rien dedans.
 
 ### `PREFIX_historique.tar.gz`
 Les journaux du gestionnaire de paquets : `yum.log`, `dnf.log`,
