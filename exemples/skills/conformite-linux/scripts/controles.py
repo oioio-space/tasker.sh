@@ -300,7 +300,26 @@ def _garde_reseau(nom):
     base = os.path.basename(nom)
     return (base in ("sshd_config", "ufw.conf", "timestamps")
             or "system-connections" in nom or "network-scripts" in nom
+            or "wpa_supplicant" in nom or "/iwd/" in nom or "netplan" in nom
             or RE_PARE_FEU.search(nom) is not None)
+
+
+def _ssids_ailleurs(nom, base, txt):
+    """Les SSID que wpa_supplicant, iwd et netplan connaissent — sans date."""
+    if "wpa_supplicant" in nom and base.endswith(".conf"):
+        return re.findall(r'^\s*ssid\s*=\s*"?([^"\n]+)"?', txt, re.M)
+    if "/iwd/" in nom and base.endswith((".psk", ".open", ".8021x")):
+        ssid = base.rsplit(".", 1)[0]
+        if ssid.startswith("="):
+            try:
+                ssid = bytes.fromhex(ssid[1:]).decode("utf-8", "replace")
+            except ValueError:
+                pass
+        return [ssid]
+    if "netplan" in nom and base.endswith((".yaml", ".yml")):
+        return [m.group(1).strip() for bloc in re.split(r'^\s*access-points:\s*$', txt, flags=re.M)[1:]
+                for m in re.finditer(r'^\s{2,}"?([^"\s:][^":\n]*)"?:\s*$', bloc, re.M)]
+    return []
 
 
 def reseau(c):
@@ -337,6 +356,10 @@ def reseau(c):
         if base == "timestamps" and "NetworkManager" in nom:
             for m in RE_NM_DATE.finditer(txt):
                 dates[m.group(1).lower()] = int(m.group(2))
+        elif "wpa_supplicant" in nom or "/iwd/" in nom or "netplan" in nom:
+            for ssid in _ssids_ailleurs(nom, base, txt):
+                reseaux.append({"ssid": ssid.strip(), "id": None, "uuid": None,
+                                "acteur": None, "source": f"{c.rel(t)} → {nom}"})
         elif "system-connections" in nom or "network-scripts" in nom:
             m = RE_SSID.search(txt)
             ssid = m.group(1) if m else None

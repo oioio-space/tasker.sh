@@ -61,7 +61,7 @@ du rapport.
 | IP fixe | idem | idem | oui | |
 | IP obtenue | baux DHCP | idem | oui | **daté** : prouve que la machine était active |
 | DNS, passerelle | `resolv.conf`, `ifcfg` | idem | oui | |
-| réseaux Wi-Fi | `ssid=` des profils NM | idem | oui | prouve une association, sans date |
+| réseaux Wi-Fi | `ssid=` des profils NM, `wpa_supplicant.conf`, profils `iwd`, netplan | idem | oui | seule NM date la dernière association (`var/lib/NetworkManager/timestamps`) ; les autres disent « connu », pas « quand » |
 | hôtes SSH contactés | `.ssh/known_hosts` | `COMPTES/…_artefacts.tar.gz` | oui | souvent **haché** : nom illisible |
 | trafic réseau | — | — | — | **aucune capture dans la collecte** |
 

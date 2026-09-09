@@ -247,6 +247,32 @@ la collecte entre les deux lectures — c'est un fait en soi, et grave. Le même
 test vaut pour `controles.py` et pour les deux `brouillon.py` : à faits
 identiques, brouillons identiques.
 
+### Les distributions
+
+La collecte et les deux skills sont vérifiés sur une **matrice de cinq
+familles**, chacune avec les pièces qui lui sont propres et sans celles qui
+n'existent pas chez elle :
+
+| famille | ce qui la distingue, et qui est testé |
+|---|---|
+| Fedora 40+ / RHEL récent | `rpm -qa --last` (en français), historique dnf5 en sqlite, `wtmp.db` et `lastlog2.db` (dates en microsecondes), journal systemd seul |
+| Debian 13+ / Ubuntu | `dpkg-query`, `dpkg.log` et `apt/history.log` (dont les tournés `.gz`), `wtmp.db`, `auth.log` sans année, `wpa_supplicant`, netplan |
+| openSUSE | `zypp/history` (commandes en `#`), base RPM `ndb` que `rpm` ne lit pas — la liste vide devient une limite, pas un « 0 paquet » |
+| Arch | `var/lib/pacman/local` (la pose datée par `%INSTALLDATE%`), `pacman.log`, profils `iwd` (SSID en hexadécimal compris) |
+| Alpine | `apk` (`lib/apk/db/installed`, `etc/apk/world`), ni `wtmp` ni journal systemd — l'extraction le dit **normal** au lieu de le compter manquant, syslog de busybox |
+
+    python3 tests/matrice.py /tmp/matrice        # cinq collectes synthétiques
+    for c in /tmp/matrice/*/ ; do python3 forensic-linux/scripts/extraire.py "$c" -o "$c.jsonl" ; done
+
+Chaque bloc du générateur dit ce que la famille doit donner. **Une pièce
+ajoutée à `collecte-linux.conf` se reflète dans `tests/matrice.py`, ou elle
+n'est pas testée** — c'est cette matrice qui a révélé que `wtmp.db` compte en
+microsecondes et que `zypp` note ses commandes en commentaire.
+
+Une seule collecte réelle a servi en plus : un CentOS 7. Les autres familles
+sont synthétiques — fidèles aux formats, pas à la vie d'un poste. La première
+collecte réelle de chaque famille mérite une relecture attentive des limites.
+
 Les deux `brouillon.py` partagent un bloc recopié — lecture du JSONL, tableau
 Markdown, horloge —, délimité par `# ── commun ──` et `# ── fin commun ──` :
 chaque skill doit rester installable seul, et le bloc doit rester identique.

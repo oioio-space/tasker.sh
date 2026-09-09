@@ -14,12 +14,13 @@ tel. Exemples :
 | pièce absente | ce que ça dit |
 |---|---|
 | `/var/log/secure`, `auth.log` | Fedora et dérivés récents n'installent pas rsyslog : tout est dans le journal systemd |
-| `/var/log/wtmp` | Fedora 40+, Debian 13+ : remplacé par `/var/lib/wtmpdb/wtmp.db` |
+| `/var/log/wtmp` | Fedora 40+, Debian 13+ : remplacé par `/var/lib/wtmpdb/wtmp.db` ; Alpine (musl) : n'existe pas du tout |
 | `/var/log/lastlog` | idem : remplacé par `/var/lib/lastlog/lastlog2.db` |
 | `/var/log/btmp` | souvent absent ou désactivé — n'en concluez **aucune** absence d'attaque |
 | `/etc/sssd`, `krb5.conf` | la machine n'était pas dans un domaine |
 | `/etc/adjtime` | fréquent ; ne dit rien de l'horloge |
-| `/var/log/journal` | journal en mémoire seulement (`Storage=volatile`) : **tout est perdu à l'extinction** |
+| `/var/log/journal` | journal en mémoire seulement (`Storage=volatile`) : **tout est perdu à l'extinction** ; Alpine, Devuan : pas de systemd, tout est dans `/var/log/messages` |
+| `rpm -qa --last` vide | openSUSE : base RPM au format `ndb`, que le `rpm` du poste d'analyse ne lit pas toujours — les poses sont dans `/var/log/zypp/history` |
 | `~/.bash_history` sur un compte qui a servi | effaçable par son propriétaire : c'est un fait notable |
 
 **La collecte l'a ratée.** Il faut y retourner. Les causes courantes :
@@ -95,15 +96,15 @@ besoin.
 | distribution | `/etc/os-release` |
 | fuseau | `/etc/localtime` (un lien dont la cible nomme le fuseau) |
 | identité, installation | `/etc/machine-id`, `/etc/adjtime`, `/etc/machine-info`, `/etc/crypttab`, `/var/lib/systemd/timesync/clock`, `/var/log/anaconda/`, `/var/log/installer/`, `/root/*-ks.cfg` |
-| paquets | `/var/lib/rpm` (copier avant de lire) ou `/var/lib/dpkg/status` |
-| historique des paquets | `/var/log/dpkg.log`, `/var/log/apt/`, `/var/log/yum.log`, `/var/log/dnf*.log`, `/var/lib/dnf/history.sqlite`, `/usr/lib/sysimage/libdnf5/`, `/var/log/zypp/history` |
+| paquets | `/var/lib/rpm` (copier avant de lire) ou `/var/lib/dpkg/status` ; `/var/lib/pacman/local` (Arch) ; `/lib/apk/db/installed` (Alpine) |
+| historique des paquets | `/var/log/dpkg.log`, `/var/log/apt/`, `/var/log/yum.log`, `/var/log/dnf*.log`, `/var/lib/dnf/history.sqlite`, `/usr/lib/sysimage/libdnf5/`, `/var/log/zypp/history`, `/var/log/pacman.log`, `/etc/apk/world` |
 | comptes | `/etc/passwd`, `/etc/group` |
 | droits | `/etc/shadow`, `/etc/sudoers`, `/etc/sudoers.d/`, `/etc/pam.d/`, `/etc/security/`, `/etc/login.defs`, `/etc/selinux/config`, `/etc/apparmor.d/` |
 | domaine | `/etc/sssd/`, `/etc/krb5.conf`, `/etc/krb5.keytab`, `/etc/samba/`, `/etc/openldap/`, `/var/lib/sss/db/` |
 | sessions, échecs | `/var/log/wtmp*`, `/var/log/btmp*`, `/var/log/lastlog`, `/var/lib/wtmpdb/wtmp.db`, `/var/lib/lastlog/lastlog2.db` |
 | journal systemd | `/var/log/journal/<machine-id>/*.journal` |
 | journaux texte | `/var/log/` en entier |
-| réseau | `/etc/NetworkManager/system-connections/`, `/etc/sysconfig/network-scripts/`, `/etc/netplan/`, `/etc/systemd/network/`, `/etc/resolv.conf`, `/etc/hosts`, `/etc/ssh/`, `/var/lib/NetworkManager/`, `/var/lib/dhclient/` |
+| réseau | `/etc/NetworkManager/system-connections/`, `/etc/sysconfig/network-scripts/`, `/etc/netplan/`, `/etc/systemd/network/`, `/etc/wpa_supplicant/`, `/var/lib/iwd/`, `/etc/resolv.conf`, `/etc/hosts`, `/etc/ssh/`, `/var/lib/NetworkManager/`, `/var/lib/dhclient/` |
 | pare-feu | `/etc/firewalld/`, `/etc/ufw/`, `/etc/iptables/`, `/etc/nftables.conf`, `/etc/sysconfig/iptables` |
 | persistance | `/etc/crontab`, `/etc/cron.*`, `/var/spool/cron/`, `/etc/systemd/system/`, `/usr/lib/systemd/system/`, `/etc/rc.local`, `/etc/profile.d/`, `/etc/ld.so.preload`, `/etc/udev/rules.d/` |
 | traces d'un compte | `~/.bash_history`, `~/.zsh_history`, `~/.viminfo`, `~/.lesshst`, `~/.ssh/` |
