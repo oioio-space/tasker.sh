@@ -8,7 +8,11 @@
     "",
     "Réglages tirés de la carte du modèle : temperature 1.0 et top_p 0.95 pour toutes les",
     "tâches ; le raisonnement s'active par chat_template_kwargs.enable_thinking ; contexte",
-    "natif 1M, servi par défaut à 262144 par vLLM. Voir README.md §Crush."
+    "natif 1M, servi par défaut à 262144 par vLLM. Voir README.md §9.",
+    "",
+    "Crush veut un modèle « large » et un « small » (les sous-agents, les résumés). Le DGX",
+    "n'en sert qu'un : small est donc le même, avec un budget de réponse plus court. Si un",
+    "second modèle est servi (un Nemotron Nano, par exemple), c'est ici qu'il se déclare."
   ],
 
   "providers": {

@@ -15,12 +15,115 @@ de faits.jsonl, ou --fuseau), y compris celles qui traînent dans une note.
 Le manifeste (constats-manifeste.json, à côté du fichier de constats) donne les
 règles employées et les empreintes. Sans lui, le §2 et l'annexe restent à faire.
 """
-import argparse, functools, json, os, re, sys
-from datetime import datetime
+import argparse, json, os, re, sys
+from datetime import datetime, timezone
 
-from controles import lire_faits as lire_jsonl
-
+# ── commun ── (identique dans forensic-linux et conformite-linux : chaque skill
+# s'installe seul, et le README dit comment vérifier que le bloc n'a pas dérivé)
 RE_ISO_UTC = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)')
+
+
+def lire_jsonl(chemin):
+    lignes = []
+    with open(chemin, encoding="utf-8") as fh:
+        for l in fh:
+            l = l.strip()
+            if l:
+                try:
+                    lignes.append(json.loads(l))
+                except json.JSONDecodeError:
+                    pass
+    return lignes
+
+
+def cellule(v, large=200):
+    """Une valeur dans une case : sans barre verticale ni retour à la ligne."""
+    if v is None or v == "":
+        return "—"
+    t = str(v).replace("|", "\\|").replace("\n", " ")
+    return t if len(t) <= large else t[:large - 1] + "…"
+
+
+def tableau(colonnes, lignes, large=200, borne=None, quoi="lignes", fichier="le fichier"):
+    if not lignes:
+        return "_aucune ligne_\n"
+    coupe = ""
+    if borne and len(lignes) > borne:
+        coupe = (f"\n_{len(lignes) - borne} {quoi} de plus ne sont pas dans ce tableau : "
+                 f"`grep` sur {fichier}, ou `--lignes` plus grand._\n")
+        lignes = lignes[:borne]
+    out = ["| " + " | ".join(colonnes) + " |", "|" + "---|" * len(colonnes)]
+    out += ["| " + " | ".join(cellule(x, large) for x in l) + " |" for l in lignes]
+    return "\n".join(out) + "\n" + coupe
+
+
+def a_rediger(quoi):
+    return f"> **À rédiger** — {quoi}\n"
+
+
+class Horloge:
+    """Lit un horodatage et le rend dans le fuseau du poste, sur une seule
+    échelle comparable. Convertit aussi les dates UTC qui traînent dans une
+    note, pour qu'un rapport ne mélange jamais deux fuseaux.
+
+    Trois formes existent : « …Z » (epoch, UTC), « …+01:00 » (journalctl), et
+    rien — une ligne syslog, dpkg.log : c'est l'heure du poste, recopiée telle
+    quelle et marquée ≈. Un jour seul (« 2026-01-03 ») reste un jour.
+    """
+
+    def __init__(self, nom):
+        self.nom, self.zone, self._cache = nom, None, {}
+        if nom:
+            try:
+                from zoneinfo import ZoneInfo
+                self.zone = ZoneInfo(nom)
+            except Exception:                                    # noqa: BLE001
+                print(f"  ! fuseau « {nom} » inconnu : dates laissées telles quelles",
+                      file=sys.stderr)
+
+    def lire(self, h):
+        """→ (datetime naïf comparable ou None, texte à afficher)."""
+        if h in self._cache:
+            return self._cache[h]
+        r = self._lire(h)
+        self._cache[h] = r
+        return r
+
+    def _lire(self, h):
+        if not h:
+            return None, "—"
+        h = str(h)
+        try:
+            d = datetime.fromisoformat(h.replace("Z", "+00:00"))
+        except ValueError:
+            return None, h
+        if len(h) == 10:
+            return d, h
+        if d.tzinfo is None:
+            return d, f"≈ {d.isoformat(sep=' ')}"
+        d = d.astimezone(self.zone or timezone.utc)
+        return d.replace(tzinfo=None), d.isoformat(sep=" ")
+
+    def quand(self, f):
+        return self.lire(f.get("horodatage") or f.get("date"))[1]
+
+    def cle(self, f):
+        return self.lire(f.get("horodatage") or f.get("date"))[0] or datetime.max
+
+    def tri(self, faits):
+        return sorted(faits, key=lambda f: (self.cle(f), f["id"]))
+
+    def texte(self, s):
+        """Les dates UTC d'une phrase, dans le fuseau du poste."""
+        if not s or not self.zone:
+            return s
+        return RE_ISO_UTC.sub(lambda m: self.lire(m.group(0))[1], str(s))
+
+
+def fuseau_des_faits(faits):
+    return next((f["valeur"] for f in faits if f.get("fait") == "fuseau horaire du poste"), None)
+# ── fin commun ──
+
 
 PHRASE_COMPTES = (
     "> Ce rapport désigne des **comptes** — des identités numériques. Il "
@@ -53,68 +156,6 @@ LEXIQUE = {
 }
 
 
-def cellule(v, large=200):
-    """Une valeur dans une case : sans barre verticale ni retour à la ligne."""
-    if v is None or v == "":
-        return "—"
-    t = str(v).replace("|", "\\|").replace("\n", " ")
-    return t if len(t) <= large else t[:large - 1] + "…"
-
-
-def tableau(colonnes, lignes, large=200, borne=None, quoi="lignes"):
-    if not lignes:
-        return "_aucune ligne_\n"
-    coupe = ""
-    if borne and len(lignes) > borne:
-        coupe = (f"\n_{len(lignes) - borne} {quoi} de plus ne sont pas dans ce tableau : "
-                 f"`grep` sur constats.jsonl, ou `--lignes` plus grand._\n")
-        lignes = lignes[:borne]
-    out = ["| " + " | ".join(colonnes) + " |", "|" + "---|" * len(colonnes)]
-    out += ["| " + " | ".join(cellule(x, large) for x in l) + " |" for l in lignes]
-    return "\n".join(out) + "\n" + coupe
-
-
-def a_rediger(quoi):
-    return f"> **À rédiger** — {quoi}\n"
-
-
-class Horloge:
-    """Écrit une date de constat dans le fuseau du poste — et celles qui
-    traînent dans une note, pour qu'un rapport ne mélange jamais deux fuseaux.
-    Une date sans fuseau (dpkg.log) est déjà dans l'heure du poste : ≈."""
-
-    def __init__(self, nom):
-        self.nom, self.zone = nom, None
-        if nom:
-            try:
-                from zoneinfo import ZoneInfo
-                self.zone = ZoneInfo(nom)
-            except Exception:                                    # noqa: BLE001
-                print(f"  ! fuseau « {nom} » inconnu : dates laissées telles quelles",
-                      file=sys.stderr)
-
-    @functools.lru_cache(maxsize=None)
-    def lire(self, h):
-        if not h:
-            return "—"
-        if len(str(h)) == 10:                                   # un jour seul
-            return str(h)
-        try:
-            d = datetime.fromisoformat(str(h).replace("Z", "+00:00"))
-        except ValueError:
-            return str(h)
-        if d.tzinfo is None:
-            return f"≈ {d.isoformat(sep=' ')}"
-        if self.zone:
-            d = d.astimezone(self.zone)
-        return d.isoformat(sep=" ")
-
-    def texte(self, s):
-        if not s or not self.zone:
-            return s
-        return RE_ISO_UTC.sub(lambda m: self.lire(m.group(0)), str(s))
-
-
 def qui(c):
     return c.get("acteur") or "poste"
 
@@ -141,21 +182,26 @@ def main():
     prefix = man.get("collecte") or "PREFIX"
     sortie = args.sortie or f"rapport-conformite-{prefix}.md"
     borne = args.lignes
-    fuseau = args.fuseau or next((f["valeur"] for f in faits
-                                  if f.get("fait") == "fuseau horaire du poste"), None)
-    H = Horloge(fuseau)
+    H = Horloge(args.fuseau or fuseau_des_faits(faits))
     T = H.texte
+
+    def table(colonnes, lignes, **kw):
+        return tableau(colonnes, lignes, borne=borne, fichier="constats.jsonl", **kw)
+
+    def date(c):
+        return H.lire(c.get("date"))[1]
 
     # une seule partition des constats, dont toutes les sections se servent
     regles = (man.get("regles") or {}).get("liste") or []
-    par_regle, libres, lim_regles, conformes, lim = {}, [], [], [], []
+    par_regle, libres, limites, conformes = {}, [], [], []
     for c in constats:
         if c["theme"] == "conforme":
             conformes.append(c)
         elif c["theme"] == "limite":
-            (lim_regles if c.get("regle") else lim).append(c)
+            limites.append(c)
         elif c.get("regle"):
-            par_regle.setdefault(c["regle"], []).append(c)
+            for rid in c.get("regles") or [c["regle"]]:
+                par_regle.setdefault(rid, []).append(c)
         else:
             libres.append(c)
 
@@ -167,7 +213,7 @@ def main():
     S.append("_Brouillon produit par `brouillon.py` : les tableaux viennent des "
              "constats, la prose est à écrire aux endroits marqués. Retirez "
              "cette ligne une fois le rapport rédigé._\n")
-    S.append(f"Les dates sont écrites dans le fuseau **{H.nom or 'des constats (non converti)'}** ; "
+    S.append(f"Les dates sont écrites dans le fuseau **{H.nom or 'UTC, faute de fuseau connu'}** ; "
              "≈ marque une date lue telle quelle dans une pièce qui n'écrit pas son fuseau.\n")
 
     # ── 0 ──
@@ -229,10 +275,9 @@ def main():
         if not vrais:
             S.append("_Aucun constat rattaché._\n")
             continue
-        S.append(tableau(["id", "compte / poste", "constat", "valeur", "date", "source"],
-                         [(c["id"], qui(c), c["constat"], T(c.get("valeur")),
-                           H.lire(c.get("date")), c.get("source")) for c in vrais],
-                         borne=borne, quoi="constats"))
+        S.append(table(["id", "compte / poste", "constat", "valeur", "date", "source"],
+                       [(c["id"], qui(c), c["constat"], T(c.get("valeur")), date(c), c.get("source"))
+                        for c in vrais], quoi="constats"))
         S.append(a_rediger(f"pour {rid}, une phrase par compte : ce qui est établi, "
                            "à quelle date, par quels constats et faits (C…, F…), "
                            "et la limite de l'indice recopiée depuis la note. "
@@ -246,9 +291,9 @@ def main():
         par_theme.setdefault(c["theme"], []).append(c)
     for th, liste in sorted(par_theme.items()):
         S.append(f"### {th}\n")
-        S.append(tableau(["id", "compte / poste", "constat", "valeur", "date", "question à la charte"],
-                         [(c["id"], qui(c), c["constat"], T(c.get("valeur")), H.lire(c.get("date")),
-                           c.get("question")) for c in liste], borne=borne, quoi="constats"))
+        S.append(table(["id", "compte / poste", "constat", "valeur", "date", "question à la charte"],
+                       [(c["id"], qui(c), c["constat"], T(c.get("valeur")), date(c), c.get("question"))
+                        for c in liste], quoi="constats"))
     if not libres:
         S.append("_Aucune._\n")
     S.append(a_rediger("si la charte fournie couvre l'une de ces observations, "
@@ -257,17 +302,16 @@ def main():
 
     # ── 5 ──
     S.append("## 5 · Règles non vérifiables avec cette collecte\n")
-    S.append(tableau(["règle", "ce qui n'a pas pu être cherché", "id"],
-                     [(c["regle"], c["constat"], c["id"]) for c in lim_regles], borne=borne))
+    S.append(table(["règle", "ce qui n'a pas pu être cherché", "id"],
+                   [(c["regle"], c["constat"], c["id"]) for c in limites if c.get("regle")]))
     S.append(a_rediger("les règles de la charte qu'aucune pièce ne peut vérifier "
                        "(session verrouillée, mot de passe partagé, prêt du poste…), "
                        "et ce qu'il faudrait collecter pour y répondre."))
 
     # ── 6 ──
     S.append("## 6 · Ce qui est conforme\n")
-    S.append(tableau(["règle", "résultat", "ce que cela ne prouve pas", "id"],
-                     [(c.get("regle"), c["constat"], c.get("note"), c["id"]) for c in conformes],
-                     borne=borne))
+    S.append(table(["règle", "résultat", "ce que cela ne prouve pas", "id"],
+                   [(c.get("regle"), c["constat"], c.get("note"), c["id"]) for c in conformes]))
     S.append(a_rediger("les bonnes pratiques observées (clé protégée, pare-feu "
                        "actif, mots de passe expirant…) — cherchez-les dans les "
                        "constats ; un rapport qui ne relève que le négatif se "
@@ -276,19 +320,18 @@ def main():
     # ── 7 ──
     S.append("## 7 · Limites\n")
     S.append("### Pièces et contrôles\n")
-    S.append(tableau(["id", "limite", "détail"],
-                     [(c["id"], c["constat"], c.get("note")) for c in lim], borne=borne))
+    S.append(table(["id", "limite", "détail"],
+                   [(c["id"], c["constat"], T(c.get("note"))) for c in limites if not c.get("regle")]))
     if faits:
         S.append("### Limites relevées par le skill forensic-linux\n")
-        S.append(tableau(["id", "limite", "valeur", "note"],
-                         [(f["id"], f["fait"], f.get("valeur"), T(f.get("note")))
-                          for f in faits if f.get("categorie") == "limite"], borne=borne))
+        S.append(table(["id", "limite", "valeur", "note"],
+                       [(f["id"], f["fait"], f.get("valeur"), T(f.get("note")))
+                        for f in faits if f.get("categorie") == "limite"]))
         indic = [f for f in faits if f.get("categorie") == "indicateur"]
         if indic:
             S.append("### Indicateurs cherchés par le skill forensic-linux\n")
-            S.append(tableau(["indicateur", "résultat", "où", "id"],
-                             [(f["valeur"], f["fait"], f["source"], f["id"]) for f in indic],
-                             borne=borne))
+            S.append(table(["indicateur", "résultat", "où", "id"],
+                           [(f["valeur"], f["fait"], f["source"], f["id"]) for f in indic]))
     S.append(a_rediger("les historiques non datés, les absences dont on ne sait pas "
                        "si elles viennent du système ou de la collecte (voir "
                        "PREFIX_rapport.txt de la collecte), et ce que chaque "
@@ -304,20 +347,25 @@ def main():
         ("pièces lues", len(man.get("pieces_lues") or {})),
     ]))
     S.append("### Pièces lues\n")
-    S.append(tableau(["pièce", "sha256", "octets"],
-                     [(p, v.get("sha256"), v.get("octets"))
-                      for p, v in sorted((man.get("pieces_lues") or {}).items())], borne=borne))
+    S.append(table(["pièce", "sha256", "octets"],
+                   [(p, v.get("sha256"), v.get("octets"))
+                    for p, v in sorted((man.get("pieces_lues") or {}).items())]))
     S.append("### Table des constats\n")
-    S.append(tableau(["id", "thème", "constat", "source", "méthode"],
-                     [(c["id"], c["theme"], c["constat"], c.get("source"), c.get("methode"))
-                      for c in constats], large=400, borne=borne, quoi="constats"))
+    S.append(table(["id", "thème", "constat", "source", "méthode"],
+                   [(c["id"], c["theme"], c["constat"], c.get("source"), c.get("methode"))
+                    for c in constats], large=400, quoi="constats"))
 
     # ── 9 ──
-    corps = "\n".join(S).lower()
+    restants = dict(LEXIQUE)
+    for morceau in S:
+        bas = morceau.lower()
+        for t in [t for t in restants if t.lower() in bas]:
+            restants.pop(t)
+        if not restants:
+            break
     S.append("## 9 · Lexique\n")
     S.append("Les termes techniques employés ci-dessus, pour un lecteur qui n'est pas du métier.\n")
-    S.append(tableau(["terme", "ce que c'est"],
-                     [(t, d) for t, d in LEXIQUE.items() if t.lower() in corps]))
+    S.append(tableau(["terme", "ce que c'est"], [(t, d) for t, d in LEXIQUE.items() if t not in restants]))
 
     with open(sortie, "w", encoding="utf-8") as fh:
         fh.write("\n".join(S))

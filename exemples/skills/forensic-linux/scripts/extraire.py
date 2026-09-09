@@ -10,7 +10,7 @@ recoupement et le jugement sont le travail du rapport.
 Bibliothèque standard seulement. La collecte n'est jamais modifiée : les
 archives sont lues en flux, jamais dépaquetées sur place.
 """
-import argparse, bz2, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
+import argparse, bz2, collections, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
 import sqlite3, struct, sys, tarfile, tempfile
 from datetime import datetime, timezone
 
@@ -18,7 +18,6 @@ COLONNES_CSV = ("id", "categorie", "fait", "valeur", "horodatage", "acteur", "co
                 "source", "methode", "note")
 
 FAITS = []
-_N = [0]
 
 
 RE_CONTROLE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
@@ -32,17 +31,25 @@ def _propre(v):
 
 
 def fait(categorie, quoi, valeur, source, methode, horodatage=None, acteur=None,
-         confiance="certaine", note=None):
-    """Pose un fait. source = chemin dans la collecte ; methode = le geste."""
-    _N[0] += 1
-    f = {"id": f"F{_N[0]:04d}", "categorie": categorie, "fait": quoi,
-         "valeur": _propre(valeur), "source": source, "methode": methode}
+         confiance="certaine", note=None, **champs):
+    """Pose un fait. source = chemin dans la collecte ; methode = le geste.
+
+    Les champs nommés en plus (tty, origine, fin, cible…) sont des données
+    structurées : ce que le rapport doit pouvoir lire sans relire une phrase.
+    """
+    f = {"id": f"F{len(FAITS) + 1:04d}", "categorie": categorie, "fait": quoi,
+         "valeur": valeur, "source": source, "methode": methode}
     for k, v in (("horodatage", horodatage), ("acteur", acteur),
-                 ("confiance", confiance), ("note", _propre(note))):
+                 ("confiance", confiance), ("note", note), *champs.items()):
         if v is not None:
             f[k] = v
+    f = {k: _propre(v) for k, v in f.items()}
     FAITS.append(f)
     return f
+
+
+def _epoch_iso(n):
+    return datetime.fromtimestamp(n, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _compte_de(chemin, suffixe):
@@ -88,6 +95,16 @@ class Collecte:
                 return fh.read(limite).decode("utf-8", "replace")
         except OSError:
             return ""
+
+    def lignes(self, chemin):
+        """Les lignes d'un gros fichier texte, sans le tenir en mémoire."""
+        self.lus.add(chemin)
+        try:
+            with open(chemin, encoding="utf-8", errors="replace") as fh:
+                for l in fh:
+                    yield l.rstrip("\n")
+        except OSError:
+            return
 
     def dates_tar(self, archive):
         """La date de chaque membre. tar la conserve : c'est souvent la seule
@@ -267,8 +284,7 @@ def machine(c):
         # date pas. Le journal de l'installateur donne ainsi la pose du système,
         # et l'horloge de systemd-timesync la dernière synchronisation.
         for nom, quand in sorted(c.dates_tar(inst).items()):
-            iso = (datetime.fromtimestamp(quand, timezone.utc).isoformat()
-                   .replace("+00:00", "Z")) if quand else None
+            iso = _epoch_iso(quand) if quand else None
             if "anaconda" in nom or "installer" in nom or nom.endswith("-ks.cfg"):
                 fait("machine", "installation du système (journal de l'installateur)",
                      nom, f"{c.rel(inst)} → {nom}", "date du membre dans l'archive tar",
@@ -387,7 +403,8 @@ def comptes(c):
 
 
 def _last(c, chemin, categorie, quoi, methode):
-    """Lit la sortie TEXTE de last. Rend le nombre de lignes retenues.
+    """Lit la sortie TEXTE de last. Rend le nombre de lignes retenues, pour
+    savoir si le binaire manquait vraiment.
 
     Ce texte a été écrit par le poste d'analyse, dans SON fuseau, sans le
     dire : c'est une date de second rang. Le binaire wtmp, lui, porte l'epoch.
@@ -415,7 +432,9 @@ def _last(c, chemin, categorie, quoi, methode):
         fait(categorie, quoi, acteur, c.rel(chemin), methode,
              horodatage=iso or g["debut"], acteur=acteur, confiance="forte",
              note=note + " — heure écrite par le poste d'analyse dans son fuseau, "
-                         "le binaire wtmp manquant")
+                         "le binaire wtmp manquant",
+             tty=g["tty"] or None, origine=depuis if depuis not in ("", "-") else None,
+             fin=(lire_date(g["fin"]) or g["fin"]) if g.get("fin") else None)
         poses += 1
     return poses
 
@@ -466,7 +485,7 @@ def _un_utmp(c, chemin, categorie, quoi_defaut):
              e["qui"] or e["tty"] or e["quoi"], c.rel(chemin),
              "lecture directe du binaire (struct utmp)",
              horodatage=e["quand"], acteur=e["qui"] or None,
-             note=note or None)
+             note=note or None, tty=e["tty"] or None, origine=e["ou"] or None)
     return len(lignes)
 
 
@@ -483,17 +502,23 @@ def _bases_connexion(c):
                 ("wtmp", "SELECT User, Login, Logout, TTY, RemoteHost FROM wtmp"),
                 ("lastlog2", "SELECT Name, Time, TTY, RemoteHost FROM Lastlog2")]):
             for l in lignes:
+                l = list(l) + [None] * 5
                 qui, quand = l[0], l[1]
-                iso = (datetime.fromtimestamp(quand, timezone.utc).isoformat()
-                       .replace("+00:00", "Z")) if isinstance(quand, (int, float)) and quand else None
-                detail = f"tty {l[3]}" if len(l) > 3 and l[3] else ""
-                if len(l) > 4 and l[4]:
-                    detail += f", depuis {l[4]}"
+                iso = _epoch_iso(quand) if isinstance(quand, (int, float)) and quand else None
+                if nom_table == "wtmp":
+                    tty, origine, fin = l[3], l[4], l[2]
+                else:
+                    tty, origine, fin = l[2], l[3], None
+                detail = f"tty {tty}" if tty else ""
+                if origine:
+                    detail += f", depuis {origine}"
                 fait("evenement",
                      "ouverture de session" if nom_table == "wtmp"
                      else "dernière connexion du compte",
                      qui, c.rel(chemin), f"sqlite3 sur la table {nom_table} de {base}",
-                     horodatage=iso, acteur=qui, note=detail or None)
+                     horodatage=iso, acteur=qui, note=detail or None,
+                     tty=tty or None, origine=origine or None,
+                     fin=_epoch_iso(fin) if isinstance(fin, (int, float)) and fin else None)
 
 
 def sessions(c):
@@ -534,56 +559,59 @@ def sessions(c):
 
 
 # ── 4 · le journal systemd et /var/log ────────────────────────────────
+# (catégorie, fait, littéral, motif, ce qu'on en tire). Le littéral est un
+# mot que la ligne DOIT contenir : un « in » sur la ligne coûte cent fois
+# moins que l'expression, et un journal fait des millions de lignes.
 MOTIFS_JOURNAL = [
-    ("evenement", "connexion SSH acceptée",
+    ("evenement", "connexion SSH acceptée", 'Accepted',
      re.compile(r'sshd.*Accepted\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)'),
-     lambda m: (m.group(2), f"depuis {m.group(3)} par {m.group(1)}")),
-    ("evenement", "échec SSH",
+     lambda m: (m.group(2), f"depuis {m.group(3)} par {m.group(1)}", {"origine": m.group(3)})),
+    ("evenement", "échec SSH", 'Failed',
      re.compile(r'sshd.*Failed\s+\S+\s+for\s+(?:invalid user\s+)?(\S+)\s+from\s+(\S+)'),
      lambda m: (m.group(1), f"depuis {m.group(2)}")),
-    ("evenement", "commande sudo",
+    ("evenement", "commande sudo", 'COMMAND=',
      re.compile(r'sudo(?:\[\d+\])?:\s+(\S+)\s*:.*COMMAND=(.+)$'),
      lambda m: (m.group(1), f"a lancé {m.group(2).strip()}")),
-    ("evenement", "changement d'utilisateur (su)",
+    ("evenement", "changement d'utilisateur (su)", 'session opened',
      re.compile(r"\bsu(?:\[\d+\])?:.*session opened for user (\S+)(?:\(uid=\d+\))? by (\S+)"),
-     lambda m: (m.group(2), f"est devenu {m.group(1)}")),
-    ("support", "support amovible USB branché",
+     lambda m: (m.group(2), f"est devenu {m.group(1)}", {"cible": m.group(1)})),
+    ("support", "support amovible USB branché", 'New USB device',
      re.compile(r'usb\s+([\d.-]+):\s+New USB device found,\s*(.*)$'),
      lambda m: (None, f"port {m.group(1)}, {m.group(2).strip()}")),
     # Le numéro de série est LA pièce d'identité du support : c'est lui qui
     # permet de dire que la même clé a servi sur une autre machine. Il ne doit
     # pas partager son étiquette avec le modèle.
-    ("support", "numéro de série du support USB",
+    ("support", "numéro de série du support USB", 'SerialNumber',
      re.compile(r'usb\s+[\d.-]+:\s+SerialNumber:\s*(.+)$'),
      lambda m: (None, m.group(1).strip())),
-    ("support", "modèle du support USB",
+    ("support", "modèle du support USB", 'Product:',
      re.compile(r'usb\s+[\d.-]+:\s+Product:\s*(.+)$'),
      lambda m: (None, m.group(1).strip())),
-    ("support", "fabricant du support USB",
+    ("support", "fabricant du support USB", 'Manufacturer:',
      re.compile(r'usb\s+[\d.-]+:\s+Manufacturer:\s*(.+)$'),
      lambda m: (None, m.group(1).strip())),
-    ("support", "support USB débranché",
+    ("support", "support USB débranché", 'USB disconnect',
      re.compile(r'usb\s+([\d.-]+):\s+USB disconnect, device number (\d+)'),
      lambda m: (None, f"port {m.group(1)}, appareil {m.group(2)}")),
-    ("support", "support reconnu par SCSI",
+    ("support", "support reconnu par SCSI", 'Direct-Access',
      re.compile(r'scsi\s+[\d:]+:\s+Direct-Access\s+(.+?)\s+PQ:'),
      lambda m: (None, re.sub(r'\s{2,}', " ", m.group(1).strip()))),
-    ("support", "disque amovible reconnu",
+    ("support", "disque amovible reconnu", 'Attached SCSI',
      re.compile(r'\[(sd[a-z]+)\]\s+Attached SCSI removable disk'),
      lambda m: (None, f"/dev/{m.group(1)}")),
     # .*? et non .* : glouton, il partirait du « /media » de « /run/media ».
     # Le compte est dans le chemin — c'est l'attribution la plus directe qui
     # existe pour un support amovible.
-    ("support", "système de fichiers amovible monté",
+    ("support", "système de fichiers amovible monté", '/media/',
      re.compile(r'(?:mount|gvfs|udisks).*?((?:/run)?/media/([^/\s]+)/\S*)'),
      lambda m: (m.group(2), m.group(1))),
-    ("support", "montage demandé par un compte",
+    ("support", "montage demandé par un compte", 'on behalf of',
      re.compile(r'on behalf of uid (\d+)'),
      lambda m: (None, f"uid {m.group(1)}")),
-    ("machine", "modèle de la machine (DMI du BIOS)",
+    ("machine", "modèle de la machine (DMI du BIOS)", 'DMI:',
      re.compile(r'DMI:\s+(.+?),\s*BIOS\s+(.+)$'),
      lambda m: (None, f"{m.group(1).strip()} — BIOS {m.group(2).strip()}")),
-    ("reseau", "adresse obtenue en DHCP",
+    ("reseau", "adresse obtenue en DHCP", None,
      re.compile(r'dhclient|dhcp4.*address\s+(\d+\.\d+\.\d+\.\d+)', re.I),
      lambda m: (None, m.group(1) if m.lastindex else "bail DHCP")),
 ]
@@ -624,34 +652,36 @@ def _ligne_journal(ligne, fin_fichier=None):
     return None, m.group(5), False
 
 
-def journal(c, source_rel, contenu, methode, fin_fichier=None):
+def journal(source_rel, contenu, methode, fin_fichier=None):
     for ligne in contenu.splitlines():
         ts, reste, devine = _ligne_journal(ligne, fin_fichier)
-        for categorie, quoi, motif, tire in MOTIFS_JOURNAL:
+        for categorie, quoi, litteral, motif, tire in MOTIFS_JOURNAL:
+            if litteral and litteral not in reste:
+                continue
             m = motif.search(reste)
             if not m:
                 continue
-            acteur, detail = tire(m)
+            acteur, detail, *champs = tire(m)
             fait(categorie, quoi, detail, source_rel, methode,
                  horodatage=ts, acteur=acteur,
                  confiance="forte" if devine else "certaine",
                  note="année déduite de la date du fichier : la ligne syslog "
                       "ne la porte pas" if devine else
-                      (None if ts else "ligne sans date exploitable"))
+                      (None if ts else "ligne sans date exploitable"),
+                 **(champs[0] if champs else {}))
             break
 
 
 def journaux(c):
     j = c.un("_journal.txt", "JOURNAUX")
     if j:
-        journal(c, c.rel(j), c.texte(j),
+        journal(c.rel(j), c.texte(j, 400_000_000),
                 "journalctl -D var/log/journal -o short-iso, puis motifs")
     tarlog = c.un("_var_log.tar.gz", "JOURNAUX")
     if tarlog:
-        garde = lambda nom: os.path.basename(nom).startswith(JOURNAUX_LUS)     # noqa: E731
-        for nom, blob in c.membres_tar(tarlog, garde):
+        for nom, blob in c.membres_tar(tarlog, _garde_journaux):
             quand = c.mtimes[tarlog].get(nom)
-            _journal_brut(c, f"{c.rel(tarlog)} → {nom}", nom, blob, "tar -xO, puis motifs",
+            _journal_brut(f"{c.rel(tarlog)} → {nom}", nom, blob, "tar -xO, puis motifs",
                           datetime.fromtimestamp(quand, timezone.utc) if quand else None)
     # Une pièce reprise à la main — un auth.log recopié depuis l'image, un
     # secure.3.gz — se pose telle quelle dans JOURNAUX/ : elle est lue comme
@@ -665,7 +695,7 @@ def journaux(c):
             with open(chemin, "rb") as fh:
                 blob = fh.read()
             c.lus.add(chemin)
-            _journal_brut(c, c.rel(chemin), base, blob,
+            _journal_brut(c.rel(chemin), base, blob,
                           "fichier posé à la main dans JOURNAUX/, puis motifs",
                           datetime.fromtimestamp(os.path.getmtime(chemin), timezone.utc))
 
@@ -674,18 +704,30 @@ JOURNAUX_LUS = ("secure", "auth.log", "messages", "syslog", "dmesg",
                 "boot.log", "cron", "audit", "maillog", "yum.log")
 
 
-def _journal_brut(c, source, nom, blob, methode, fin):
+def _garde_journaux(nom):
+    return os.path.basename(nom).startswith(JOURNAUX_LUS)
+
+
+def texte_de(nom, blob, source=None):
+    """Le texte d'un membre d'archive, ou None s'il n'en est pas un :
+    décompressé s'il le faut, écarté s'il est binaire. Un journal tourné
+    qu'on ne sait pas décompresser laisse un fait « limite »."""
     if nom.endswith((".gz", ".xz", ".lzma", ".bz2", ".zst")):
-        clair = decomprimer(nom, blob)
-        if clair is None:
-            fait("limite", "journal tourné non décompressé", nom, source,
+        blob = decomprimer(nom, blob)
+        if blob is None:
+            fait("limite", "journal tourné non décompressé", nom, source or nom,
                  "compresseur non disponible", confiance="à vérifier",
                  note="son contenu n'est PAS dans l'analyse")
-            return
-        blob = clair
+            return None
     if b"\x00" in blob[:4096]:
-        return                       # un journal binaire (systemd) n'est pas du texte
-    journal(c, source, blob.decode("utf-8", "replace"), methode, fin)
+        return None                  # un journal binaire (systemd) n'est pas du texte
+    return blob.decode("utf-8", "replace")
+
+
+def _journal_brut(source, nom, blob, methode, fin):
+    txt = texte_de(nom, blob, source)
+    if txt is not None:
+        journal(source, txt, methode, fin)
 
 
 # ── 5 · réseau ────────────────────────────────────────────────────────
@@ -848,14 +890,7 @@ REQ_LOGINS_CHROME = [
 
 # Le fichier, le navigateur, ce qu'on en fait. C'est LA liste des bases de
 # navigateur : la garde des fichiers -wal s'y réfère aussi.
-NAVIGATEURS = {
-    "places.sqlite": ("Firefox", "historique", REQ_FIREFOX),
-    "History": ("Chromium/Chrome", "historique", REQ_CHROME),
-    "cookies.sqlite": ("Firefox (moz_cookies)", "cookies", REQ_COOKIES_FF),
-    "Cookies": ("Chromium/Chrome", "cookies", REQ_COOKIES_CHROME),
-    "logins.json": ("Firefox", "identifiants", None),
-    "Login Data": ("Chromium/Chrome", "identifiants", REQ_LOGINS_CHROME),
-}
+
 
 
 def _iso_z(ts):
@@ -869,28 +904,25 @@ def _date_us(v, depuis_1601=False):
         return None
     sec = v / 1_000_000 - (11_644_473_600 if depuis_1601 else 0)
     try:
-        return (datetime.fromtimestamp(sec, timezone.utc)
-                .isoformat().replace("+00:00", "Z"))
+        return _epoch_iso(sec)
     except (OSError, OverflowError, ValueError):
         return None
 
 
-def _cookies(c, prof, nom, compte, blob, requetes, outil, depuis_1601):
+def _cookies(source, compte, blob, requetes, outil, depuis_1601):
     for _, lignes in _sqlite_lire(blob, requetes):
         for hote, combien, cree, vu in lignes:
-            fait("navigation", "domaine ayant posé un cookie", hote,
-                 f"{c.rel(prof)} → {nom}",
+            fait("navigation", "domaine ayant posé un cookie", hote, source,
                  f"sqlite3 sur les cookies {outil}, regroupé par domaine "
                  "(la valeur du cookie n'est pas lue)",
                  horodatage=_date_us(vu, depuis_1601), acteur=compte,
                  note=f"{combien} cookie(s), premier posé le "
                       f"{_date_us(cree, depuis_1601)} — un cookie subsiste "
                       "quand l'historique a été vidé")
-        return True
-    return False
+        return                          # le premier schéma qui répond suffit
 
 
-def _logins_firefox(c, source, compte, blob):
+def _logins_firefox(source, compte, blob, req, outil):
     """Les sites pour lesquels un mot de passe est enregistré. Le site seul."""
     try:
         entrees = json.loads(blob.decode("utf-8", "replace")).get("logins", [])
@@ -905,8 +937,8 @@ def _logins_firefox(c, source, compte, blob):
                  note=f"enregistré le {_date_us(cree * 1000)}" if cree else None)
 
 
-def _logins_chrome(c, source, compte, blob):
-    for _, lignes in _sqlite_lire(blob, REQ_LOGINS_CHROME):
+def _logins_chrome(source, compte, blob, req, outil):
+    for _, lignes in _sqlite_lire(blob, req):
         for site, cree, vu in lignes:
             fait("usage", "mot de passe enregistré dans le navigateur", site, source,
                  "colonne origin_url de la table logins (identifiant et mot de passe non lus)",
@@ -914,7 +946,7 @@ def _logins_chrome(c, source, compte, blob):
                  note=f"enregistré le {_date_us(cree, True)}" if cree else None)
 
 
-def _historique_navigateur(c, source, compte, blob, outil, req, limite):
+def _historique_navigateur(source, compte, blob, req, outil, limite):
     with _sqlite(blob) as cx:
         total = (_lignes(cx, req["total"]) or [[None]])[0][0]
         visites = _lignes(cx, req["visite"], (limite,))
@@ -941,10 +973,46 @@ def _historique_navigateur(c, source, compte, blob, outil, req, limite):
                   "relancez avec --visites plus grand pour les avoir")
 
 
+def _recemment_ouverts(source, compte, blob, req, outil):
+    for m2 in re.finditer(r'href="([^"]+)"[^>]*(?:added|modified)="([^"]+)"',
+                          blob.decode("utf-8", "replace")):
+        fait("usage", "fichier ouvert récemment", m2.group(1), source,
+             "grep href= recently-used.xbel", horodatage=m2.group(2), acteur=compte)
+
+
+# Le fichier, le navigateur, la requête, le traitement. C'est LA liste des
+# bases de navigateur : la garde des fichiers -wal s'y réfère aussi.
+NAVIGATEURS = {
+    "places.sqlite": ("Firefox", REQ_FIREFOX, "historique"),
+    "History": ("Chromium/Chrome", REQ_CHROME, "historique"),
+    "cookies.sqlite": ("Firefox (moz_cookies)", REQ_COOKIES_FF, "cookies"),
+    "Cookies": ("Chromium/Chrome", REQ_COOKIES_CHROME, "cookies"),
+    "logins.json": ("Firefox", None, _logins_firefox),
+    "Login Data": ("Chromium/Chrome", REQ_LOGINS_CHROME, _logins_chrome),
+    "recently-used.xbel": ("bureau", None, _recemment_ouverts),
+}
+
+
+def _base_navigateur(source, compte, base, blob, visites):
+    """Un membre d'archive dont le nom est dans NAVIGATEURS — ou son -wal."""
+    if base in NAVIGATEURS:
+        outil, req, traitement = NAVIGATEURS[base]
+        if traitement == "historique":
+            _historique_navigateur(source, compte, blob, req, outil, visites)
+        elif traitement == "cookies":
+            _cookies(source, compte, blob, req, outil, base == "Cookies")
+        else:
+            traitement(source, compte, blob, req, outil)
+    elif len(blob) > 32:                            # un -wal ou -journal non vide
+        fait("limite", "base de navigateur copiée à chaud", source.split(" → ")[-1], source,
+             "présence d'un fichier -wal non vide", acteur=compte, confiance="à vérifier",
+             note="les visites les plus récentes sont dans ce journal, pas dans la "
+                  "base : elles manquent à l'analyse")
+
+
 def _garde_navigation(nom):
     base = os.path.basename(nom)
-    return (base in NAVIGATEURS or base == "recently-used.xbel"
-            or base.removesuffix("-wal").removesuffix("-journal") in NAVIGATEURS)
+    return base in NAVIGATEURS or base.removesuffix("-wal").removesuffix("-journal") in NAVIGATEURS
 
 
 def navigation(c):
@@ -952,36 +1020,20 @@ def navigation(c):
     manquer un navigateur entier : Firefox est dans ~/.mozilla, donc dans
     _profils ; Chrome ou Chromium installés par paquet sont dans ~/.config,
     donc dans _artefacts. Chromium en snap est dans ~/snap : _profils.
+
+    Les artefacts portent aussi les historiques, les clés, les hôtes connus :
+    la même passe les donne à persistance(), pour ne lire l'archive qu'une fois.
     """
     for suffixe in ("_profils.tar.gz", "_artefacts.tar.gz"):
         for prof in c.chercher(suffixe, "COMPTES"):
             compte = _compte_de(prof, suffixe[1:])
-            for nom, blob in c.membres_tar(prof, _garde_navigation):
+            for nom, blob in c.membres_tar(prof, lambda n: _garde_navigation(n) or _garde_artefacts(n)):
                 base = os.path.basename(nom)
                 source = f"{c.rel(prof)} → {nom}"
-                if base not in NAVIGATEURS:
-                    if base == "recently-used.xbel":
-                        for m2 in re.finditer(r'href="([^"]+)"[^>]*(?:added|modified)="([^"]+)"',
-                                              blob.decode("utf-8", "replace")):
-                            fait("usage", "fichier ouvert récemment", m2.group(1), source,
-                                 "grep href= recently-used.xbel",
-                                 horodatage=m2.group(2), acteur=compte)
-                    elif len(blob) > 32:            # un -wal ou -journal non vide
-                        fait("limite", "base de navigateur copiée à chaud", nom, source,
-                             "présence d'un fichier -wal non vide",
-                             acteur=compte, confiance="à vérifier",
-                             note="les visites les plus récentes sont dans ce journal, "
-                                  "pas dans la base : elles manquent à l'analyse")
-                    continue
-                outil, genre, req = NAVIGATEURS[base]
-                if genre == "historique":
-                    _historique_navigateur(c, source, compte, blob, outil, req, c.visites)
-                elif genre == "cookies":
-                    _cookies(c, prof, nom, compte, blob, req, outil, base == "Cookies")
-                elif base == "logins.json":
-                    _logins_firefox(c, source, compte, blob)
+                if _garde_navigation(nom):
+                    _base_navigateur(source, compte, base, blob, c.visites)
                 else:
-                    _logins_chrome(c, source, compte, blob)
+                    _artefact(source, compte, base, blob)
 
 
 # ── 7 · ce qui se relance seul, et les supprimés ──────────────────────
@@ -1001,6 +1053,7 @@ SUSPECT = [
 ARTEFACTS_LUS = ("_history", ".lesshst", ".wget-hsts", "known_hosts", ".viminfo",
                  "authorized_keys")
 RE_HISTO_EPOCH = re.compile(r'^#(\d{9,11})$')
+RE_HISTO_ZSH = re.compile(r'^: (\d{9,11}):\d+;(.*)$')
 
 
 def persistance(c):
@@ -1026,86 +1079,82 @@ def persistance(c):
                          f"motif « {motif.pattern} » dans le fichier",
                          confiance="à vérifier")
 
-    garde = lambda nom: os.path.basename(nom).endswith(ARTEFACTS_LUS)         # noqa: E731
-    for art in c.chercher("_artefacts.tar.gz", "COMPTES"):
-        compte = _compte_de(art, "artefacts.tar.gz")
-        for nom, blob in c.membres_tar(art, garde):
-            base = os.path.basename(nom)
-            txt = blob.decode("utf-8", "replace")
-            if base.endswith(("_history", ".lesshst", ".wget-hsts")):
-                lignes = txt.splitlines()
-                # bash n'écrit de dates que si HISTTIMEFORMAT était posé : une
-                # ligne « #<epoch> » avant chaque commande. Sans elles,
-                # l'historique n'est PAS datable — c'est un fait à dire.
-                horos, commandes = [], []
-                for l in lignes:
-                    m = RE_HISTO_EPOCH.match(l)
-                    if m:
-                        horos.append(int(m.group(1)))
-                    elif l.strip() and not l.startswith("#"):
-                        commandes.append(l)
-                if horos:
-                    borne = (datetime.fromtimestamp(min(horos), timezone.utc)
-                             .isoformat().replace("+00:00", "Z"),
-                             datetime.fromtimestamp(max(horos), timezone.utc)
-                             .isoformat().replace("+00:00", "Z"))
-                    fait("usage", "historique daté (HISTTIMEFORMAT posé)",
-                         f"{len(commandes)} commandes, {len(horos)} datées",
-                         f"{c.rel(art)} → {nom}",
-                         "comptage des lignes « #<epoch> » de l'historique",
-                         acteur=compte, horodatage=borne[1],
-                         note=f"de {borne[0]} à {borne[1]}")
-                else:
-                    fait("usage", "historique NON daté",
-                         f"{len(commandes)} commandes", f"{c.rel(art)} → {nom}",
-                         "absence de lignes « #<epoch> » dans l'historique",
-                         acteur=compte, confiance="certaine",
-                         note="aucune date dans le fichier : ne datez aucune de "
-                              "ces commandes sans une autre source")
-                horo_courant = None
-                for l in lignes:
-                    m = RE_HISTO_EPOCH.match(l)
-                    if m:
-                        horo_courant = (datetime.fromtimestamp(int(m.group(1)),
-                                        timezone.utc).isoformat().replace("+00:00", "Z"))
-                        continue
-                    for motif, quoi in SUSPECT:
-                        if motif.search(l):
-                            fait("suspect", quoi, l.strip(),
-                                 f"{c.rel(art)} → {nom}",
-                                 f"motif « {motif.pattern} » dans l'historique",
-                                 acteur=compte, horodatage=horo_courant,
-                                 confiance="à vérifier",
-                                 note=None if horo_courant else
-                                      "commande non datée : sa position dans le "
-                                      "fichier ne prouve pas son moment")
-                            break
-            elif base == "known_hosts":
-                for l in txt.splitlines():
-                    if not l.strip() or l.startswith("#"):
-                        continue
-                    hote = l.split()[0]
-                    hache = hote.startswith("|1|")
-                    fait("reseau", "hôte SSH contacté depuis ce compte",
-                         "empreinte masquée" if hache else hote,
-                         f"{c.rel(art)} → {nom}", "cut -d' ' -f1 .ssh/known_hosts",
-                         acteur=compte, confiance="à vérifier" if hache else "forte",
-                         note="HashKnownHosts : le nom de l'hôte est illisible"
-                              if hache else None)
-            elif base == ".viminfo":
-                for m in re.finditer(r'^[:>]\s*e?\s*(/\S+)', txt, re.M):
-                    fait("usage", "fichier ouvert dans vim", m.group(1),
-                         f"{c.rel(art)} → {nom}", "grep des chemins dans .viminfo",
-                         acteur=compte,
-                         note="viminfo garde le chemin même après suppression")
-            elif base == "authorized_keys" and txt.strip():
-                for l in txt.splitlines():
-                    if l.strip() and not l.startswith("#"):
-                        fait("suspect", "clé SSH autorisée à ouvrir ce compte",
-                             l.strip()[:120], f"{c.rel(art)} → {nom}",
-                             "cat .ssh/authorized_keys", acteur=compte,
-                             confiance="certaine",
-                             note="permet une entrée sans mot de passe")
+
+
+def _garde_artefacts(nom):
+    return os.path.basename(nom).endswith(ARTEFACTS_LUS)
+
+
+def _lignes_historique(txt):
+    """[(commande, date)] d'un historique : bash date par une ligne « #<epoch> »
+    avant chaque commande quand HISTTIMEFORMAT était posé ; zsh étendu écrit
+    « : epoch:0;cmd ». Sans cela la date est None."""
+    lignes, quand = [], None
+    for l in txt.splitlines():
+        m = RE_HISTO_EPOCH.match(l)
+        if m:
+            quand = _epoch_iso(int(m.group(1)))
+            continue
+        m = RE_HISTO_ZSH.match(l)
+        if m:
+            lignes.append((m.group(2), _epoch_iso(int(m.group(1)))))
+            continue
+        if l.strip() and not l.startswith("#"):
+            lignes.append((l, quand))
+            quand = None
+    return lignes
+
+
+def _artefact(source, compte, base, blob):
+    """Un membre de _artefacts.tar.gz retenu par ARTEFACTS_LUS."""
+    txt = blob.decode("utf-8", "replace")
+    if base.endswith(("_history", ".lesshst", ".wget-hsts")):
+        lignes = _lignes_historique(txt)
+        dates = sorted(d for _, d in lignes if d)
+        # bash n'écrit de dates que si HISTTIMEFORMAT était posé. Sans elles,
+        # l'historique n'est PAS datable — c'est un fait à dire.
+        if dates:
+            fait("usage", "historique daté (HISTTIMEFORMAT posé)",
+                 f"{len(lignes)} commandes, {len(dates)} datées", source,
+                 "comptage des lignes « #<epoch> » de l'historique",
+                 acteur=compte, horodatage=dates[-1], note=f"de {dates[0]} à {dates[-1]}")
+        else:
+            fait("usage", "historique NON daté", f"{len(lignes)} commandes", source,
+                 "absence de lignes « #<epoch> » dans l'historique",
+                 acteur=compte, confiance="certaine",
+                 note="aucune date dans le fichier : ne datez aucune de ces "
+                      "commandes sans une autre source")
+        for l, quand in lignes:
+            for motif, quoi in SUSPECT:
+                if motif.search(l):
+                    fait("suspect", quoi, l.strip(), source,
+                         f"motif « {motif.pattern} » dans l'historique",
+                         acteur=compte, horodatage=quand, confiance="à vérifier",
+                         note=None if quand else "commande non datée : sa position "
+                                                 "dans le fichier ne prouve pas son moment")
+                    break
+    elif base == "known_hosts":
+        for l in txt.splitlines():
+            if not l.strip() or l.startswith("#"):
+                continue
+            hote = l.split()[0]
+            hache = hote.startswith("|1|")
+            fait("reseau", "hôte SSH contacté depuis ce compte",
+                 "empreinte masquée" if hache else hote, source,
+                 "cut -d' ' -f1 .ssh/known_hosts", acteur=compte,
+                 confiance="à vérifier" if hache else "forte",
+                 note="HashKnownHosts : le nom de l'hôte est illisible" if hache else None)
+    elif base == ".viminfo":
+        for m in re.finditer(r'^[:>]\s*e?\s*(/\S+)', txt, re.M):
+            fait("usage", "fichier ouvert dans vim", m.group(1), source,
+                 "grep des chemins dans .viminfo", acteur=compte,
+                 note="viminfo garde le chemin même après suppression")
+    elif base == "authorized_keys" and txt.strip():
+        for l in txt.splitlines():
+            if l.strip() and not l.startswith("#"):
+                fait("suspect", "clé SSH autorisée à ouvrir ce compte", l.strip()[:120],
+                     source, "cat .ssh/authorized_keys", acteur=compte,
+                     confiance="certaine", note="permet une entrée sans mot de passe")
 
 
 def historique_paquets(c):
@@ -1188,18 +1237,12 @@ def timeline(c):
     csv = c.un("_mactime.csv", "TIMELINE")
     if not csv:
         return
-    lignes = c.texte(csv, 40_000_000).splitlines()
-    fait("timeline", "entrées dans la timeline du système de fichiers",
-         str(max(0, len(lignes) - 1)), c.rel(csv),
-         "mactime -b corps -d, puis wc -l",
-         note="corps lus sur le périphérique quand un lecteur existait")
     interet = re.compile(r'/(\.ssh/|Downloads?/|T[ée]l[ée]chargements?/|media/|run/media/'
                          r'|tmp/\.|\.bash_history|authorized_keys|/root/)', re.I)
-    vus = 0
-    for l in lignes[1:]:
-        if vus >= 300:
-            break
-        if not interet.search(l):
+    total, vus = 0, 0
+    for l in c.lignes(csv):
+        total += 1
+        if total == 1 or vus >= 300 or not interet.search(l):
             continue
         ch = l.split(",", 7)
         if len(ch) < 8:
@@ -1208,6 +1251,9 @@ def timeline(c):
         fait("timeline", "activité sur un chemin sensible", ch[7].strip('"'),
              c.rel(csv), "grep de chemins d'intérêt dans la timeline mactime",
              horodatage=ch[0], note=f"{ch[2]} {ch[3]}")
+    fait("timeline", "entrées dans la timeline du système de fichiers",
+         str(max(0, total - 1)), c.rel(csv), "mactime -b corps -d, puis wc -l",
+         note="corps lus sur le périphérique quand un lecteur existait")
 
 
 # ── mise en ordre ─────────────────────────────────────────────────────
@@ -1269,8 +1315,7 @@ def lire_utmp(blob):
             continue
         sorties.append({"type": typ, "quoi": UTMP_TYPE[typ], "tty": _txt(ligne),
                         "qui": _txt(user), "ou": _txt(host),
-                        "quand": datetime.fromtimestamp(sec, timezone.utc)
-                                         .isoformat().replace("+00:00", "Z")})
+                        "quand": _epoch_iso(sec)})
     return sorties
 
 
@@ -1285,8 +1330,7 @@ def lire_lastlog(blob, noms_par_uid):
             continue
         sorties.append({"uid": uid, "qui": noms_par_uid.get(uid, f"uid {uid}"),
                         "tty": _txt(ligne), "ou": _txt(host),
-                        "quand": datetime.fromtimestamp(sec, timezone.utc)
-                                         .isoformat().replace("+00:00", "Z")})
+                        "quand": _epoch_iso(sec)})
     return sorties
 
 
@@ -1417,7 +1461,7 @@ def lire_indicateurs(chemin):
                 motif = None
             elif genre == "regex":
                 try:
-                    motif = re.compile(valeur.encode("utf-8"))
+                    motif = re.compile(valeur.encode("utf-8"), re.I)
                 except re.error as e:
                     sys.exit(f"{chemin}:{num} : expression illisible ({e}) — {valeur}")
             elif genre == "fichier":
@@ -1432,60 +1476,86 @@ def lire_indicateurs(chemin):
 
 
 def indicateurs(c, liste):
-    """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier."""
+    """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier.
+
+    Une seule alternative pour tous les motifs : un membre de 200 Mo n'est
+    balayé qu'une fois. Les empreintes se calculent en flux. Et quand seuls des
+    noms sont demandés, rien n'est lu.
+    """
     empreintes = {g: {x["valeur"]: x for x in liste if x["genre"] == g}
                   for g in ("sha256", "sha1", "md5")}
-    algos = [g for g in empreintes if empreintes[g]]
+    empreintes = {g: d for g, d in empreintes.items() if d}
     noms = [x for x in liste if x["genre"] == "fichier"]
     motifs = [x for x in liste if x["motif"] is not None]
-    trouves = set()
+    alternative = re.compile(b"|".join(b"(?P<i%d>%s)" % (i, x["motif"].pattern)
+                                       for i, x in enumerate(motifs))) if motifs else None
+    lire = bool(empreintes or motifs)
 
     def examiner(source, nom, blob):
         base = os.path.basename(nom)
         for x in noms:
             if fnmatch.fnmatch(base, x["valeur"]) or fnmatch.fnmatch(nom, x["valeur"]):
-                trouves.add(id(x))
+                x["trouve"] = True
                 fait("indicateur", "fichier au nom recherché", nom, source,
-                     f"nom comparé au motif « {x['valeur']} »",
-                     note=x["etiquette"])
-        if algos:
-            calc = {g: hashlib.new(g, blob).hexdigest() for g in algos}
-            for g, h in calc.items():
-                if h in empreintes[g]:
-                    trouves.add(id(empreintes[g][h]))
-                    fait("indicateur", f"fichier à l'empreinte {g} recherchée", nom, source,
-                         f"{g} du fichier = {h}", note=empreintes[g][h]["etiquette"])
-        for x in motifs:
-            n = 0
-            for m in x["motif"].finditer(blob):
-                n += 1
-                if n == 1:
+                     f"nom comparé au motif « {x['valeur']} »", note=x["etiquette"])
+        if blob is None:
+            return
+        for g, attendus in empreintes.items():
+            h = hashlib.new(g, blob).hexdigest() if isinstance(blob, bytes) else blob[g]
+            if h in attendus:
+                attendus[h]["trouve"] = True
+                fait("indicateur", f"fichier à l'empreinte {g} recherchée", nom, source,
+                     f"{g} du fichier = {h}", note=attendus[h]["etiquette"])
+        if alternative and isinstance(blob, bytes):
+            comptes_, contextes = {}, {}
+            for m in alternative.finditer(blob):
+                i = int(m.lastgroup[1:])
+                comptes_[i] = comptes_.get(i, 0) + 1
+                if i not in contextes:
                     d, f = max(0, m.start() - 60), min(len(blob), m.end() + 60)
-                    contexte = blob[d:f].decode("utf-8", "replace").replace("\n", " ")
-            if n:
-                trouves.add(id(x))
+                    contextes[i] = blob[d:f].decode("utf-8", "replace").replace("\n", " ")
+            for i, n in sorted(comptes_.items()):
+                x = motifs[i]
+                x["trouve"] = True
                 fait("indicateur", f"{x['genre']} recherché présent dans un fichier",
                      x["valeur"], source,
                      f"motif « {x['valeur']} » cherché dans les octets du fichier",
-                     note=f"{n} occurrence(s) ; autour de la première : « {contexte} »"
+                     note=f"{n} occurrence(s) ; autour de la première : « {contextes[i]} »"
                           + (f" — {x['etiquette']}" if x["etiquette"] else ""))
 
     for d, _, fichiers in os.walk(c.racine):
         for f in sorted(fichiers):
             chemin = os.path.join(d, f)
             if chemin.endswith(".tar.gz"):
-                for nom, blob in c.membres_tar(chemin):
+                for nom, blob in c.membres_tar(chemin, None if lire else lambda n: False):
                     examiner(f"{c.rel(chemin)} → {nom}", nom, blob)
-            else:
+                if not lire:
+                    for nom in c.mtimes.get(chemin, {}):
+                        examiner(f"{c.rel(chemin)} → {nom}", nom, None)
+                continue
+            if not lire:
+                examiner(c.rel(chemin), c.rel(chemin), None)
+                continue
+            c.lus.add(chemin)
+            if motifs:
                 try:
                     with open(chemin, "rb") as fh:
-                        blob = fh.read()
+                        examiner(c.rel(chemin), c.rel(chemin), fh.read())
+                except OSError:
+                    pass
+            else:
+                # empreintes seules : en flux, sans charger le fichier
+                hs = {g: hashlib.new(g) for g in empreintes}
+                try:
+                    with open(chemin, "rb") as fh:
+                        for bloc in iter(lambda: fh.read(1 << 20), b""):
+                            for h in hs.values():
+                                h.update(bloc)
                 except OSError:
                     continue
-                c.lus.add(chemin)
-                examiner(c.rel(chemin), c.rel(chemin), blob)
+                examiner(c.rel(chemin), c.rel(chemin), {g: h.hexdigest() for g, h in hs.items()})
     for x in liste:
-        if id(x) not in trouves:
+        if not x.get("trouve"):
             fait("indicateur", f"{x['genre']} recherché ABSENT de la collecte", x["valeur"],
                  c.prefix, "recherche dans chaque fichier et chaque membre d'archive",
                  note="absent des pièces collectées, pas forcément du poste : la "
@@ -1536,9 +1606,7 @@ def manifeste(c, sortie, argv):
                                      "octets": os.path.getsize(chemin)}
         except OSError:
             continue
-    par_cat = {}
-    for f in FAITS:
-        par_cat[f["categorie"]] = par_cat.get(f["categorie"], 0) + 1
+    par_cat = collections.Counter(f["categorie"] for f in FAITS)
     return {
         "collecte": c.prefix,
         "chemin_analyse": c.racine,
@@ -1547,8 +1615,7 @@ def manifeste(c, sortie, argv):
         "commande": " ".join(argv),
         "extrait_le": datetime.now().astimezone().isoformat(),
         "faits": {"total": len(FAITS), "par_categorie": dict(sorted(par_cat.items()))},
-        "faits_sha256": hashlib.sha256(
-            open(sortie, "rb").read()).hexdigest(),
+        "faits_sha256": empreinte(sortie),
         "pieces_lues": pieces,
     }
 
@@ -1593,13 +1660,11 @@ def main():
 
     chemin_man = os.path.splitext(args.sortie)[0] + "-manifeste.json"
     with open(chemin_man, "w", encoding="utf-8") as fh:
-        json.dump(manifeste(c, args.sortie, sys.argv), fh,
-                  ensure_ascii=False, indent=2, sort_keys=False)
+        man = manifeste(c, args.sortie, sys.argv)
+        json.dump(man, fh, ensure_ascii=False, indent=2, sort_keys=False)
         fh.write("\n")
 
-    par_cat = {}
-    for f in FAITS:
-        par_cat[f["categorie"]] = par_cat.get(f["categorie"], 0) + 1
+    par_cat = man["faits"]["par_categorie"]
     print(f"\n{len(FAITS)} faits → {args.sortie}  (+ .csv)", file=sys.stderr)
     print(f"  empreintes des pièces lues → {chemin_man}", file=sys.stderr)
     print("  " + "  ".join(f"{k}={v}" for k, v in sorted(par_cat.items())),

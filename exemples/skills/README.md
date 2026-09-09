@@ -247,12 +247,13 @@ la collecte entre les deux lectures — c'est un fait en soi, et grave. Le même
 test vaut pour `controles.py` et pour les deux `brouillon.py` : à faits
 identiques, brouillons identiques.
 
-Les deux `brouillon.py` partagent quelques fonctions recopiées (lecture du
-JSONL, tableau Markdown, horloge) : chaque skill doit rester installable seul.
-Pour vérifier qu'elles n'ont pas dérivé :
+Les deux `brouillon.py` partagent un bloc recopié — lecture du JSONL, tableau
+Markdown, horloge —, délimité par `# ── commun ──` et `# ── fin commun ──` :
+chaque skill doit rester installable seul, et le bloc doit rester identique.
+Pour vérifier qu'il n'a pas dérivé :
 
-    diff <(sed -n '/^def cellule/,/^def a_rediger/p' forensic-linux/scripts/brouillon.py) \
-         <(sed -n '/^def cellule/,/^def a_rediger/p' conformite-linux/scripts/brouillon.py)
+    diff <(sed -n '/^# ── commun ──/,/^# ── fin commun ──/p' forensic-linux/scripts/brouillon.py) \
+         <(sed -n '/^# ── commun ──/,/^# ── fin commun ──/p' conformite-linux/scripts/brouillon.py)
 
 ---
 

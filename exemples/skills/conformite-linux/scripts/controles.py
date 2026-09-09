@@ -25,16 +25,12 @@ Sorties : constats.jsonl (un constat par ligne, pour un SIEM), constats.csv
 
 Bibliothèque standard seulement. La collecte n'est jamais modifiée.
 """
-import argparse, base64, collections, csv, hashlib, json, os, re, sys, tarfile
+import argparse, base64, collections, csv, functools, gzip, hashlib, json, os, re, sys, tarfile
 from datetime import datetime, timezone
 
 CONSTATS = []
-_N = [0]
-SANS_REGLE = ("limite", "conforme")      # thèmes qui ne sont pas des constats de manquement
 COLONNES_CSV = ("id", "theme", "regle", "constat", "valeur", "date", "acteur", "portee",
                 "source", "methode", "question", "note")
-
-
 RE_CONTROLE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 
 
@@ -49,7 +45,8 @@ def constat(theme, quoi, valeur, source, methode, acteur=None, portee=None,
             question=None, note=None, regle=None, date=None):
     """Pose un constat.
 
-    theme    la famille : comptes, authentification, secrets, durcissement, usage
+    theme    la famille : comptes, authentification, secrets, durcissement,
+             usage, partage
     quoi     ce qui est observé, formulé sans jugement
     portee   « poste » ou « compte » — un manquement de poste n'est imputable
              à personne en particulier
@@ -58,14 +55,14 @@ def constat(theme, quoi, valeur, source, methode, acteur=None, portee=None,
     regle    l'identifiant de la règle cherchée, quand il y en a une
     date     l'horodatage porté par la pièce elle-même, quand elle en porte un
     """
-    _N[0] += 1
-    c = {"id": f"C{_N[0]:04d}", "theme": theme, "constat": quoi, "valeur": _propre(valeur),
-         "source": source, "methode": methode,
+    c = {"id": f"C{len(CONSTATS) + 1:04d}", "theme": theme, "constat": quoi,
+         "valeur": valeur, "source": source, "methode": methode,
          "portee": portee or ("compte" if acteur else "poste")}
     for k, v in (("regle", regle), ("acteur", acteur), ("date", date),
-                 ("question", question), ("note", _propre(note))):
+                 ("question", question), ("note", note)):
         if v is not None:
             c[k] = v
+    c = {k: _propre(v) for k, v in c.items()}
     CONSTATS.append(c)
     return c
 
@@ -74,10 +71,43 @@ def _epoch_iso(n):
     return datetime.fromtimestamp(n, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def instant(h, fuseau=None):
+    """Un horodatage de fait ou de constat, lu comme un instant comparable.
+
+    Trois formes existent dans les faits : « …Z » (epoch, UTC), « …+01:00 »
+    (journalctl), et rien du tout — une ligne syslog, dpkg.log, la sortie de
+    « last » : c'est alors l'heure du poste, et on la lit dans son fuseau
+    quand on le connaît, en UTC sinon. Une seule fonction pour les trois, ou
+    chaque consommateur se trompe à son tour.
+    """
+    if not h:
+        return None
+    try:
+        d = datetime.fromisoformat(str(h).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=fuseau or timezone.utc)
+    return d.astimezone(fuseau or timezone.utc)
+
+
 def _compte_de(chemin, suffixe):
     """PREFIX_<compte>_<suffixe> → compte."""
     m = re.search(rf'_([^_]+)_{re.escape(suffixe)}$', os.path.basename(chemin))
     return m.group(1) if m else "?"
+
+
+def texte_de(nom, blob):
+    """Le texte d'un membre d'archive, ou None s'il n'en est pas un :
+    décompressé s'il le faut, écarté s'il est binaire."""
+    if nom.endswith(".gz"):
+        try:
+            blob = gzip.decompress(blob)
+        except (OSError, EOFError):
+            return None
+    if b"\x00" in blob[:4096]:
+        return None
+    return blob.decode("utf-8", "replace")
 
 
 class Collecte:
@@ -102,6 +132,7 @@ class Collecte:
         t = self.chercher(motif, sous)
         return t[0] if t else None
 
+    @functools.lru_cache(maxsize=None)
     def texte(self, chemin, limite=8_000_000):
         try:
             with open(chemin, "rb") as fh:
@@ -109,6 +140,16 @@ class Collecte:
                 return fh.read(limite).decode("utf-8", "replace")
         except OSError:
             return ""
+
+    def lignes(self, chemin):
+        """Les lignes d'un gros fichier texte, sans le tenir en mémoire."""
+        self.lus.add(chemin)
+        try:
+            with open(chemin, encoding="utf-8", errors="replace") as fh:
+                for l in fh:
+                    yield l.rstrip("\n")
+        except OSError:
+            return
 
     def membres_tar(self, archive, garde=None):
         """(nom, contenu) des fichiers d'un .tar.gz — ceux que garde(nom) accepte.
@@ -134,17 +175,20 @@ class Collecte:
 
 # ── 1 · comptes et mots de passe ─────────────────────────────────────
 RE_SUDO_TOUT = re.compile(r'^\s*%?\S+\s+ALL\s*=\s*\(\s*ALL(\s*:\s*ALL)?\s*\)\s*ALL\s*$')
+DROITS_LUS = ("shadow", "sudoers", "config", "login.defs")
 
 
 def comptes(c):
+    """Rend l'ensemble des comptes locaux, en posant les constats de comptes."""
     p = c.un("passwd", "COMPTES")
-    homes = {}
+    homes, locaux = {}, set()
     if p:
         for l in c.texte(p).splitlines():
             ch = l.split(":")
             if len(ch) < 7 or not ch[2].isdigit():
                 continue
             nom, uid, home, shell = ch[0], int(ch[2]), ch[5], ch[6]
+            locaux.add(nom)
             if uid == 0 and nom != "root":
                 constat("comptes", "compte disposant des droits de root",
                         f"{nom} (uid 0)", c.rel(p), "champ 3 de /etc/passwd",
@@ -164,8 +208,9 @@ def comptes(c):
 
     d = c.un("_droits.tar.gz", "COMPTES")
     if not d:
-        return
-    for nom, blob in c.membres_tar(d):
+        return locaux
+    for nom, blob in c.membres_tar(d, lambda n: os.path.basename(n) in DROITS_LUS
+                                   or "/sudoers.d/" in n):
         txt = blob.decode("utf-8", "replace")
         base = os.path.basename(nom)
         if base == "shadow":
@@ -225,6 +270,7 @@ def comptes(c):
                         f"PASS_MAX_DAYS {m.group(1)}", f"{c.rel(d)} → {nom}",
                         "grep PASS_MAX_DAYS dans /etc/login.defs",
                         question="la charte fixe-t-elle une durée maximale ?")
+    return locaux
 
 
 # ── 2 · le serveur SSH, le pare-feu, les réseaux sans fil ────────────
@@ -250,6 +296,13 @@ RE_NM_PERM = re.compile(r'^\s*permissions\s*=\s*user:([^:;]+)', re.M)
 RE_NM_DATE = re.compile(r'^([0-9a-fA-F-]{36})=(\d+)', re.M)
 
 
+def _garde_reseau(nom):
+    base = os.path.basename(nom)
+    return (base in ("sshd_config", "ufw.conf", "timestamps")
+            or "system-connections" in nom or "network-scripts" in nom
+            or RE_PARE_FEU.search(nom) is not None)
+
+
 def reseau(c):
     """Rend la liste des réseaux sans fil enregistrés, en posant au passage
     les constats de durcissement.
@@ -263,7 +316,7 @@ def reseau(c):
     if not t:
         return []
     pare_feu, reseaux, dates = [], [], {}
-    for nom, blob in c.membres_tar(t):
+    for nom, blob in c.membres_tar(t, _garde_reseau):
         txt = blob.decode("utf-8", "replace")
         base = os.path.basename(nom)
         if base == "sshd_config":
@@ -336,6 +389,9 @@ RE_INSTALLABLE = re.compile(r'\.(?:AppImage|deb|rpm|exe|msi)$', re.I)
 RE_LS_PERMS = re.compile(r'^[-dlbcpsD][-rwxsStT]{9}')
 RE_LS_ISO = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 RE_DATE_LOG = re.compile(r'^(\d{4}-\d{2}-\d{2}[ T|]\d{2}:\d{2}:\d{2})')
+RE_HOTE = re.compile(
+    rb'(?<![a-z0-9.-])(?:[a-z][a-z0-9+.-]{1,10}://)?(?:[a-z0-9-]{1,63}\.)+[a-z]{2,24}'
+    rb'(?:[/?#][^\x00\s"\'<>]{0,120})?', re.I)
 
 
 def _interesse(nom):
@@ -343,11 +399,6 @@ def _interesse(nom):
     return (base in BASES_NAVIGATEUR or base in FICHIERS_SECRETS
             or base.endswith(("_history", ".lesshst", ".pem", ".key"))
             or base.startswith("id_") or ".ssh/" in nom or ".gnupg/" in nom)
-
-
-RE_HOTE = re.compile(
-    rb'(?<![a-z0-9.-])(?:[a-z][a-z0-9+.-]{1,10}://)?(?:[a-z0-9-]{1,63}\.)+[a-z]{2,24}'
-    rb'(?:[/?#][^\x00\s"\'<>]{0,120})?', re.I)
 
 
 class Balayage:
@@ -359,8 +410,8 @@ class Balayage:
     seule expression simple extrait d'abord les NOMS D'HÔTE (avec leur schéma
     et le début du chemin) ; ils sont dédoublonnés et comptés — cent mille
     adresses uniques tiennent en quelques Mo — et les motifs ne courent que
-    sur ce corpus-là. Les pages libérées de la base y sont : on lit les octets,
-    pas les tables.
+    sur eux. Les pages libérées de la base y sont : on lit les octets, pas
+    les tables.
     """
 
     def __init__(self, motifs):
@@ -373,20 +424,17 @@ class Balayage:
             return par
         hotes = collections.Counter(m.group(0).lower().decode("latin-1")
                                     for m in RE_HOTE.finditer(blob))
-        corpus = "\n".join(hotes)
-        for ident, rx in self.motifs:
-            for m in rx.finditer(corpus):
-                d = corpus.rfind("\n", 0, m.start()) + 1
-                f = corpus.find("\n", m.end())
-                hote = corpus[d:f if f >= 0 else None]
-                par[ident][m.group(0).lower()] += hotes[hote]
+        for hote, n in hotes.items():
+            for ident, rx in self.motifs:
+                for m in rx.finditer(hote):
+                    par[ident][m.group(0).lower()] += n
         return par
 
 
 def lire_comptes(c, balayage):
     """Lit chaque archive de compte une fois. Rend un dict par compte :
-    navigateurs [(source, comptes par motif)], historiques [(source, [(date, ligne)])],
-    secrets [(source, nom)], cles [(source, nom, chiffree)]."""
+    navigateurs [(source, comptes par motif)], historiques [(source, [(commande, date)])],
+    secrets [(source, nom)], cles [(source, nom, chiffree)], autorisees [(source, clé, commentaire)]."""
     comptes_ = {}
     for suffixe in ("_profils.tar.gz", "_artefacts.tar.gz"):
         for arch in c.chercher(suffixe, "COMPTES"):
@@ -397,8 +445,6 @@ def lire_comptes(c, balayage):
                 base = os.path.basename(nom)
                 source = f"{c.rel(arch)} → {nom}"
                 if base in BASES_NAVIGATEUR:
-                    # les octets, pas SQL : on lit aussi les pages libérées, et
-                    # rien n'est jamais écrit dans la base, pas même un journal
                     p["navigateurs"].append((source, balayage.compter(blob)))
                 elif base.endswith(("_history", ".lesshst")):
                     p["historiques"].append((source, _lignes_historique(blob)))
@@ -418,7 +464,7 @@ def lire_comptes(c, balayage):
 
 
 def _lignes_historique(blob):
-    """[(date, commande)] d'un historique d'interpréteur.
+    """[(commande, date)] d'un historique d'interpréteur.
 
     bash ne date que si HISTTIMEFORMAT était posé : une ligne « #<epoch> »
     précède alors chaque commande. zsh, en mode étendu, écrit « : epoch:0;cmd ».
@@ -433,10 +479,10 @@ def _lignes_historique(blob):
             continue
         m = RE_HISTO_ZSH.match(l)
         if m:
-            lignes.append((_epoch_iso(int(m.group(1))), m.group(2)))
+            lignes.append((m.group(2), _epoch_iso(int(m.group(1)))))
             continue
         if l.strip():
-            lignes.append((quand, l))
+            lignes.append((l, quand))
             quand = None
     return lignes
 
@@ -480,7 +526,7 @@ def lire_inventaires(c):
     inv = {}
     for f in c.chercher("_inventaire.txt", "COMPTES"):
         racine, courant, chemins = None, "", []
-        for l in c.texte(f, 8_000_000).splitlines():
+        for l in c.lignes(f):
             # un en-tête de dossier finit par « : » et n'a pas la forme d'une
             # ligne de ls — un fichier peut très bien s'appeler « notes: »
             if l.endswith(":") and not RE_LS_PERMS.match(l):
@@ -498,13 +544,14 @@ def lire_inventaires(c):
                 nom, quand = (ch[8] if len(ch) > 8 else ""), " ".join(ch[5:8])
             nom = nom.split(" -> ", 1)[0]
             if nom and nom not in (".", ".."):
-                chemins.append((f"{courant}/{nom}" if courant else nom, quand, ch[2]))
+                chemins.append((f"{courant}/{nom}" if courant else nom,
+                                sys.intern(quand), sys.intern(ch[2])))
         inv[_compte_de(f, "inventaire.txt")] = (c.rel(f), chemins)
     return inv
 
 
 def lire_paquets(c):
-    """Ce qui est installé sur le POSTE. Rend [(source, methode, [(date, ligne)])].
+    """Ce qui est installé sur le POSTE. Rend [(source, methode, [(ligne, date)])].
 
     La liste des paquets ne dit pas qui les a posés : ces constats sont de
     portée « poste ». Les journaux d'installation, eux, portent une date —
@@ -513,21 +560,45 @@ def lire_paquets(c):
     out = []
     for f in c.chercher("_paquets.txt", "PAQUETS"):
         out.append((c.rel(f), "la liste des paquets installés",
-                    [(None, l) for l in c.texte(f, 8_000_000).splitlines() if l.strip()]))
+                    [(l, None) for l in c.lignes(f) if l.strip()]))
     for arch in c.chercher("_historique.tar.gz", "PAQUETS"):
-        for nom, blob in c.membres_tar(arch):
-            # history.sqlite de dnf est du binaire : ses journaux texte sont à côté
-            if b"\x00" in blob[:4096]:
+        for nom, blob in c.membres_tar(arch, lambda n: not n.endswith((".sqlite", ".json"))
+                                       or n.endswith("state.json")):
+            txt = texte_de(nom, blob)
+            if txt is None:
                 continue
             lignes = []
-            for l in blob.decode("utf-8", "replace").splitlines():
+            for l in txt.splitlines():
                 if l.strip():
                     m = RE_DATE_LOG.match(l)
-                    lignes.append((m.group(1).replace("|", " ") if m else None, l))
+                    lignes.append((l, m.group(1).replace("|", " ") if m else None))
             if lignes:
                 out.append((f"{c.rel(arch)} → {nom}",
                             "l'historique du gestionnaire de paquets", lignes))
     return out
+
+
+def _grouper(lignes, motif):
+    """Groupe les trouvailles d'un motif sur des (texte, date) :
+    {trouvé en minuscules: (n, [(texte, date)] ≤ 5, [dates triées])}.
+
+    Un dossier de films donne mille lignes pour un seul indice. Grouper rend le
+    constat lisible et borné, sans perdre le compte, les exemples ni les dates.
+    """
+    par = {}
+    for texte, date in lignes:
+        for m in motif.finditer(texte):
+            g = par.setdefault(m.group(0).lower(), [0, [], []])
+            g[0] += 1
+            if len(g[1]) < 5 and texte not in (x for x, _ in g[1]):
+                g[1].append((texte, date))
+            if date:
+                g[2].append(date)
+    return {k: (n, ex, sorted(dates)) for k, (n, ex, dates) in par.items()}
+
+
+def _exemples(ex, large=100):
+    return " ; ".join(f"{t.strip()[:large]} ({d})" if d else t.strip()[:large] for t, d in ex)
 
 
 # ── 4 · les contrôles fixes sur ces pièces ───────────────────────────
@@ -584,39 +655,27 @@ def secrets(comptes_):
                         note="quiconque obtient ce fichier peut se connecter "
                              "partout où la clé est acceptée")
         for source, lignes in p["historiques"]:
-            for date, l in lignes:
-                for motif, quoi in SECRETS:
-                    if motif.search(l):
-                        constat("secrets", quoi, l.strip()[:140], source,
-                                f"motif « {motif.pattern[:40]} » dans l'historique",
-                                acteur=compte, date=date,
-                                question="la charte interdit-elle de saisir un "
-                                         "secret en argument de commande ?",
-                                note=None if date else
-                                     "l'historique n'est pas daté : ne datez pas "
-                                     "cette ligne sans autre source")
-                        break
+            for motif, quoi in SECRETS:
+                for v, (n, ex, dates) in sorted(_grouper(lignes, motif).items()):
+                    constat("secrets", quoi, ex[0][0].strip()[:140], source,
+                            f"motif « {motif.pattern[:40]} » dans l'historique",
+                            acteur=compte, date=dates[-1] if dates else None,
+                            question="la charte interdit-elle de saisir un "
+                                     "secret en argument de commande ?",
+                            note=f"{n} saisie(s)" + ("" if dates else
+                                 " — l'historique n'est pas daté : ne datez pas "
+                                 "cette ligne sans autre source"))
 
 
-def usage(c, comptes_, inventaires):
+def usage(c, pieces):
     """Ce qui a servi. Rien n'est qualifié : les familles rangent, la charte juge."""
-    for compte, p in sorted(comptes_.items()):
-        vus = set()
-        for source, comptages in p["navigateurs"]:
-            for famille, _ in FAMILLES:
-                for v in sorted(comptages.get(famille, ())):
-                    if (famille, v) in vus:
-                        continue
-                    vus.add((famille, v))
-                    constat("usage", f"service {famille} présent dans un "
-                            "profil de navigateur", v, source,
-                            "recherche de motifs de domaines dans la base du "
-                            "navigateur (sans l'ouvrir en SQL)", acteur=compte,
-                            question=f"la charte encadre-t-elle l'usage d'un "
-                                     f"service {famille} sur un poste "
-                                     f"professionnel ?",
-                            note="présence dans la base : la date exacte se lit "
-                                 "dans faits.jsonl du skill forensic-linux")
+    for famille, brut in FAMILLES:
+        for t in _chercher_domaine(pieces, None, brut, famille):
+            constat("usage", f"service {famille} présent dans un profil de navigateur",
+                    t["valeur"], t["source"], t["methode"], acteur=t["acteur"],
+                    date=t.get("date"),
+                    question=f"la charte encadre-t-elle l'usage d'un service {famille} "
+                             "sur un poste professionnel ?", note=t["note"])
 
     # Supports amovibles : le journal les porte, avec le compte dans le chemin.
     j = c.un("_journal.txt", "JOURNAUX")
@@ -629,7 +688,7 @@ def usage(c, comptes_, inventaires):
                     question="la charte encadre-t-elle l'usage de supports "
                              "amovibles, et exige-t-elle qu'ils soient chiffrés ?")
 
-    for compte, (source, chemins) in sorted(inventaires.items()):
+    for compte, (source, chemins) in sorted(pieces["inventaires"].items()):
         for chemin, quand, _ in chemins:
             if RE_INSTALLABLE.search(chemin):
                 constat("usage", "programme installable présent dans un dossier "
@@ -646,14 +705,15 @@ def usage(c, comptes_, inventaires):
 # quatre traces le font soupçonner, et chacune se cite avec sa limite.
 RE_PRISE_IDENTITE = re.compile(
     r'(?:^|[;&|]\s*)(?:sudo\s+(?:-\S+\s+)*-u\s+(\S+)|su\s+(?:-\s+|-l\s+|--login\s+)?(\S+)|ssh\s+(?:-\S+\s+)*(\S+)@\S+)')
+QUESTION_PARTAGE = "la charte interdit-elle d'agir sous le compte d'un autre ?"
 
 
-def partage(c, comptes_, inventaires, faits, locaux):
+def _partage_fichiers(inventaires):
     for compte, (source, chemins) in sorted(inventaires.items()):
         autres = collections.defaultdict(list)
         for chemin, quand, prop in chemins:
-            if prop and prop not in (compte, "root"):
-                autres[prop].append(_avec_date(chemin, quand))
+            if prop not in (compte, "root"):
+                autres[prop].append((chemin, quand))
         for prop, ex in sorted(autres.items()):
             constat("partage", "fichiers appartenant à un autre compte dans le "
                     "dossier personnel", f"{prop} : {len(ex)} fichier(s)", source,
@@ -661,26 +721,30 @@ def partage(c, comptes_, inventaires, faits, locaux):
                     acteur=compte,
                     question="la charte interdit-elle l'usage du compte d'autrui, ou "
                              "le partage d'un poste de travail ?",
-                    note="par exemple : " + " ; ".join(ex[:5]) + ". Un fichier créé "
+                    note="par exemple : " + _exemples(ex[:5]) + ". Un fichier créé "
                          "par un autre compte dans ce dossier suppose que ce compte "
                          "y a écrit — par une session à lui, ou par sudo")
+
+
+def _partage_historiques(comptes_, locaux):
     for compte, p in sorted(comptes_.items()):
         for source, lignes in p["historiques"]:
-            for v, (n, ex, dates) in sorted(_grouper([(l, d) for d, l in lignes],
-                                                     RE_PRISE_IDENTITE).items()):
+            for v, (n, ex, dates) in sorted(_grouper(lignes, RE_PRISE_IDENTITE).items()):
                 cible = next((g for g in RE_PRISE_IDENTITE.search(v).groups() if g), "")
                 if cible.startswith("-") or cible not in locaux or cible == compte:
                     continue
                 constat("partage", "prise de l'identité d'un autre compte local "
                         "depuis l'interpréteur", f"{compte} → {cible}", source,
-                        f"motif su / sudo -u / ssh compte@ dans l'historique",
+                        "motif su / sudo -u / ssh compte@ dans l'historique",
                         acteur=compte, date=dates[-1] if dates else None,
-                        question="la charte interdit-elle d'agir sous le compte "
-                                 "d'un autre ?",
-                        note=f"{n} saisie(s), par exemple : " + " ; ".join(x.strip()[:80] for x in ex)
-                             + (". Historique non daté" if not dates else ""))
-    # la même clé publique acceptée par deux comptes : une seule clé privée
-    # ouvre les deux
+                        question=QUESTION_PARTAGE,
+                        note=f"{n} saisie(s), par exemple : " + _exemples(ex, 80)
+                             + ("" if dates else ". Historique non daté"))
+
+
+def _partage_cles(comptes_):
+    """La même clé publique acceptée par deux comptes : une seule clé privée
+    ouvre les deux."""
     par_cle = collections.defaultdict(list)
     for compte, p in comptes_.items():
         for source, cle, commentaire in p["autorisees"]:
@@ -695,40 +759,46 @@ def partage(c, comptes_, inventaires, faits, locaux):
                              "compte ?",
                     note=f"clé {cle}… ({ou[0][2] or 'sans commentaire'}) : qui détient "
                          "la clé privée agit sous tous ces comptes")
-    # deux ouvertures du même compte depuis deux origines à moins de dix
-    # minutes : deux personnes, ou une seule et deux machines — à vérifier
-    ouvertures = collections.defaultdict(list)
-    for f in faits:
-        if f.get("categorie") == "evenement" and "ouverture de session" in f.get("fait", "") \
-                and f.get("acteur") and f.get("horodatage"):
-            m = re.search(r'depuis (\S+)', f.get("note") or "")
-            try:
-                q = datetime.fromisoformat(f["horodatage"].replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            ouvertures[f["acteur"]].append((q, m.group(1) if m else "console", f["id"]))
+
+
+def _partage_sessions(pieces, locaux):
+    """Un su vers un autre compte local ; deux ouvertures du même compte
+    depuis deux origines à moins de dix minutes — deux personnes, ou une seule
+    et deux machines : à vérifier."""
+    for f in pieces["faits"]:
         if f.get("categorie") == "evenement" and f.get("fait") == "changement d'utilisateur (su)":
-            cible = re.search(r'est devenu (\S+)', f.get("note") or "")
-            if cible and cible.group(1) in locaux and cible.group(1) != f.get("acteur"):
+            cible = f.get("cible") or (re.search(r'est devenu (\S+)', f.get("note") or "") or [None, None])[1]
+            if cible in locaux and cible != f.get("acteur"):
                 constat("partage", "prise de l'identité d'un autre compte local (su)",
-                        f"{f.get('acteur')} → {cible.group(1)}",
-                        "faits.jsonl (skill forensic-linux)",
+                        f"{f.get('acteur')} → {cible}", "faits.jsonl (skill forensic-linux)",
                         f"fait {f['id']} : ligne « session opened for user » du journal",
-                        acteur=f.get("acteur"), date=f["horodatage"],
-                        question="la charte interdit-elle d'agir sous le compte d'un autre ?")
-    for compte, liste in sorted(ouvertures.items()):
+                        acteur=f.get("acteur"), date=f.get("horodatage"),
+                        question=QUESTION_PARTAGE)
+    par_compte = collections.defaultdict(list)
+    for f, q in pieces["ouvertures"]:
+        origine = f.get("origine") or (re.search(r'depuis ([^\s,]+)', f.get("note") or "")
+                                       or [None, "console"])[1]
+        par_compte[f["acteur"]].append((q, origine, f["id"]))
+    for compte, liste in sorted(par_compte.items()):
         liste.sort()
         for (q1, o1, i1), (q2, o2, i2) in zip(liste, liste[1:]):
             if o1 != o2 and (q2 - q1).total_seconds() < 600:
                 constat("partage", "deux ouvertures du même compte depuis deux "
-                        "origines à moins de dix minutes",
-                        f"{o1} puis {o2}", "faits.jsonl (skill forensic-linux)",
+                        "origines à moins de dix minutes", f"{o1} puis {o2}",
+                        "faits.jsonl (skill forensic-linux)",
                         f"faits {i1} et {i2}, horodatages comparés", acteur=compte,
-                        date=q2.isoformat().replace("+00:00", "Z"),
+                        date=q2.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
                         question="la charte interdit-elle de prêter son compte ?",
                         note="deux personnes, ou une seule avec deux machines : la "
                              "collecte ne tranche pas. Croiser avec les adresses "
                              "attribuées à chaque poste")
+
+
+def partage(pieces, locaux):
+    _partage_fichiers(pieces["inventaires"])
+    _partage_historiques(pieces["comptes"], locaux)
+    _partage_cles(pieces["comptes"])
+    _partage_sessions(pieces, locaux)
 
 
 # ── 5 · les règles fournies ──────────────────────────────────────────
@@ -760,29 +830,16 @@ PREUVE = {
     "horaire": "qu'une session a été OUVERTE hors des heures indiquées, pas "
                "qu'un travail y a été fait",
     "chaine": "que la chaîne FIGURE dans la pièce citée — pas ce qu'elle y faisait",
-    "controle": "ce que le contrôle fixe établit, écrit dans son propre constat",
 }
-# Ce qu'il faut avoir lu pour chercher chaque indice, et ce qu'on dit sinon.
-PIECE_REQUISE = {
-    "domaine": (("navigateurs",), "aucune base de navigateur dans la collecte"),
-    "programme": (("paquets", "inventaires"), "ni liste de paquets ni inventaire"),
-    "fichier": (("inventaires",), "aucun inventaire de dossier personnel"),
-    "commande": (("historiques",), "aucun historique d'interpréteur"),
-    "wifi": (("reseaux",), "aucun profil de connexion réseau"),
-    "horaire": (("faits",), "les heures demandent --faits (faits.jsonl du skill "
-                            "forensic-linux)"),
-    "chaine": (("textes",), "aucune pièce texte dans la collecte"),
-    "controle": (("comptes", "inventaires", "paquets", "reseaux"), "aucune pièce"),
-}
-
-
-class Absente(Exception):
-    """Un chercheur découvre en route qu'il lui manque la pièce."""
 
 JOURS = ("lun", "mar", "mer", "jeu", "ven", "sam", "dim")
 RE_PLAGE = re.compile(
     r'^(%s)\s*-\s*(%s)\s+(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$'
     % ("|".join(JOURS), "|".join(JOURS)), re.I)
+
+
+class Absente(Exception):
+    """La pièce qu'un chercheur voulait n'est pas dans la collecte."""
 
 
 def lire_regles(chemin):
@@ -833,7 +890,7 @@ def lire_regles(chemin):
                 if not bloc:
                     sys.exit(f"{chemin}:{num} : indice « {cle} » hors d'un bloc")
                 if cle == "controle":
-                    motif = valeur.strip().lower()
+                    motif = valeur.lower()
                 elif cle == "horaire":
                     m = RE_PLAGE.match(valeur)
                     if not m:
@@ -875,36 +932,16 @@ def lire_faits(chemin):
     return faits
 
 
-def _grouper(lignes, motif):
-    """Groupe les trouvailles d'un motif sur des (texte, date) :
-    {trouvé en minuscules: (n, [exemples ≤ 5], [dates triées])}.
-
-    Un dossier de films donne mille lignes pour un seul indice. Grouper rend le
-    constat lisible et borné, sans perdre le compte, les exemples ni les dates.
-    """
-    par = {}
-    for texte, date in lignes:
-        for m in motif.finditer(texte):
-            g = par.setdefault(m.group(0).lower(), [0, [], []])
-            g[0] += 1
-            if len(g[1]) < 5 and texte not in g[1]:
-                g[1].append(texte)
-            if date:
-                g[2].append(date)
-    for g in par.values():
-        g[2].sort()
-    return par
-
-
-def _avec_date(texte, date):
-    return f"{texte} ({date})" if date else texte
-
-
-# Les chercheurs : un par type d'indice. Chacun rend des dicts prêts pour
-# _poser — quoi, valeur, source, methode, et acteur/portee/date/note.
-def _chercher_domaine(pieces, motif, brut, ident, faits):
-    visites = pieces.get("visites") or {}
-    for compte, p in sorted(pieces["comptes"].items()):
+# Les chercheurs : un par type d'indice. Chacun rend des dicts prêts pour le
+# constat — quoi, valeur, source, methode, et acteur/portee/date/note — et lève
+# Absente quand la pièce qu'il lui faut n'est pas là.
+def _chercher_domaine(pieces, motif, brut, ident):
+    """ident : ce que Balayage a compté sous ce nom — (règle, motif) ou famille."""
+    comptes_ = pieces["comptes"]
+    if not any(p["navigateurs"] for p in comptes_.values()):
+        raise Absente("aucune base de navigateur dans la collecte")
+    faits, visites = pieces["faits"], pieces["visites"]
+    for compte, p in sorted(comptes_.items()):
         for source, comptages in p["navigateurs"]:
             for v, n in sorted(comptages.get(ident, {}).items()):
                 date, note = None, f"{n} occurrence(s) dans la base"
@@ -929,46 +966,47 @@ def _chercher_domaine(pieces, motif, brut, ident, faits):
                     note += " ; la date se lit avec --faits"
                 yield dict(quoi="domaine présent dans une base de navigateur",
                            valeur=v, source=source, acteur=compte, date=date,
-                           methode=f"motif « {brut} » cherché dans les octets de "
-                                   "la base, sans l'ouvrir en SQL", note=note)
+                           methode=f"motif « {brut} » cherché dans les noms d'hôte "
+                                   "extraits des octets de la base, sans l'ouvrir en SQL",
+                           note=note)
 
 
-def _chercher_inventaire(pieces, motif, brut, quoi):
+def _chercher_inventaire(pieces, motif, brut, ident, quoi):
+    if not pieces["inventaires"]:
+        raise Absente("aucun inventaire de dossier personnel")
     for compte, (source, chemins) in sorted(pieces["inventaires"].items()):
-        par_chemin = {ch: q for ch, q, _ in chemins}
-        for v, (n, ex, dates) in sorted(_grouper([(ch, None) for ch, _, _ in chemins],
-                                                  motif).items()):
+        for v, (n, ex, _) in sorted(_grouper(((ch, q) for ch, q, _ in chemins), motif).items()):
             yield dict(quoi=quoi, valeur=v, source=source, acteur=compte,
                        methode=f"motif « {brut} » cherché dans les chemins de "
                                "l'inventaire (ls -lRa)",
-                       note=f"{n} chemin(s), par exemple : "
-                            + " ; ".join(_avec_date(x, par_chemin.get(x)) for x in ex)
+                       note=f"{n} chemin(s), par exemple : " + _exemples(ex, 200)
                             + ". La date entre parenthèses est celle que ls "
                             "affiche : modification, sans année si récente")
 
 
-def _chercher_programme(pieces, motif, brut, ident, faits):
+def _chercher_programme(pieces, motif, brut, ident):
+    if not pieces["paquets"] and not pieces["inventaires"]:
+        raise Absente("ni liste de paquets ni inventaire")
     for source, methode, lignes in pieces["paquets"]:
-        for v, (n, ex, dates) in sorted(_grouper([(l, d) for d, l in lignes], motif).items()):
+        for v, (n, ex, dates) in sorted(_grouper(lignes, motif).items()):
             yield dict(quoi="programme installé sur le poste", valeur=v, source=source,
                        portee="poste", date=dates[-1] if dates else None,
                        methode=f"motif « {brut} » cherché dans {methode}",
                        note="la liste des paquets ne dit pas quel compte a demandé "
                             "l'installation : la portée est le poste. Ligne : "
-                            + ex[0].strip()[:120])
-    yield from _chercher_inventaire(pieces, motif, brut,
-                                    "programme présent dans le dossier personnel")
+                            + ex[0][0].strip()[:120])
+    if pieces["inventaires"]:
+        yield from _chercher_inventaire(pieces, motif, brut, ident,
+                                        "programme présent dans le dossier personnel")
 
 
-def _chercher_fichier(pieces, motif, brut, ident, faits):
-    yield from _chercher_inventaire(pieces, motif, brut,
-                                    "fichier présent dans le dossier personnel")
-
-
-def _chercher_commande(pieces, motif, brut, ident, faits):
-    for compte, p in sorted(pieces["comptes"].items()):
+def _chercher_commande(pieces, motif, brut, ident):
+    comptes_ = pieces["comptes"]
+    if not any(p["historiques"] for p in comptes_.values()):
+        raise Absente("aucun historique d'interpréteur")
+    for compte, p in sorted(comptes_.items()):
         for source, lignes in p["historiques"]:
-            for v, (n, ex, dates) in sorted(_grouper([(l, d) for d, l in lignes], motif).items()):
+            for v, (n, ex, dates) in sorted(_grouper(lignes, motif).items()):
                 if dates:
                     note = (f"{n} saisie(s), {len(dates)} datée(s) du {dates[0]} au "
                             f"{dates[-1]} (HISTTIMEFORMAT posé)")
@@ -980,11 +1018,12 @@ def _chercher_commande(pieces, motif, brut, ident, faits):
                            date=dates[-1] if dates else None,
                            methode=f"motif « {brut} » cherché ligne à ligne dans "
                                    "l'historique de l'interpréteur",
-                           note=note + ". Par exemple : "
-                                + " ; ".join(x.strip()[:100] for x in ex))
+                           note=note + ". Par exemple : " + _exemples(ex))
 
 
-def _chercher_wifi(pieces, motif, brut, ident, faits):
+def _chercher_wifi(pieces, motif, brut, ident):
+    if not pieces["reseaux"]:
+        raise Absente("aucun profil de connexion réseau")
     for o in pieces["reseaux"]:
         if not motif.search(" ".join(x for x in (o["ssid"], o["id"]) if x)):
             continue
@@ -999,66 +1038,77 @@ def _chercher_wifi(pieces, motif, brut, ident, faits):
                         "manque ou ne connaît pas ce profil")
 
 
-def _chercher_horaire(pieces, motif, brut, ident, faits):
+def _chercher_horaire(pieces, motif, brut, ident):
     """Les ouvertures de session hors des heures ouvrées, groupées par journée.
 
     C'est le seul endroit où le fuseau compte AVANT le rapport : dire qu'une
     session est « hors heures » suppose de lire l'heure dans le fuseau du poste.
     """
+    if not pieces["faits"]:
+        raise Absente("les heures demandent --faits (faits.jsonl du skill forensic-linux)")
+    if not pieces["ouvertures"]:
+        raise Absente("aucune ouverture de session datée dans faits.jsonl")
     jours, deb, fin = motif
-    fuseau = pieces["fuseau"]
-    par, lus = {}, 0
-    for f in faits:
-        if f.get("categorie") != "evenement" or not f.get("horodatage") or \
-                "ouverture de session" not in f.get("fait", ""):
-            continue
-        try:
-            q = datetime.fromisoformat(f["horodatage"].replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        lus += 1
-        if q.tzinfo and fuseau:
-            q = q.astimezone(fuseau)
+    par = {}
+    for f, q in pieces["ouvertures"]:
         if q.weekday() in jours and deb <= q.hour * 60 + q.minute < fin:
             continue
-        cle_j = (f.get("acteur") or "?", q.date().isoformat())
-        par.setdefault(cle_j, []).append((q.strftime("%H:%M"), f.get("id", "")))
-    if not lus:
-        raise Absente("aucune ouverture de session datée dans faits.jsonl")
-    nom_fuseau = str(fuseau) if fuseau else "celui que portent les faits"
+        par.setdefault((f.get("acteur") or "?", q.date().isoformat()), []).append((q, f["id"]))
+    nom_fuseau = str(pieces["fuseau"]) if pieces["fuseau"] else "UTC, faute de fuseau connu"
     for (qui, jour), heures in sorted(par.items()):
         heures.sort()
         yield dict(quoi="session ouverte hors des heures indiquées",
-                   valeur=f"{jour} ({JOURS[datetime.fromisoformat(jour).weekday()]}) : "
-                          + ", ".join(h for h, _ in heures),
+                   valeur=f"{jour} ({JOURS[heures[0][0].weekday()]}) : "
+                          + ", ".join(q.strftime("%H:%M") for q, _ in heures),
                    source="faits.jsonl (skill forensic-linux)",
-                   acteur=None if qui == "?" else qui, date=jour,
+                   acteur=None if qui == "?" else qui,
+                   date=heures[0][0].astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
                    methode=f"heures ouvrées « {brut} » comparées à l'horodatage des "
                            f"ouvertures de session, lues dans le fuseau {nom_fuseau}",
-                   note=f"{len(heures)} ouverture(s) : "
-                        + ", ".join(i for _, i in heures if i))
+                   note=f"{len(heures)} ouverture(s) : " + ", ".join(i for _, i in heures))
 
 
-def _chercher_texte(pieces, motif, brut, ident, faits):
+def _chercher_texte(pieces, motif, brut, ident):
     """Une chaîne ou une expression, dans toutes les pièces texte : historiques
     et inventaires des comptes, paquets, journal du poste."""
+    if not pieces["textes"]:
+        raise Absente("aucune pièce texte dans la collecte")
     for source, acteur, lignes in pieces["textes"]:
-        for v, (n, ex, dates) in sorted(_grouper(lignes, motif).items()):
+        for v, (n, ex, dates) in sorted(_grouper(lignes(), motif).items()):
             yield dict(quoi="texte présent dans une pièce", valeur=v, source=source,
                        acteur=acteur, date=dates[-1] if dates else None,
                        portee="compte" if acteur else "poste",
                        methode=f"motif « {brut} » cherché ligne à ligne",
-                       note=f"{n} ligne(s), par exemple : "
-                            + " ; ".join(x.strip()[:100] for x in ex))
+                       note=f"{n} ligne(s), par exemple : " + _exemples(ex))
 
 
-CHERCHEURS = {"domaine": _chercher_domaine, "programme": _chercher_programme,
-              "fichier": _chercher_fichier, "commande": _chercher_commande,
-              "wifi": _chercher_wifi, "horaire": _chercher_horaire,
-              "chaine": _chercher_texte}
+CHERCHEURS = {
+    "domaine": _chercher_domaine, "programme": _chercher_programme,
+    "fichier": functools.partial(_chercher_inventaire,
+                                 quoi="fichier présent dans le dossier personnel"),
+    "commande": _chercher_commande, "wifi": _chercher_wifi,
+    "horaire": _chercher_horaire, "chaine": _chercher_texte,
+}
 
 
-def appliquer_regles(c, regles, pieces, faits):
+def _adosser(r, theme_et_debut):
+    """« controle: partage » : la règle s'adosse à un contrôle fixe. Ses
+    constats déjà posés reçoivent le numéro — sans rien perdre : un constat
+    peut porter plusieurs règles, et sa question d'origine reste."""
+    theme, _, debut = theme_et_debut.partition("/")
+    n = 0
+    for x in CONSTATS:
+        if x["theme"] == theme and x["constat"].lower().startswith(debut):
+            x.setdefault("regle", r["regle"])
+            x.setdefault("regles", []).append(r["regle"])
+            x["note"] = ((x.get("note") + ". ") if x.get("note") else "") + \
+                f"règle {r['regle']} « {r['titre']} » : ce contrôle traduit-il fidèlement " \
+                "ce que dit la règle ?"
+            n += 1
+    return n
+
+
+def appliquer_regles(c, regles, pieces):
     """Cherche dans la collecte les indices que les règles désignent.
 
     Deux silences qui ne se confondent pas : la pièce manquait — « limite »,
@@ -1069,23 +1119,10 @@ def appliquer_regles(c, regles, pieces, faits):
         poses, absentes, deja = 0, [], set()
         for cle, motif, etiquette, brut in r["indices"]:
             if cle == "controle":
-                # la règle s'adosse à un contrôle fixe : ses constats déjà posés
-                # — thème, ou thème/début du libellé — reçoivent le numéro
-                theme, _, debut = motif.partition("/")
-                for x in CONSTATS:
-                    if x["theme"] == theme and x["constat"].lower().startswith(debut) \
-                            and not x.get("regle"):
-                        x["regle"] = r["regle"]
-                        x["question"] = (f"règle {r['regle']} « {r['titre']} » — ce "
-                                         "contrôle traduit-il fidèlement ce que dit la règle ?")
-                        poses += 1
-                continue
-            requises, manque = PIECE_REQUISE[cle]
-            if not any(pieces.get(p) for p in requises):
-                absentes.append(manque)
+                poses += _adosser(r, motif)
                 continue
             try:
-                trouves = list(CHERCHEURS[cle](pieces, motif, brut, (r["regle"], brut), faits))
+                trouves = list(CHERCHEURS[cle](pieces, motif, brut, (r["regle"], brut)))
             except Absente as e:
                 absentes.append(str(e))
                 continue
@@ -1127,19 +1164,21 @@ def appliquer_regles(c, regles, pieces, faits):
                          "s'efface")
 
 
-def _pieces_texte(c, comptes_, inventaires, paquets):
-    """[(source, acteur, [(ligne, date)])] : tout ce qui se lit ligne à ligne."""
+def _pieces_texte(c, pieces):
+    """[(source, acteur, lignes)] : tout ce qui se lit ligne à ligne. `lignes`
+    est une fonction : le journal du poste peut faire 200 Mo, il se relit
+    plutôt que de se garder."""
     textes = []
-    for compte, p in sorted(comptes_.items()):
+    for compte, p in sorted(pieces["comptes"].items()):
         for source, lignes in p["historiques"]:
-            textes.append((source, compte, [(l, d) for d, l in lignes]))
-    for compte, (source, chemins) in sorted(inventaires.items()):
-        textes.append((source, compte, [(ch, None) for ch, _, _ in chemins]))
-    for source, _, lignes in paquets:
-        textes.append((source, None, [(l, d) for d, l in lignes]))
+            textes.append((source, compte, lambda l=lignes: l))
+    for compte, (source, chemins) in sorted(pieces["inventaires"].items()):
+        textes.append((source, compte, lambda ch=chemins: ((x, q) for x, q, _ in ch)))
+    for source, _, lignes in pieces["paquets"]:
+        textes.append((source, None, lambda l=lignes: l))
     j = c.un("_journal.txt", "JOURNAUX")
     if j:
-        textes.append((c.rel(j), None, [(l, None) for l in c.texte(j, 200_000_000).splitlines()]))
+        textes.append((c.rel(j), None, lambda: ((l, None) for l in c.lignes(j))))
     return textes
 
 
@@ -1153,6 +1192,18 @@ def _visites_par_compte(faits):
             f["_texte"] = (f["valeur"] + " " + (f.get("note") or "")).lower()
             par.setdefault(f["acteur"], []).append(f)
     return par
+
+
+def _ouvertures(faits, fuseau):
+    """[(fait, instant)] des ouvertures de session datées, dans le fuseau du poste."""
+    out = []
+    for f in faits:
+        if f.get("categorie") == "evenement" and "ouverture de session" in f.get("fait", "") \
+                and f.get("acteur"):
+            q = instant(f.get("horodatage"), fuseau)
+            if q:
+                out.append((f, q))
+    return out
 
 
 def _fuseau(demande, faits):
@@ -1210,6 +1261,19 @@ def ecrire_csv(chemin, lignes, colonnes):
             w.writerow([_csv_sain(x.get(k)) for k in colonnes])
 
 
+def etape(nom, fn, *args, defaut=None):
+    """Une étape : ce qu'elle rend, combien de constats elle a posés, et une
+    erreur qui ne fait pas tomber les autres."""
+    avant = len(CONSTATS)
+    try:
+        resultat = fn(*args)
+    except Exception as e:                                        # noqa: BLE001
+        print(f"  ! {nom} : {type(e).__name__} {e}", file=sys.stderr)
+        resultat = defaut
+    print(f"  {nom:26s} {len(CONSTATS) - avant:4d} constats", file=sys.stderr)
+    return resultat
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1228,54 +1292,27 @@ def main():
     c = Collecte(args.collecte)
     regles = lire_regles(args.regles) if args.regles else []
     faits = lire_faits(args.faits) if args.faits else []
+    fuseau = _fuseau(args.fuseau, faits)
 
     # tous les motifs de domaine — familles fixes et règles — en un balayage
-    motifs = [(f, m) for f, m in FAMILLES]
-    for r in regles:
-        motifs += [((r["regle"], brut), brut) for cle, _, _, brut in r["indices"]
-                   if cle == "domaine"]
-    balayage = Balayage(motifs)
+    motifs = list(FAMILLES) + [((r["regle"], brut), brut) for r in regles
+                               for cle, _, _, brut in r["indices"] if cle == "domaine"]
+    pieces = {"faits": faits, "fuseau": fuseau,
+              "visites": _visites_par_compte(faits),
+              "ouvertures": _ouvertures(faits, fuseau)}
+    pieces["comptes"] = etape("lecture des comptes", lire_comptes, c, Balayage(motifs), defaut={})
+    pieces["inventaires"] = etape("inventaires", lire_inventaires, c, defaut={})
+    pieces["paquets"] = etape("paquets", lire_paquets, c, defaut=[])
+    pieces["reseaux"] = etape("réseau et durcissement", reseau, c, defaut=[])
+    pieces["textes"] = _pieces_texte(c, pieces) if any(
+        cle == "chaine" for r in regles for cle, _, _, _ in r["indices"]) else []
 
-    etapes = [("lecture des comptes", lambda: lire_comptes(c, balayage)),
-              ("inventaires", lambda: lire_inventaires(c)),
-              ("paquets", lambda: lire_paquets(c)),
-              ("réseau et durcissement", lambda: reseau(c))]
-    pieces = {"faits": faits, "fuseau": _fuseau(args.fuseau, faits),
-              "visites": _visites_par_compte(faits)}
-    for (nom, fn), cle in zip(etapes, ("comptes", "inventaires", "paquets", "reseaux")):
-        avant = len(CONSTATS)
-        try:
-            pieces[cle] = fn()
-        except Exception as e:                                    # noqa: BLE001
-            print(f"  ! {nom} : {type(e).__name__} {e}", file=sys.stderr)
-            pieces[cle] = {} if cle in ("comptes", "inventaires") else []
-        print(f"  {nom:26s} {len(CONSTATS) - avant:4d} constats", file=sys.stderr)
-    comptes_ = pieces["comptes"]
-    pieces["navigateurs"] = any(p["navigateurs"] for p in comptes_.values())
-    pieces["historiques"] = any(p["historiques"] for p in comptes_.values())
-    if any(cle == "chaine" for r in regles for cle, _, _, _ in r["indices"]):
-        pieces["textes"] = _pieces_texte(c, comptes_, pieces["inventaires"], pieces["paquets"])
-    locaux = set()
-    p = c.un("passwd", "COMPTES")
-    if p:
-        locaux = {l.split(":")[0] for l in c.texte(p).splitlines() if ":" in l}
-
-    for nom, fn in (("comptes et mots de passe", lambda: comptes(c)),
-                    ("secrets", lambda: secrets(comptes_)),
-                    ("usage", lambda: usage(c, comptes_, pieces["inventaires"])),
-                    ("partage de compte",
-                     lambda: partage(c, comptes_, pieces["inventaires"], faits, locaux))):
-        avant = len(CONSTATS)
-        try:
-            fn()
-        except Exception as e:                                    # noqa: BLE001
-            print(f"  ! {nom} : {type(e).__name__} {e}", file=sys.stderr)
-        print(f"  {nom:26s} {len(CONSTATS) - avant:4d} constats", file=sys.stderr)
+    locaux = etape("comptes et mots de passe", comptes, c, defaut=set())
+    etape("secrets", secrets, pieces["comptes"])
+    etape("usage", usage, c, pieces)
+    etape("partage de compte", partage, pieces, locaux)
     if regles:
-        avant = len(CONSTATS)
-        appliquer_regles(c, regles, pieces, faits)
-        print(f"  {'règles fournies':26s} {len(CONSTATS) - avant:4d} constats "
-              f"({len(regles)} règles)", file=sys.stderr)
+        etape(f"règles fournies ({len(regles)})", appliquer_regles, c, regles, pieces)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:
         for x in CONSTATS:
@@ -1315,7 +1352,8 @@ def main():
     print("  " + "  ".join(f"{k}={v}" for k, v in sorted(par.items())), file=sys.stderr)
     if regles:
         par_regle = collections.Counter(
-            x["regle"] for x in CONSTATS if x.get("regle") and x["theme"] not in SANS_REGLE)
+            rid for x in CONSTATS if x["theme"] not in ("limite", "conforme")
+            for rid in x.get("regles", [x["regle"]] if x.get("regle") else []))
         limites = {x["regle"] for x in CONSTATS if x.get("regle") and x["theme"] == "limite"}
         print("", file=sys.stderr)
         for r in regles:
