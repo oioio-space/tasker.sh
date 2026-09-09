@@ -171,6 +171,21 @@ LEXIQUE = {
                          "non par le poste",
     "photorec": "outil qui retrouve des fichiers effacés en reconnaissant leur contenu, "
                 "sans leur nom ni leur date",
+    "snap": "une application livrée avec tout ce qu'il lui faut, hors du gestionnaire de "
+            "paquets : elle n'apparaît ni dans dpkg ni dans rpm",
+    "flatpak": "comme un snap : une application installable sans droits d'administration, "
+               "invisible à la liste des paquets",
+    "unité systemd": "un fichier qui déclare un programme à lancer au démarrage, ou à une "
+                     "heure donnée ; celles de /usr viennent des paquets, celles de /etc "
+                     "ont été posées à la main",
+    "autostart": "un fichier .desktop qui lance un programme à l'ouverture de session — "
+                 "celui du compte s'il est dans son dossier personnel",
+    "udev": "les règles déclenchées au branchement d'un matériel ; une règle peut lancer "
+            "un programme",
+    "marque-page": "un signet enregistré dans le navigateur : un choix délibéré, daté, "
+                   "qui survit au vidage de l'historique",
+    "formulaire": "ce que le compte a TAPÉ dans une page — recherches, adresses — que le "
+                  "navigateur retient pour le proposer ensuite",
     "inode": "la fiche interne d'un fichier sur le disque ; un fichier effacé garde sa fiche "
              "un temps",
     "sha256": "une empreinte : deux fichiers de même empreinte ont le même contenu",
@@ -306,6 +321,17 @@ def main():
         lignes.append((nom, "a ouvert des sessions sans figurer dans passwd", len(s),
                        quand(s[0]["fait"]), quand(s[-1]["fait"]), s[0]["fait"]["id"]))
     S.append(table(["compte", "nature", "sessions", "première", "dernière", "id"], lignes))
+    propres = [f for f in par.get("paquet", []) + par.get("compte", []) + par.get("persistance", [])
+               if f.get("acteur") and f["fait"] not in ("compte local ouvrant une session",
+                                                        "compte de service avec un shell",
+                                                        "compte de domaine vu sur la machine")]
+    if propres:
+        S.append("**Ce qui est propre à chaque compte** — applications installées hors du "
+                 "gestionnaire de paquets, courriel configuré, programmes lancés à "
+                 "l'ouverture de sa session.\n")
+        S.append(table(["compte", "quoi", "valeur", "source", "id"],
+                       [(f["acteur"], f["fait"], f["valeur"], f["source"], f["id"])
+                        for f in sorted(propres, key=lambda f: (f["acteur"], f["fait"]))]))
     S.append(a_rediger("ce qui distingue un compte qui a servi d'un compte qui "
                        "existe. Un compte sans session n'est pas un compte inutilisé "
                        "si wtmp a été tourné : voir les limites."))
@@ -419,6 +445,21 @@ def main():
                              " ; ".join(f"{quand(t)} {t['fait'].replace('fichier ', '')} ({t['id']})"
                                         for t in confirme.get(f["id"], [])) or "—",
                              f["id"]) for f in H.tri(charges)]))
+        signets = [f for f in mien(par.get("navigation", [])) if f["fait"] == "marque-page enregistré"]
+        recherches = [f for f in mien(par.get("navigation", [])) if f["fait"].startswith("recherche")]
+        saisies = [f for f in mien(par.get("usage", [])) if f["fait"] == "saisie dans un formulaire"]
+        if signets:
+            S.append("**Marque-pages** — un signet est un choix délibéré, daté, et il "
+                     "survit au vidage de l'historique :\n")
+            S.append(table(["enregistré le", "adresse", "titre", "id"],
+                           [(quand(f), f["valeur"], f.get("note"), f["id"]) for f in H.tri(signets)]))
+        if recherches or saisies:
+            S.append("**Ce que le compte a tapé** — recherches et saisies de formulaire : "
+                     "l'intention, là où l'historique ne donne que la page atteinte.\n")
+            S.append(table(["date", "quoi", "saisi", "détail", "id"],
+                           [(quand(f), "recherche" if f in recherches else "formulaire",
+                             f["valeur"], f.get("note"), f["id"])
+                            for f in H.tri(recherches + saisies)]))
         if secrets:
             S.append("**Sites avec un mot de passe enregistré dans le navigateur** "
                      "(le site seul est lu) :\n")
@@ -458,6 +499,22 @@ def main():
     S.append(table(["date", "constat", "valeur", "compte", "confiance", "id", "à vérifier"],
                    [(quand(f), f["fait"], f["valeur"], f.get("acteur"), f.get("confiance"),
                      f["id"], "…") for f in H.tri(par.get("suspect", []))]))
+    persistants = [f for f in par.get("persistance", []) if not f.get("acteur")]
+    if persistants:
+        S.append("### Ce qui se relance seul\n")
+        S.append("Tâches planifiées, unités systemd, autostart, règles udev : ce qui "
+                 "repart sans qu'on le demande. Une unité posée dans `/etc` l'a été à la "
+                 "main ou par un installeur — pas par le gestionnaire de paquets.\n")
+        S.append(table(["quoi", "valeur", "source", "id"],
+                       [(f["fait"], f["valeur"], f["source"], f["id"]) for f in persistants]))
+    if par.get("recuperation"):
+        S.append("### Ce qui a été récupéré de l'espace libre\n")
+        S.append("photorec rend un contenu **sans nom ni date** : le type est tout ce qui "
+                 "les trie. Une empreinte ou une chaîne connue s'y cherche avec "
+                 "`--indicateurs`.\n")
+        S.append(table(["quoi", "combien", "où", "note", "id"],
+                       [(f["fait"], f["valeur"], f["source"], T(f.get("note")), f["id"])
+                        for f in par["recuperation"]]))
     if par.get("indicateur"):
         S.append("### Les indicateurs cherchés\n")
         S.append("Ce que l'analyste a demandé de chercher (`--indicateurs`), trouvé ou non :\n")

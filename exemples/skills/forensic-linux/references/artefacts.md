@@ -385,3 +385,23 @@ lu sous le point de montage du support amovible ? Chaque réponse est un fait qu
 porte `confirme: F0123` — l'identifiant du fait qu'elle confirme. Un
 téléchargement **non** retrouvé est un fait aussi : effacé depuis, renommé, ou
 sur un volume que la timeline ne couvre pas.
+
+## Les pièces qu'on oublie, et ce qu'elles disent
+
+Ce que la collecte emporte au-delà des grands classiques, et pourquoi chacune
+mérite d'être lue.
+
+| pièce | où | ce qu'elle établit | ce qu'elle n'établit pas |
+|---|---|---|---|
+| **marque-pages** (`moz_bookmarks` de `places.sqlite`, `Bookmarks` de Chrome en JSON) | profil du compte | un choix **délibéré**, **daté** (`dateAdded`), qui **survit au vidage de l'historique** — ce que l'utilisateur croit souvent suffisant | que le site ait été visité récemment : un signet peut dormir des années |
+| **historique de formulaire** (`formhistory.sqlite`, table `autofill` de `Web Data`) | idem | ce que le compte a **tapé** : recherches, adresses, identifiants de connexion — l'intention, là où l'historique ne donne que le résultat | le mot de passe : il n'est pas dans ces tables. Une valeur peut avoir été saisie sur n'importe quel site |
+| **recherches de la barre d'adresse** (`keyword_search_terms`) | `History` de Chrome | le terme saisi et la page atteinte, datés | ce que Firefox a cherché : il garde ses recherches dans l'historique de formulaire |
+| **applications snap et flatpak** (`~/snap/<app>/`, `~/.var/app/<id>/`) | archive de profil, **par les noms des membres** | qu'une application est **présente chez ce compte** alors qu'**aucune liste de paquets ne la montre** — un snap échappe à `dpkg` comme à `rpm` | qu'elle ait servi, ni qui l'a installée. Le dossier peut survivre à la désinstallation |
+| **unités systemd** (`ExecStart=`) | archive de persistance | ce qui se relance seul. Une unité dans `/etc/systemd/system` a été posée **à la main** ; celles de `/usr/lib` viennent des paquets et sont comptées, pas listées | qu'elle ait démarré : le journal le dit, pas le fichier |
+| **autostart** (`.desktop` avec `Exec=`) | `/etc/xdg/autostart`, et `~/.config/autostart` **par compte** | un programme lancé à l'ouverture de session — celui du dossier personnel est **propre à ce compte** | qui l'y a mis |
+| **règles udev** (`RUN+=`) | archive de persistance | un programme déclenché au **branchement d'un matériel** | son exécution |
+| **kickstart** (`anaconda-ks.cfg`) | archive d'installation | la configuration **d'origine** : nom donné, fuseau, comptes créés à la pose, mot de passe root chiffré ou non | ce qui a changé depuis |
+| **Thunderbird** (`prefs.js`) | profil du compte | les **adresses de courriel** et les serveurs configurés — une adresse personnelle à côté de l'adresse professionnelle est un fait | ce qui a été envoyé ou reçu |
+| **sortie de photorec** | `PHOTOREC/` | des contenus effacés, **par type** (document, image, archive, secret possible) | **ni le nom, ni la date, ni le chemin** d'origine. Le type vient de l'extension que photorec devine. Une empreinte ou une chaîne connue s'y cherche avec `--indicateurs` |
+| **`/etc/fstab`** | `SYSTEME/fstab` | les volumes que la machine **déclarait** — y compris un partage réseau ou un volume chiffré absent de la collecte | qu'ils aient été montés |
+| **disques de machines virtuelles** (`.vmdk`, `.qcow2`…) | `MACHINES/` | qu'une VM vit sur ce poste : **elle emporte son propre système**, et ce qu'on y a fait n'est dans aucune de ces pièces | son contenu, qui demande une collecte à part |

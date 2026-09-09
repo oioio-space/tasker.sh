@@ -289,6 +289,18 @@ def machine(c):
                     if champs.get(cle):
                         fait("machine", quoi, champs[cle], f"{c.rel(inst)} → {nom}",
                              f"grep {cle}= etc/machine-info")
+            elif nom.endswith("-ks.cfg"):
+                txt = blob.decode("utf-8", "replace")
+                for motif, quoi in (
+                        (r'^\s*user\s+.*--name[= ](\S+)', "compte créé à l'installation"),
+                        (r'^\s*network\s+.*--hostname[= ](\S+)', "nom donné à l'installation"),
+                        (r'^\s*timezone\s+(\S+)', "fuseau choisi à l'installation"),
+                        (r'^\s*rootpw\s+(--iscrypted|--plaintext|--lock)', "mot de passe root à l'installation")):
+                    for m in re.finditer(motif, txt, re.M):
+                        fait("machine", quoi, m.group(1), f"{c.rel(inst)} → {nom}",
+                             "lecture du fichier kickstart", confiance="forte",
+                             note="ce que l'installation automatique a posé — la "
+                                  "configuration d'origine, avant tout usage")
             elif nom.endswith("crypttab"):
                 for l in blob.decode("utf-8", "replace").splitlines():
                     if l.strip() and not l.startswith("#"):
@@ -994,6 +1006,13 @@ REQ_FIREFOX = {
         "SELECT datetime(a.dateAdded/1000000,'unixepoch'), a.content, p.url "
         "FROM moz_annos a JOIN moz_places p ON p.id=a.place_id "
         "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC LIMIT ?",
+    # un marque-page est un choix délibéré, et il est DATÉ : il survit au
+    # vidage de l'historique, que l'utilisateur croit souvent suffisant
+    "marque-page":
+        "SELECT datetime(b.dateAdded/1000000,'unixepoch'), p.url, b.title "
+        "FROM moz_bookmarks b JOIN moz_places p ON p.id=b.fk "
+        "WHERE b.type=1 AND p.url NOT LIKE 'place:%' "
+        "ORDER BY b.dateAdded DESC LIMIT ?",
 }
 # Un cookie prouve une visite même quand l'historique a été vidé : les deux
 # bases sont indépendantes. On regroupe par domaine — un profil en compte des
@@ -1028,6 +1047,12 @@ REQ_CHROME = {
     "telechargement":
         "SELECT datetime(start_time/1000000-11644473600,'unixepoch'), target_path, tab_url "
         "FROM downloads ORDER BY start_time DESC LIMIT ?",
+    # ce que le compte a TAPÉ dans la barre d'adresse : l'intention, pas
+    # seulement la page atteinte
+    "recherche":
+        "SELECT datetime(u.last_visit_time/1000000-11644473600,'unixepoch'), k.term, u.url "
+        "FROM keyword_search_terms k JOIN urls u ON u.id=k.url_id "
+        "ORDER BY u.last_visit_time DESC LIMIT ?",
 }
 
 # Les mots de passe enregistrés : on lit le SITE, jamais l'identifiant ni le
@@ -1114,6 +1139,15 @@ def _historique_navigateur(source, compte, blob, req, outil, limite):
             fait("telechargement", "fichier téléchargé", cible, source,
                  f"sqlite3 sur les téléchargements {outil}", horodatage=_iso_z(ts),
                  acteur=compte, note=f"depuis {origine}" if origine else None)
+        for ts, url, titre in _lignes(cx, req.get("marque-page", ""), (limite,)) if req.get("marque-page") else []:
+            fait("navigation", "marque-page enregistré", url, source,
+                 f"sqlite3 sur les marque-pages {outil}", horodatage=_iso_z(ts),
+                 acteur=compte, note=(titre or None),
+                 confiance="certaine")
+        for ts, terme, url in _lignes(cx, req.get("recherche", ""), (limite,)) if req.get("recherche") else []:
+            fait("navigation", "recherche saisie dans la barre d'adresse", terme, source,
+                 f"sqlite3 sur keyword_search_terms {outil}", horodatage=_iso_z(ts),
+                 acteur=compte, note=f"a mené à {url}" if url else None)
     if total and total > len(visites):
         fait("limite", "historique de navigation tronqué",
              f"{len(visites)} pages sur {total}", source,
@@ -1130,6 +1164,57 @@ def _recemment_ouverts(source, compte, blob, req, outil):
              "grep href= recently-used.xbel", horodatage=m2.group(2), acteur=compte)
 
 
+# Ce que le compte a SAISI dans une page : recherches, identifiants de
+# connexion (le nom, jamais le mot de passe — il n'est pas là), adresses.
+# C'est l'intention, là où l'historique ne donne que le résultat.
+REQ_FORMULAIRES_FF = [
+    ("formulaire", "SELECT fieldname, value, timesUsed, "
+                   "datetime(firstUsed/1000000,'unixepoch'), datetime(lastUsed/1000000,'unixepoch') "
+                   "FROM moz_formhistory ORDER BY lastUsed DESC LIMIT 500"),
+]
+# Chrome compte en SECONDES dans cette table — pas en microsecondes comme
+# ailleurs : c'est la table, pas une devinette.
+REQ_FORMULAIRES_CHROME = [
+    ("formulaire", "SELECT name, value, count, "
+                   "datetime(date_created,'unixepoch'), datetime(date_last_used,'unixepoch') "
+                   "FROM autofill ORDER BY date_last_used DESC LIMIT 500"),
+]
+
+
+def _formulaires(source, compte, blob, req, outil):
+    for _, lignes in _sqlite_lire(blob, req):
+        for champ, valeur, combien, premier, dernier in lignes:
+            fait("usage", "saisie dans un formulaire", str(valeur)[:200], source,
+                 f"sqlite3 sur l'historique de formulaires {outil}",
+                 horodatage=_iso_z(dernier), acteur=compte,
+                 note=f"champ « {champ} », {combien} fois, la première le {_iso_z(premier)}"
+                      " — ce que le compte a tapé, pas ce qu'il a atteint")
+        return
+
+
+def _marque_pages_chrome(source, compte, blob, req, outil):
+    """Chrome garde ses marque-pages en JSON, avec la date en microsecondes
+    depuis 1601 comme le reste de ses bases."""
+    try:
+        racines = json.loads(blob.decode("utf-8", "replace")).get("roots", {})
+    except (ValueError, AttributeError):
+        return
+    pile = [(v, k) for k, v in racines.items() if isinstance(v, dict)]
+    poses = 0
+    while pile and poses < 2000:
+        noeud, dossier = pile.pop()
+        for enfant in noeud.get("children", []) or []:
+            if enfant.get("type") == "folder":
+                pile.append((enfant, enfant.get("name") or dossier))
+            elif enfant.get("url"):
+                poses += 1
+                quand = enfant.get("date_added")
+                fait("navigation", "marque-page enregistré", enfant["url"], source,
+                     "lecture du fichier Bookmarks (JSON)", acteur=compte,
+                     horodatage=_date_us(int(quand), True) if str(quand).isdigit() else None,
+                     note=f"« {enfant.get('name', '')} », dans « {dossier} »")
+
+
 # Le fichier, le navigateur, la requête, le traitement. C'est LA liste des
 # bases de navigateur : la garde des fichiers -wal s'y réfère aussi.
 NAVIGATEURS = {
@@ -1140,6 +1225,9 @@ NAVIGATEURS = {
     "logins.json": ("Firefox", None, _logins_firefox),
     "Login Data": ("Chromium/Chrome", REQ_LOGINS_CHROME, _logins_chrome),
     "recently-used.xbel": ("bureau", None, _recemment_ouverts),
+    "Bookmarks": ("Chromium/Chrome", None, _marque_pages_chrome),
+    "formhistory.sqlite": ("Firefox", REQ_FORMULAIRES_FF, _formulaires),
+    "Web Data": ("Chromium/Chrome", REQ_FORMULAIRES_CHROME, _formulaires),
 }
 
 
@@ -1162,7 +1250,47 @@ def _base_navigateur(source, compte, base, blob, visites):
 
 def _garde_navigation(nom):
     base = os.path.basename(nom)
-    return base in NAVIGATEURS or base.removesuffix("-wal").removesuffix("-journal") in NAVIGATEURS
+    return (base in NAVIGATEURS or base.removesuffix("-wal").removesuffix("-journal") in NAVIGATEURS
+            or (base == "prefs.js" and "thunderbird" in nom.lower()))
+
+
+def _applications(c, prof, compte):
+    """Les applications snap et flatpak d'un compte, par le nom des membres de
+    l'archive : ~/snap/<application>/ et ~/.var/app/<identifiant>/.
+
+    Elles échappent à dpkg et à rpm — un poste peut porter Steam ou un client
+    torrent sans qu'aucune liste de paquets ne le dise. Aucune lecture de plus :
+    les noms ont été relevés au passage de l'archive.
+    """
+    vus = set()
+    for nom in c.mtimes.get(prof, ()):
+        ch = nom.split("/")
+        if len(ch) > 2 and ch[0] == "snap" and ch[1] not in vus:
+            vus.add(ch[1])
+            fait("paquet", "application snap présente chez ce compte", ch[1],
+                 f"{c.rel(prof)} → snap/{ch[1]}/", "noms des dossiers de ~/snap",
+                 acteur=compte, confiance="forte",
+                 note="un snap n'apparaît ni dans dpkg ni dans rpm")
+        elif len(ch) > 3 and (ch[0], ch[1]) == (".var", "app") and ch[2] not in vus:
+            vus.add(ch[2])
+            fait("paquet", "application flatpak présente chez ce compte", ch[2],
+                 f"{c.rel(prof)} → .var/app/{ch[2]}/", "noms des dossiers de ~/.var/app",
+                 acteur=compte, confiance="forte",
+                 note="un flatpak n'apparaît ni dans dpkg ni dans rpm")
+
+
+RE_TB_COURRIEL = re.compile(r'user_pref\("mail\.identity\.id\d+\.useremail",\s*"([^"]+)"')
+RE_TB_SERVEUR = re.compile(r'user_pref\("mail\.server\.server\d+\.hostname",\s*"([^"]+)"')
+
+
+def _thunderbird(source, compte, blob, req, outil):
+    txt = blob.decode("utf-8", "replace")
+    for motif, quoi in ((RE_TB_COURRIEL, "adresse de courriel configurée"),
+                        (RE_TB_SERVEUR, "serveur de courriel configuré")):
+        for v in dict.fromkeys(m.group(1) for m in motif.finditer(txt)):
+            fait("reseau" if "serveur" in quoi else "compte", quoi, v, source,
+                 "user_pref de prefs.js (Thunderbird)", acteur=compte, confiance="forte",
+                 note="configuration du client de courriel de ce compte")
 
 
 def navigation(c):
@@ -1178,12 +1306,16 @@ def navigation(c):
         for prof in c.chercher(suffixe, "COMPTES"):
             compte = _compte_de(prof, suffixe[1:])
             for nom, blob in c.membres_tar(prof, lambda n: _garde_navigation(n) or _garde_artefacts(n)):
+                if os.path.basename(nom) == "prefs.js" and "thunderbird" in nom.lower():
+                    _thunderbird(f"{c.rel(prof)} → {nom}", compte, blob, None, None)
+                    continue
                 base = os.path.basename(nom)
                 source = f"{c.rel(prof)} → {nom}"
                 if _garde_navigation(nom):
                     _base_navigateur(source, compte, base, blob, c.visites)
                 else:
                     _artefact(source, compte, base, blob)
+            _applications(c, prof, compte)
 
 
 # ── 7 · ce qui se relance seul, et les supprimés ──────────────────────
@@ -1201,14 +1333,67 @@ SUSPECT = [
 
 
 ARTEFACTS_LUS = ("_history", ".lesshst", ".wget-hsts", "known_hosts", ".viminfo",
-                 "authorized_keys")
+                 "authorized_keys", ".desktop")
+# Ce qui lance un programme depuis un endroit qu'un paquet n'utilise jamais :
+# le classique de la persistance, et ce qui mérite d'être lu en premier.
+LIEU_ANORMAL = re.compile(r'(/tmp/|/var/tmp/|/dev/shm/|/home/|/root/|curl\s|wget\s|base64|\bnc\s|/\.[\w.]+/)')
+RE_EXEC = re.compile(r'^\s*(?:ExecStart|ExecStartPre|Exec)\s*=\s*(.+)$', re.M)
+RE_RUN_UDEV = re.compile(r'RUN\+?=\s*"?([^"\n]+)"?')
 RE_HISTO_EPOCH = re.compile(r'^#(\d{9,11})$')
 RE_CLE_PACMAN = re.compile(r'^%([A-Z]+)%\n(.+)$', re.M)
 RE_HISTO_ZSH = re.compile(r'^: (\d{9,11}):\d+;(.*)$')
 
 
+def _persistance_lance(c, t, nom, txt, vendeur):
+    """Ce qu'une unité systemd, un autostart ou une règle udev fait démarrer.
+
+    Un poste porte deux cents unités livrées par ses paquets : les compter
+    suffit. Celles que l'administrateur a posées (etc/systemd/system) et
+    celles qui lancent quelque chose depuis un endroit anormal se citent, une
+    par une.
+    """
+    source = f"{c.rel(t)} → {nom}"
+    if nom.endswith((".service", ".timer", ".socket")):
+        pose_main = "/etc/systemd/system" in "/" + nom
+        for m in RE_EXEC.finditer(txt):
+            commande = m.group(1).strip()
+            anormal = LIEU_ANORMAL.search(commande)
+            if not (pose_main or anormal):
+                vendeur[0] += 1
+                continue
+            fait("suspect" if anormal else "persistance",
+                 "unité systemd lançant un programme depuis un endroit anormal"
+                 if anormal else "unité systemd posée par l'administrateur",
+                 f"{os.path.basename(nom)} : {commande[:140]}", source,
+                 "ExecStart= de l'unité systemd",
+                 confiance="à vérifier" if anormal else "certaine",
+                 note="une unité livrée par un paquet lance depuis /usr ; "
+                      "celle-ci ne le fait pas" if anormal else
+                      "posée à la main ou par un installeur, pas par le gestionnaire "
+                      "de paquets")
+    elif nom.endswith(".desktop") and "autostart" in nom:
+        for m in re.finditer(r'^\s*Exec\s*=\s*(.+)$', txt, re.M):
+            fait("persistance", "programme lancé à l'ouverture de session",
+                 f"{os.path.basename(nom)} : {m.group(1).strip()[:140]}", source,
+                 "Exec= du fichier .desktop d'autostart", confiance="certaine")
+    elif nom.endswith(".rules") and "udev" in nom:
+        for m in RE_RUN_UDEV.finditer(txt):
+            fait("persistance", "règle udev lançant un programme",
+                 f"{os.path.basename(nom)} : {m.group(1).strip()[:140]}", source,
+                 "RUN+= d'une règle udev", confiance="à vérifier",
+                 note="se déclenche au branchement d'un matériel")
+    elif os.path.basename(nom) in ("rc.local",) or "/profile.d/" in nom:
+        for l in txt.splitlines():
+            l = l.strip()
+            if l and not l.startswith("#") and LIEU_ANORMAL.search(l):
+                fait("suspect", "commande lancée au démarrage depuis un endroit anormal",
+                     f"{os.path.basename(nom)} : {l[:140]}", source,
+                     "lignes de rc.local ou profile.d", confiance="à vérifier")
+
+
 def persistance(c):
     t = c.un("_persistance.tar.gz", "PERSISTANCE")
+    vendeur = [0]
     if t:
         for nom, blob in c.membres_tar(t):
             txt = blob.decode("utf-8", "replace")
@@ -1219,6 +1404,7 @@ def persistance(c):
                         fait("persistance", "tâche planifiée", l,
                              f"{c.rel(t)} → {nom}", "lecture des fichiers cron",
                              confiance="certaine")
+            _persistance_lance(c, t, nom, txt, vendeur)
             if nom.endswith("ld.so.preload") and txt.strip():
                 fait("persistance", "bibliothèque préchargée pour tout le système",
                      txt.strip(), f"{c.rel(t)} → {nom}", "cat etc/ld.so.preload",
@@ -1229,11 +1415,17 @@ def persistance(c):
                     fait("suspect", quoi, nom, f"{c.rel(t)} → {nom}",
                          f"motif « {motif.pattern} » dans le fichier",
                          confiance="à vérifier")
+    if vendeur[0]:
+        fait("persistance", "unités systemd livrées par des paquets (nombre)",
+             str(vendeur[0]), c.rel(t), "unités lançant depuis un chemin ordinaire",
+             note="comptées, pas listées : elles viennent du gestionnaire de paquets, "
+                  "et il y en a deux cents sur un poste ordinaire")
 
 
 
 def _garde_artefacts(nom):
-    return os.path.basename(nom).endswith(ARTEFACTS_LUS)
+    return (os.path.basename(nom).endswith(ARTEFACTS_LUS)
+            and (not nom.endswith(".desktop") or "autostart/" in nom))
 
 
 def _lignes_historique(txt):
@@ -1300,6 +1492,13 @@ def _artefact(source, compte, base, blob):
             fait("usage", "fichier ouvert dans vim", m.group(1), source,
                  "grep des chemins dans .viminfo", acteur=compte,
                  note="viminfo garde le chemin même après suppression")
+    elif base.endswith(".desktop"):
+        for m in re.finditer(r'^\s*Exec\s*=\s*(.+)$', txt, re.M):
+            fait("persistance", "programme lancé à l'ouverture de session de ce compte",
+                 f"{base} : {m.group(1).strip()[:140]}", source,
+                 "Exec= d'un .desktop de ~/.config/autostart", acteur=compte,
+                 confiance="certaine",
+                 note="propre à ce compte : il se lance quand il ouvre sa session")
     elif base == "authorized_keys" and txt.strip():
         for l in txt.splitlines():
             if l.strip() and not l.startswith("#"):
@@ -1421,17 +1620,48 @@ def historique_paquets(c):
                      note="absent de la liste des paquets installés : seule trace")
 
 
+# Ce qu'un fichier récupéré peut être, quand son extension le dit. photorec
+# rend un contenu sans nom ni date : le TYPE est tout ce qu'on a pour trier.
+FAMILLES_RECUP = {
+    "document": ("doc", "docx", "odt", "rtf", "pdf", "xls", "xlsx", "ods", "ppt", "pptx", "odp"),
+    "image": ("jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "heic", "webp"),
+    "archive": ("zip", "rar", "7z", "gz", "tar", "bz2", "xz"),
+    "vidéo ou son": ("mp4", "mkv", "avi", "mov", "mp3", "wav", "flac", "webm"),
+    "base ou courriel": ("sqlite", "db", "mbox", "pst", "eml", "msg"),
+    "secret possible": ("key", "pem", "p12", "pfx", "kdbx", "ovpn", "gpg", "asc"),
+    "exécutable ou script": ("exe", "dll", "elf", "sh", "ps1", "bat", "deb", "rpm"),
+}
+_TYPE_RECUP = {ext: fam for fam, exts in FAMILLES_RECUP.items() for ext in exts}
+
+
 def supprimes(c):
     for d in ("SUPPRIMES", "PHOTOREC"):
         base = os.path.join(c.racine, d)
         if not os.path.isdir(base):
             continue
-        n = sum(len(f) for _, _, f in os.walk(base))
-        if n:
-            fait("recuperation", f"pièces récupérées dans {d}/", str(n),
-                 d + "/", "find | wc -l",
-                 note="xfs_undelete rend des blocs entiers ; photorec coupe juste"
-                      " mais ignore ce dont il n'a pas la signature")
+        par_type, n, octets = collections.Counter(), 0, 0
+        for dossier, _, fichiers in os.walk(base):
+            for f in fichiers:
+                n += 1
+                ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
+                par_type[_TYPE_RECUP.get(ext, f".{ext}" if ext else "sans extension")] += 1
+                try:
+                    octets += os.path.getsize(os.path.join(dossier, f))
+                except OSError:
+                    pass
+        if not n:
+            continue
+        fait("recuperation", f"pièces récupérées dans {d}/", str(n), d + "/",
+             "find | wc -l",
+             note=f"{octets // (1 << 20)} Mo ; xfs_undelete rend des blocs entiers, "
+                  "photorec coupe juste mais ignore ce dont il n'a pas la signature")
+        for fam, combien in par_type.most_common(15):
+            fait("recuperation", f"pièces récupérées de type « {fam} »", str(combien),
+                 d + "/", "extension des fichiers rendus", confiance="forte",
+                 note="photorec ne rend ni le nom ni la date d'origine : le type est "
+                      "tout ce qui les trie. Cherchez-y une empreinte ou une chaîne "
+                      "avec --indicateurs" if fam in ("document", "secret possible",
+                                                       "base ou courriel") else None)
 
 
 # ── 8 · la timeline du système de fichiers ────────────────────────────
@@ -1808,7 +2038,7 @@ def lire_indicateurs(chemin):
     return liste
 
 
-def indicateurs(c, liste):
+def indicateurs(c, liste, fichier=None):
     """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier.
 
     Une seule alternative pour tous les motifs : un membre de 200 Mo n'est
@@ -1856,9 +2086,14 @@ def indicateurs(c, liste):
                      note=f"{n} occurrence(s) ; autour de la première : « {contextes[i]} »"
                           + (f" — {x['etiquette']}" if x["etiquette"] else ""))
 
+    # le fichier d'indicateurs posé DANS la collecte se trouverait lui-même :
+    # chaque chaîne y figure, par construction
+    soi = os.path.abspath(fichier) if fichier else None
     for d, _, fichiers in os.walk(c.racine):
         for f in sorted(fichiers):
             chemin = os.path.join(d, f)
+            if os.path.abspath(chemin) == soi:
+                continue
             if chemin.endswith(".tar.gz"):
                 for nom, blob in c.membres_tar(chemin, None if lire else lambda n: False):
                     examiner(f"{c.rel(chemin)} → {nom}", nom, blob)
@@ -1983,7 +2218,7 @@ def main():
         print(f"  {etape:22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
     if args.indicateurs:
         avant = len(FAITS)
-        indicateurs(c, lire_indicateurs(args.indicateurs))
+        indicateurs(c, lire_indicateurs(args.indicateurs), args.indicateurs)
         print(f"  {'indicateurs':22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:

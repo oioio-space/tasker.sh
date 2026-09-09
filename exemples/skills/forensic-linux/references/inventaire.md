@@ -53,6 +53,18 @@ du rapport.
 | groupe SMB | `smb.conf` | idem | oui |
 | domaine deviné | `resolv.conf` `search` | `RESEAU/…_reseau.tar.gz` | oui |
 
+## Ce que le compte a voulu, et ce qui se relance seul
+
+| question | trace | pièce | lu | limite |
+|---|---|---|---|---|
+| qu'a-t-il enregistré délibérément ? | marque-pages (`moz_bookmarks`, `Bookmarks`) | profil du compte | oui, avec la date d'ajout | un signet survit au vidage de l'historique : sa présence ne date pas la dernière visite |
+| qu'a-t-il **tapé** ? | `formhistory.sqlite`, `autofill`, `keyword_search_terms` | idem | oui | aucune de ces tables ne contient de mot de passe ; le champ dit où, pas sur quel site |
+| quelles applications hors paquets ? | `~/snap/<app>/`, `~/.var/app/<id>/` | archive de profil | oui, par les noms des membres | présence, pas usage ; le dossier survit à la désinstallation |
+| son courriel ? | `prefs.js` de Thunderbird | idem | oui (adresses, serveurs) | rien du contenu des messages |
+| que lance-t-il à l'ouverture de sa session ? | `~/.config/autostart/*.desktop` | archive d'artefacts | oui | — |
+| que lance la machine seule ? | unités systemd, cron, udev, `rc.local`, `profile.d` | archive de persistance | oui — les unités de `/etc` une à une, celles de `/usr` comptées | un fichier déclare, il ne prouve pas l'exécution : c'est le journal qui la montre |
+| qu'a-t-on récupéré de l'espace libre ? | `PHOTOREC/` | — | oui, **par type** | ni nom, ni date, ni chemin d'origine |
+
 ## Ce que la timeline confirme
 
 | question | trace | pièce | lu | limite |

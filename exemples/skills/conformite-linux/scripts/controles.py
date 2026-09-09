@@ -175,13 +175,23 @@ class Collecte:
 
 # ── 1 · comptes et mots de passe ─────────────────────────────────────
 RE_SUDO_TOUT = re.compile(r'^\s*%?\S+\s+ALL\s*=\s*\(\s*ALL(\s*:\s*ALL)?\s*\)\s*ALL\s*$')
-DROITS_LUS = ("shadow", "sudoers", "config", "login.defs")
+DROITS_LUS = ("shadow", "sudoers", "config", "login.defs", "pwquality.conf")
+# Ce que PAM impose, ou n'impose pas. L'absence d'une règle est un constat
+# autant que sa présence : un poste sans pam_faillock n'a AUCUNE limite au
+# nombre d'essais de mot de passe.
+PAM = [
+    ("pam_pwquality.so", "pam_cracklib.so", "aucune exigence de robustesse des mots de passe",
+     "la charte fixe-t-elle une longueur ou une complexité minimale ?"),
+    ("pam_faillock.so", "pam_tally2.so", "aucun blocage du compte après des échecs répétés",
+     "la charte impose-t-elle un verrouillage après plusieurs échecs ?"),
+]
+RE_NULLOK = re.compile(r'^\s*[^#\n]*\bnullok\b', re.M)
 
 
 def comptes(c):
     """Rend l'ensemble des comptes locaux, en posant les constats de comptes."""
     p = c.un("passwd", "COMPTES")
-    homes, locaux = {}, set()
+    homes, locaux, trouves_pam, modules_pam = {}, set(), set(), set()
     if p:
         for l in c.texte(p).splitlines():
             ch = l.split(":")
@@ -210,9 +220,11 @@ def comptes(c):
     if not d:
         return locaux
     for nom, blob in c.membres_tar(d, lambda n: os.path.basename(n) in DROITS_LUS
-                                   or "/sudoers.d/" in n):
+                                   or "/sudoers.d/" in n or "/pam.d/" in n
+                                   or "/apparmor.d/disable/" in n):
         txt = blob.decode("utf-8", "replace")
         base = os.path.basename(nom)
+        modules_pam.update(m.group(0) for m in re.finditer(r'pam_\w+\.so', txt))
         if base == "shadow":
             for l in txt.splitlines():
                 ch = l.split(":")
@@ -254,6 +266,28 @@ def comptes(c):
                             "règle « ALL=(ALL) ALL » dans sudoers",
                             note="courant et souvent légitime — à confronter à la "
                                  "liste des administrateurs déclarés")
+        elif base == "pwquality.conf" or "/pam.d/" in nom:
+            trouves_pam.add(nom)
+            for m in RE_NULLOK.finditer(txt):
+                constat("authentification",
+                        "PAM accepte un mot de passe vide (nullok)", m.group(0).strip()[:120],
+                        f"{c.rel(d)} → {nom}", "mot-clé nullok dans une règle PAM",
+                        question="la charte exige-t-elle un mot de passe sur tout compte ?",
+                        note="un compte au champ de mot de passe vide peut alors ouvrir "
+                             "une session sans rien saisir")
+            for m in re.finditer(r'^\s*minlen\s*=?\s*(\d+)', txt, re.M):
+                if int(m.group(1)) < 8:
+                    constat("authentification", "longueur minimale de mot de passe faible",
+                            f"minlen {m.group(1)}", f"{c.rel(d)} → {nom}",
+                            "minlen dans la configuration de robustesse",
+                            question="la charte fixe-t-elle une longueur minimale ?")
+        elif "/apparmor.d/disable/" in nom:
+            constat("durcissement", "profil AppArmor désactivé", os.path.basename(nom),
+                    f"{c.rel(d)} → {nom}", "présence du lien dans apparmor.d/disable/",
+                    question="la charte impose-t-elle le maintien des protections du "
+                             "système ?",
+                    note="le profil existe mais ne s'applique pas ; qui l'a désactivé "
+                         "et quand ne se lit pas ici")
         elif base == "config" and "selinux" in nom:
             m = re.search(r'^\s*SELINUX\s*=\s*(\w+)', txt, re.M)
             if m and m.group(1).lower() != "enforcing":
@@ -270,6 +304,19 @@ def comptes(c):
                         f"PASS_MAX_DAYS {m.group(1)}", f"{c.rel(d)} → {nom}",
                         "grep PASS_MAX_DAYS dans /etc/login.defs",
                         question="la charte fixe-t-elle une durée maximale ?")
+
+    # Ce qui n'est PAS là : sur un poste dont on a bien lu la configuration PAM,
+    # l'absence d'un module est un fait, pas une lacune de la collecte.
+    if trouves_pam:
+        for premier, second, quoi, question in PAM:
+            if not ({premier, second} & modules_pam):
+                constat("authentification", quoi,
+                        f"ni {premier} ni {second} dans /etc/pam.d", c.rel(d),
+                        f"recherche des modules PAM dans {len(trouves_pam)} fichiers de "
+                        "/etc/pam.d et /etc/security", question=question,
+                        note="le poste n'impose donc rien de ce côté ; la politique peut "
+                             "venir d'ailleurs (annuaire, image maîtresse) — à confirmer "
+                             "avant d'en faire un manquement")
     return locaux
 
 
@@ -420,7 +467,7 @@ def reseau(c):
 # installé par paquet est dans ~/.config/google-chrome, donc dans _artefacts.
 
 BASES_NAVIGATEUR = ("places.sqlite", "History", "cookies.sqlite", "Cookies",
-                    "Web Data", "Archived History")
+                    "Web Data", "Archived History", "Bookmarks", "formhistory.sqlite")
 FICHIERS_SECRETS = {
     ".netrc": "identifiants d'accès enregistrés en clair (.netrc)",
     ".git-credentials": "identifiants git enregistrés en clair",

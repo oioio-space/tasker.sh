@@ -264,11 +264,29 @@ n'existent pas chez elle :
     tests/plan.sh                                # la conf elle-même : son plan sur un faux montage par famille
     python3 tests/matrice.py /tmp/matrice        # cinq collectes synthétiques
     for c in /tmp/matrice/*/ ; do python3 forensic-linux/scripts/extraire.py "$c" -o "$c.jsonl" ; done
+    python3 tests/artefacts.py /tmp/artefacts    # chaque pièce sert-elle à quelque chose ?
 
 Chaque bloc du générateur dit ce que la famille doit donner. **Une pièce
 ajoutée à `collecte-linux.conf` se reflète dans `tests/matrice.py`, ou elle
 n'est pas testée** — c'est cette matrice qui a révélé que `wtmp.db` compte en
 microsecondes et que `zypp` note ses commandes en commentaire.
+
+### Chaque pièce sert-elle à quelque chose ?
+
+`tests/artefacts.py` répond à l'autre moitié de la question. Il fabrique **une**
+collecte qui porte toutes les pièces — et qui est piégée : un film copié sur une
+clé USB, un marque-page vers un site de torrent, une recherche tapée dans la
+barre d'adresse, un mineur en autostart, une unité systemd qui lance depuis
+`/tmp`, une clé SSH commune à deux comptes, un `su` vers le compte d'un
+collègue. Puis il lance les deux extracteurs et **vérifie que chaque artefact a
+produit le fait ou le constat qu'on en attend** — 65 aujourd'hui — et sort en
+erreur en nommant ceux qui n'ont rien donné.
+
+C'est ce qui interdit de collecter une pièce pour rien : elle apparaît dans la
+liste avec la mention `MANQUE` tant que personne ne la lit. C'est ainsi que la
+timeline, les marque-pages, les saisies de formulaire, les applications snap et
+flatpak, les unités systemd, `fstab` et la sortie de photorec sont entrés dans
+les faits.
 
 Une seule collecte réelle a servi en plus : un CentOS 7. Les autres familles
 sont synthétiques — fidèles aux formats, pas à la vie d'un poste. La première
