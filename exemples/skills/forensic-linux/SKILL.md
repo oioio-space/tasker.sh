@@ -87,7 +87,11 @@ sources à chaque fois :
 - un **téléchargement** et l'apparition du fichier dans la timeline ;
 - une **adresse IP** vue dans un `Accepted password ... from` et les comptes
   qui s'en servent ;
-- un **compte de domaine** trouvé dans le cache sss et une session à son nom.
+- un **compte de domaine** trouvé dans le cache sss et une session à son nom ;
+- un **domaine ayant posé un cookie** mais absent de l'historique : les deux
+  bases sont indépendantes, et vider l'historique ne touche pas aux cookies.
+  Le signaler quand le cas se présente — c'est une visite dont la trace
+  d'historique a disparu.
 
 Quand un rapprochement tient à la seconde près, dites-le. Quand il tient à
 l'heure près, dites-le aussi — la précision fait partie du fait.

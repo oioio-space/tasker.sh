@@ -157,6 +157,23 @@ Base SQLite du profil Firefox, dans `.mozilla/firefox/<aléatoire>.default*/`.
   ne les voit pas. Le cas est signalé comme une limite, jamais passé sous
   silence. Même chose pour un `-journal` à côté d'un `History` Chrome.
 
+### `cookies.sqlite` (Firefox)
+Base SQLite du profil, **indépendante de l'historique**. Table `moz_cookies` :
+`host` (le domaine), `name`, `value`, `creationTime`, `lastAccessed`, `expiry`.
+Dates en microsecondes depuis 1970, comme `places.sqlite`.
+
+- **Pourquoi elle compte** : vider l'historique n'efface pas les cookies. Un
+  domaine présent ici et absent de `places.sqlite` est une **visite dont la
+  trace d'historique a disparu** — et c'est un fait notable en soi.
+- **Ce qui est extrait** : le domaine, le nombre de cookies, la date du premier
+  posé et celle du dernier accès, regroupés par domaine. Un profil en compte
+  des milliers ; le détail cookie par cookie n'apprend rien de plus.
+- **Ce qui n'est PAS extrait, volontairement** : la colonne `value`. C'est un
+  jeton de session, donc un identifiant réutilisable — le sortir ferait du
+  rapport un secret à protéger, sans rien ajouter à la démonstration. Si une
+  procédure l'exige, c'est une décision à prendre explicitement, pas un défaut
+  de l'outil.
+
 ### `History` (Chrome / Chromium / Edge)
 Base SQLite, dans `.config/google-chrome/Default/` ou `.config/chromium/Default/`.
 

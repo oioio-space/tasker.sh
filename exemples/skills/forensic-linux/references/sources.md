@@ -68,6 +68,7 @@ rapport d'une affirmation.
 |---|---|---|---|
 | navigation Firefox | `COMPTES/PREFIX_<compte>_profils.tar.gz` → `.mozilla/…/places.sqlite` | `sqlite3` sur `moz_places` | l'historique peut avoir été vidé |
 | téléchargements Firefox | idem | `moz_annos` où `content LIKE 'file://%'` | Firefox récent range aussi dans `moz_places` |
+| domaines ayant posé un cookie | `…profils.tar.gz` → `.mozilla/…/cookies.sqlite` | `sqlite3` sur `moz_cookies`, groupé par domaine | **survit au vidage de l'historique** ; la valeur du cookie n'est pas lue |
 | navigation Chrome | `…profils.tar.gz` → `.config/google-chrome/Default/History` | `sqlite3` sur `urls` | horodatage en microsecondes depuis 1601 |
 | téléchargements Chrome | idem | table `downloads` | donne le chemin cible **et** l'URL d'origine |
 | fichiers ouverts récemment | `…profils.tar.gz` → `.local/share/recently-used.xbel` | `grep href=` | couvre les applications GTK, pas le terminal |

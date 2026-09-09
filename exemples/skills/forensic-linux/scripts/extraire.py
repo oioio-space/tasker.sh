@@ -725,6 +725,19 @@ REQ_FIREFOX = [
      "FROM moz_annos a JOIN moz_places p ON p.id=a.place_id "
      "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC LIMIT 200"),
 ]
+# Un cookie prouve une visite même quand l'historique a été vidé : les deux
+# bases sont indépendantes. On regroupe par domaine — un profil en compte des
+# milliers — et on ne sort JAMAIS la colonne « value » : c'est un jeton de
+# session, donc un identifiant réutilisable. Le domaine et les dates suffisent
+# à établir la visite ; la valeur n'ajoute rien et ferait du rapport un secret.
+REQ_COOKIES_FF = [
+    ("cookie", "SELECT host, COUNT(*), MIN(creationTime), MAX(lastAccessed) "
+               "FROM moz_cookies GROUP BY host ORDER BY MAX(lastAccessed) DESC LIMIT 300"),
+    ("cookie (ancien schéma)",
+     "SELECT baseDomain, COUNT(*), MIN(creationTime), MAX(lastAccessed) "
+     "FROM moz_cookies GROUP BY baseDomain ORDER BY MAX(lastAccessed) DESC LIMIT 300"),
+]
+
 REQ_CHROME = [
     ("visite", "SELECT datetime(last_visit_time/1000000-11644473600,'unixepoch'), url, title "
                "FROM urls ORDER BY last_visit_time DESC LIMIT 400"),
@@ -750,6 +763,21 @@ def navigation(c):
                 continue
             if base == "places.sqlite":
                 jeu, outil = REQ_FIREFOX, "Firefox"
+            elif base == "cookies.sqlite":
+                for _, lignes in _sqlite_lire(blob, REQ_COOKIES_FF):
+                    for hote, combien, cree, vu in lignes:
+                        def _us(v):
+                            return (datetime.fromtimestamp(v / 1_000_000, timezone.utc)
+                                    .isoformat().replace("+00:00", "Z")) if v else None
+                        fait("navigation", "domaine ayant posé un cookie", hote,
+                             f"{c.rel(prof)} → {nom}",
+                             "sqlite3 sur moz_cookies, regroupé par domaine "
+                             "(la colonne « value » n'est pas lue)",
+                             horodatage=_us(vu), acteur=compte,
+                             note=f"{combien} cookie(s), premier posé le {_us(cree)}"
+                                  " — un cookie subsiste quand l'historique a été vidé")
+                    break
+                continue
             elif base == "History" and ("chrom" in nom.lower() or "Default" in nom):
                 jeu, outil = REQ_CHROME, "Chromium/Chrome"
             else:
