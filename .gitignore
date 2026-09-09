@@ -2,3 +2,5 @@
 *.log
 *_rapport.txt
 *_etat.txt
+__pycache__/
+*.pyc
