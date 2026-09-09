@@ -7,6 +7,12 @@ skill sait exactement ce que la conf a écrit, et où.
 | skill | ce qu'il rend |
 |---|---|
 | `forensic-linux/` | identité et installation de la machine, chronologie de vie attribuée aux comptes, réseau, domaine, navigation, supports amovibles, éléments suspects |
+| `conformite-linux/` | les écarts aux règles internes que vous fournissez : comptes et mots de passe, élévation de privilèges, secrets en clair, durcissement, usages |
+
+Les deux lisent la même collecte et se complètent : `forensic-linux` donne les
+**dates**, `conformite-linux` les **écarts**. Un manquement daté vaut mieux
+qu'un manquement constaté — lancez les deux, et citez les identifiants des deux
+fichiers dans le rapport de conformité.
 
 Format **Agent Skills** (`SKILL.md`), lu tel quel par Claude Code et par Crush.
 
@@ -27,7 +33,8 @@ nulle part.
 Pour Crush, une fois pour toutes :
 
     mkdir -p ~/.config/crush/skills
-    cp -r exemples/skills/forensic-linux ~/.config/crush/skills/
+    cp -r exemples/skills/forensic-linux exemples/skills/conformite-linux \
+          ~/.config/crush/skills/
 
 Ou seulement pour un dossier de travail — Crush cherche aussi dans
 `.crush/skills/`, `.agents/skills/` et `.claude/skills/` du projet courant :
@@ -55,9 +62,10 @@ l'arborescence avant et après. Mais ne comptez pas là-dessus : montez en `ro`.
 
 Lancez l'extraction **vous-même**, hors de l'agent :
 
-    python3 ~/.config/crush/skills/forensic-linux/scripts/extraire.py \
-            /mnt/scelles/LINUX/PRJ/PC01_B13_SYCOBS_LINUX \
-            -o ~/analyse/faits.jsonl
+    C=/mnt/scelles/LINUX/PRJ/PC01_B13_SYCOBS_LINUX
+    K=~/.config/crush/skills
+    python3 $K/forensic-linux/scripts/extraire.py   "$C" -o ~/analyse/faits.jsonl
+    python3 $K/conformite-linux/scripts/controles.py "$C" -o ~/analyse/constats.jsonl
 
 Puis ouvrez l'agent dans `~/analyse` et demandez-lui le rapport. Il n'a alors
 besoin que de **lire** `faits.jsonl` — pas d'exécuter quoi que ce soit.
@@ -181,6 +189,32 @@ Les deux doivent être identiques. S'ils diffèrent, quelque chose a bougé dans
 la collecte entre les deux lectures — c'est un fait en soi, et grave.
 
 ---
+
+## Le skill de conformité, en deux mots
+
+Il ne juge rien sans règle écrite. Le script relève des **constats** — « clé
+privée SSH sans phrase de passe », « `PermitRootLogin yes` » — chacun
+accompagné de la **question** à laquelle une règle devra répondre pour en faire
+un manquement. Le rapprochement est le travail du rapport, et le skill impose
+de le **montrer** : un tableau « règle → contrôle retenu » avant tout résultat,
+pour qu'un lecteur puisse contester la méthode avant les conclusions.
+
+Trois choses qu'il refuse de faire, et qui font sa valeur :
+
+- **inventer une règle** parce qu'un constat paraît grave — ce qui n'est pas
+  couvert va dans « observations sans règle correspondante » ;
+- **élargir une règle** — « les supports amovibles doivent être chiffrés » ne
+  dit pas « les supports amovibles sont interdits » ;
+- **confondre une visite et un transfert** — un service de stockage personnel
+  dans l'historique établit une consultation, jamais qu'un fichier est parti.
+
+Le champ `portee` distingue ce qui vise un **compte** de ce qui vise le
+**poste** : imputer à un agent un `sudo NOPASSWD` posé par le service
+informatique est la faute la plus facile à commettre ici.
+
+Sans règles fournies, le skill rend un **état des lieux** et dit qu'aucun
+manquement n'y est établi. `references/regles-type.md` sert alors à comparer
+avec la charte quand elle arrive — et à repérer ce qu'elle omet.
 
 ## Écrire un autre skill à côté
 
