@@ -68,6 +68,20 @@ class Collecte:
         except OSError:
             return ""
 
+    def dates_tar(self, archive):
+        """La date de chaque membre. tar la conserve : c'est souvent la seule
+        façon de dater une pièce dont le contenu n'est pas horodaté."""
+        dates = {}
+        try:
+            with tarfile.open(archive, "r:gz") as t:
+                for m in t:
+                    if m.isfile():
+                        nom = m.name[2:] if m.name.startswith("./") else m.name
+                        dates[nom] = m.mtime
+        except (tarfile.TarError, OSError, EOFError):
+            pass
+        return dates
+
     def membres_tar(self, archive):
         """(nom, contenu binaire) de chaque fichier régulier d'un .tar.gz."""
         self.lus.add(archive)
@@ -210,10 +224,38 @@ def machine(c):
                 fait("machine", "horloge matérielle", mode, f"{c.rel(inst)} → {nom}",
                      "tar -xO etc/adjtime",
                      note="en heure locale, les dates du BIOS et des journaux divergent")
-            elif "anaconda" in nom or "installer" in nom:
-                fait("machine", "trace d'installation", nom,
-                     f"{c.rel(inst)} → {nom}", "tar -t",
-                     note="journal de l'installateur : la date de pose du système")
+            elif nom.endswith("machine-info"):
+                champs = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$',
+                                         blob.decode("utf-8", "replace"), re.M))
+                for cle, quoi in (("PRETTY_HOSTNAME", "nom affiché de la machine"),
+                                  ("CHASSIS", "type de châssis"),
+                                  ("DEPLOYMENT", "environnement déclaré")):
+                    if champs.get(cle):
+                        fait("machine", quoi, champs[cle], f"{c.rel(inst)} → {nom}",
+                             f"grep {cle}= etc/machine-info")
+            elif nom.endswith("crypttab"):
+                for l in blob.decode("utf-8", "replace").splitlines():
+                    if l.strip() and not l.startswith("#"):
+                        fait("machine", "volume chiffré déclaré", l.split()[0],
+                             f"{c.rel(inst)} → {nom}", "cat etc/crypttab",
+                             note="la machine montait un volume chiffré au démarrage")
+        # tar garde la date de chaque pièce : elle date ce que le contenu ne
+        # date pas. Le journal de l'installateur donne ainsi la pose du système,
+        # et l'horloge de systemd-timesync la dernière synchronisation.
+        for nom, quand in sorted(c.dates_tar(inst).items()):
+            iso = (datetime.fromtimestamp(quand, timezone.utc).isoformat()
+                   .replace("+00:00", "Z")) if quand else None
+            if "anaconda" in nom or "installer" in nom or nom.endswith("-ks.cfg"):
+                fait("machine", "installation du système (journal de l'installateur)",
+                     nom, f"{c.rel(inst)} → {nom}", "date du membre dans l'archive tar",
+                     horodatage=iso, confiance="forte",
+                     note="la date la plus sûre pour la pose du système")
+            elif nom.endswith("timesync/clock"):
+                fait("machine", "dernière synchronisation de l'horloge", nom,
+                     f"{c.rel(inst)} → {nom}", "date du membre dans l'archive tar",
+                     horodatage=iso,
+                     note="systemd-timesync touche ce fichier à chaque accord : "
+                          "au-delà, les dates de la machine sont moins sûres")
 
     # La plus vieille salve de paquets date l'installation.
     pk = c.un("_paquets.txt", "PAQUETS")
@@ -346,11 +388,25 @@ def _utmp_brut(c, nom_fichier, categorie, quoi_defaut):
     rend l'analyse indépendante de ce qui tournait au moment de la collecte —
     et donne des dates en epoch, donc sans locale ni année à deviner.
     """
-    chemin = os.path.join(c.racine, "CONNEXIONS", nom_fichier)
-    if not os.path.isfile(chemin):
-        return 0
+    dossier = os.path.join(c.racine, "CONNEXIONS")
+    # wtmp, wtmp.1, wtmp-20190901 : les rotations, quel que soit leur style.
+    # Mais pas wtmp.db, qui est du sqlite et se lit ailleurs.
+    chemins = sorted(os.path.join(dossier, n) for n in os.listdir(dossier)
+                     if n.startswith(nom_fichier)
+                     and not n.endswith((".txt", ".db"))) \
+        if os.path.isdir(dossier) else []
+    poses = 0
+    for chemin in chemins:
+        poses += _un_utmp(c, chemin, categorie, quoi_defaut)
+    return poses
+
+
+def _un_utmp(c, chemin, categorie, quoi_defaut):
+    nom_fichier = os.path.basename(chemin)
     with open(chemin, "rb") as fh:
         blob = fh.read()
+    if not blob:
+        return 0
     c.lus.add(chemin)
     lignes = lire_utmp(blob)
     if not lignes and blob:
@@ -481,6 +537,9 @@ MOTIFS_JOURNAL = [
     ("support", "montage demandé par un compte",
      re.compile(r'on behalf of uid (\d+)'),
      lambda m: (None, f"uid {m.group(1)}")),
+    ("machine", "modèle de la machine (DMI du BIOS)",
+     re.compile(r'DMI:\s+(.+?),\s*BIOS\s+(.+)$'),
+     lambda m: (None, f"{m.group(1).strip()} — BIOS {m.group(2).strip()}")),
     ("reseau", "adresse obtenue en DHCP",
      re.compile(r'dhclient|dhcp4.*address\s+(\d+\.\d+\.\d+\.\d+)', re.I),
      lambda m: (None, m.group(1) if m.lastindex else "bail DHCP")),

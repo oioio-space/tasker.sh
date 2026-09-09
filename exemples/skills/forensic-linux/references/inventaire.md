@@ -15,10 +15,14 @@ du rapport.
 |---|---|---|---|---|
 | nom | `/etc/hostname` | `SYSTEME/hostname` | oui | nom au moment de la collecte |
 | nom dans le domaine | — | — | — | **aucune pièce**. À demander à l'annuaire |
+| nom affiché, châssis | `/etc/machine-info` | `SYSTEME/…_installation.tar.gz` | oui | absent sur beaucoup de systèmes |
+| modèle et BIOS | ligne `DMI:` du noyau | `JOURNAUX/` (journal, `dmesg`) | oui | le modèle, pas le numéro de série |
+| volumes chiffrés | `/etc/crypttab` | `SYSTEME/…_installation.tar.gz` | oui | dit qu'un volume chiffré existait |
+| horloge synchronisée | `var/lib/systemd/timesync/clock` | idem | oui, par la **date du fichier** | au-delà, les dates sont moins sûres |
 | système, version | `/etc/os-release` | `SYSTEME/os-release` | oui | |
 | identité unique | `/etc/machine-id` | `SYSTEME/…_installation.tar.gz` | oui | relie au dossier du journal systemd |
 | numéro de série matériel | — | — | — | **aucune pièce** : il faut le BIOS (`dmidecode`), machine allumée |
-| date d'installation | journaux anaconda / installer | `SYSTEME/…_installation.tar.gz` | partiel : présence signalée, contenu non analysé | le plus sûr |
+| date d'installation | journaux anaconda / installer | `SYSTEME/…_installation.tar.gz` | oui, par la **date du membre dans l'archive** | la plus sûre : tar conserve la date, que le contenu ne porte pas |
 | date d'installation (à défaut) | plus ancien paquet | `PAQUETS/…_paquets.txt` | oui | fausse si le système a été migré |
 | dernier arrêt | `wtmp` | `CONNEXIONS/…_reboots.txt`, `wtmp` | oui | un arrêt brutal n'écrit rien |
 | fuseau, horloge RTC | `/etc/localtime`, `/etc/adjtime` | `SYSTEME/` | oui | |
@@ -29,8 +33,8 @@ du rapport.
 |---|---|---|---|---|
 | comptes locaux | `/etc/passwd` | `COMPTES/passwd` | oui | exister ≠ avoir servi |
 | comptes du domaine | cache SSSD | `COMPTES/…_domaine.tar.gz` → `var/lib/sss/db` | oui | **indispensable** : `/etc/passwd` ne les a pas |
-| sessions ouvertes | `wtmp` | texte de `last`, **ou le binaire** | oui | tronqué par `logrotate` |
-| échecs | `btmp` | texte de `lastb`, **ou le binaire** | oui | souvent vide ou désactivé |
+| sessions ouvertes | `wtmp` **et ses rotations** | texte de `last`, **ou les binaires** | oui | la collecte prend `wtmp`, `wtmp.1` **et** `wtmp-20190901` : les deux styles de rotation, donc des mois d'historique en plus |
+| échecs | `btmp` et ses rotations | texte de `lastb`, **ou les binaires** | oui | souvent vide ou désactivé |
 | dernière connexion | `lastlog`, `lastlog2.db` | `CONNEXIONS/` | oui (binaire 292 o et sqlite) | écrasée à chaque fois |
 | sessions (Fedora 40+) | `wtmp.db` sqlite | `CONNEXIONS/wtmp.db` | oui | |
 | qui était au clavier | — | — | — | **aucune pièce ne le dit jamais** |
@@ -101,7 +105,7 @@ effaçable par son propriétaire.
 | téléchargements (Chrome) | table `downloads` | oui | donne le fichier **et** la page d'origine |
 | visites les plus récentes | `places.sqlite-wal` | **non** — signalé comme limite | le navigateur tournait pendant la prise |
 | onglets ouverts | `recovery.jsonlz4` | **non** | format LZ4 propriétaire, hors bibliothèque standard |
-| cookies, mots de passe | `cookies.sqlite`, `Login Data` | **non branché** | lisibles, à demander |
+| cookies, mots de passe | `cookies.sqlite`, `Login Data` | **collectés, non branchés** | lisibles : à demander si besoin |
 
 ## Les paquets
 
@@ -109,7 +113,7 @@ effaçable par son propriétaire.
 |---|---|---|
 | installés maintenant | `rpm -qa --last`, `dpkg -l` | oui |
 | **posés puis retirés** | `yum.log`, `dnf.log`, `history.sqlite` | oui — seule trace d'un paquet absent de la liste |
-| dépôts ajoutés | `etc/yum.repos.d`, `sources.list.d` | collectés, non analysés |
+| dépôts ajoutés | `etc/yum.repos.d`, `sources.list.d` | **collectés, non analysés** | un dépôt ajouté par un intrus s'y verrait |
 
 ## Le disque
 
@@ -131,6 +135,7 @@ effaçable par son propriétaire.
 - **le contenu des dossiers personnels** — `~/Documents`, `~/Téléchargements`
   ne sont pas copiés ; la timeline en donne les noms et les dates ;
 - **le contenu d'un support amovible** — la clé n'est pas dans la collecte ;
-- **le numéro de série de la machine** — il faut le BIOS, machine allumée ;
+- **le numéro de série de la machine** — il faut le BIOS, machine allumée. Le
+  **modèle**, lui, est dans la ligne `DMI:` que le noyau écrit au démarrage ;
 - **ce qui précède la rotation des journaux** — `logrotate` supprime ;
 - **ce qui a été écrasé** — un inode qui a resservi ne laisse rien.
