@@ -1,0 +1,116 @@
+# ══════════════════════════════════════════════════════════════════════
+#  RÈGLES — usage non professionnel du poste
+# ══════════════════════════════════════════════════════════════════════
+#
+# Ce fichier se lit et s'écrit à la main. Pour ajouter une règle, copiez un
+# bloc et changez-le : rien à recompiler, rien à programmer.
+#
+#     controles.py <collecte> --regles ce-fichier.regles [--faits faits.jsonl]
+#
+# UN BLOC = UNE RÈGLE. Les blocs sont séparés par une ligne vide.
+# Chaque ligne est « clé: valeur ». Une clé peut revenir autant de fois
+# qu'on veut. Tout ce qui suit un # est un commentaire.
+#
+#   regle:      l'identifiant qui apparaîtra dans le rapport — R1, ART-4.2…
+#   titre:      le nom court de la règle
+#   texte:      la phrase de la charte, RECOPIÉE telle qu'elle est écrite.
+#               C'est elle qui fait foi ; le reste n'est que sa traduction.
+#               Obligatoire : sans elle, le fichier est refusé.
+#   portee:     compte (par défaut) ou poste
+#   theme:      la famille du constat — usage par défaut
+#
+# Puis les indices, qui disent où chercher. Chacun est une expression
+# régulière ; (?i) au début la rend insensible à la casse. Ce qui suit un #
+# précédé d'un blanc est l'étiquette de l'indice, reprise dans le constat.
+#
+#   domaine:    dans les bases des navigateurs — historique et cookies,
+#               Firefox (~/.mozilla) comme Chrome (~/.config)
+#   programme:  dans la liste des paquets, l'historique du gestionnaire de
+#               paquets (qui donne la DATE d'installation), l'état de snap,
+#               et les chemins des dossiers personnels
+#   fichier:    dans l'inventaire des dossiers personnels — le chemin complet
+#               est reconstruit, « ~/Vidéos/Films/x.mkv »
+#   wifi:       dans les réseaux sans fil enregistrés par NetworkManager ; la
+#               date de la dernière association est reprise quand elle existe
+#   horaire:    les heures ouvrées, au format « lun-ven 08:00-19:00 ».
+#               Toute session ouverte en dehors devient un constat.
+#               Demande --faits (le fichier du skill forensic-linux).
+#
+# CE QU'UN INDICE PROUVE. Un domaine dans un historique prouve une
+# CONSULTATION, jamais un téléchargement ni un transfert. Un programme dans
+# une liste de paquets prouve une INSTALLATION, pas un usage. Le rapport
+# doit garder cette distinction : le skill l'y oblige.
+#
+# CE QU'UN SILENCE NE PROUVE PAS. Si la pièce manque — pas de navigateur dans
+# la collecte, pas de --faits —, le constat est « non vérifiée », pas
+# « conforme » : les deux se lisent dans le fichier de sortie, et ne vont pas
+# au même endroit du rapport.
+#
+# Les listes ci-dessous sont un point de départ, pas une vérité. Retirez ce
+# qui ne vous concerne pas, ajoutez vos propres cas.
+
+
+regle: R1
+titre: Navigation Internet à des fins non professionnelles
+texte: L'accès à Internet mis à disposition est réservé à un usage professionnel.
+portee: compte
+domaine: (?i)(youtube\.com|netflix\.|primevideo|disneyplus|canalplus|molotov\.tv)   # vidéo de loisir
+domaine: (?i)(twitch\.tv|dailymotion|vimeo\.com/channels)                          # diffusion en direct
+domaine: (?i)(facebook\.com|instagram\.com|tiktok\.com|snapchat\.com|x\.com/home)  # réseau social
+domaine: (?i)(leboncoin|vinted|amazon\.[a-z]{2,3}/gp|cdiscount|aliexpress|shein)   # achat en ligne
+domaine: (?i)(meetic|tinder|badoo|adopteunmec|bumble)                              # rencontre
+domaine: (?i)(voyages-sncf|oui\.sncf|booking\.com|airbnb|tripadvisor)              # voyage personnel
+
+regle: R2
+titre: Logiciels de jeu vidéo
+texte: L'installation de logiciels de jeu sur le poste de travail est interdite.
+portee: compte
+programme: (?i)\b(steam|lutris|playonlinux|heroic|bottles|minecraft|retroarch)\b
+programme: (?i)\b(dosbox|pcsx2|dolphin-emu|citra|yuzu|ppsspp|mame)\b
+programme: (?i)(com\.valvesoftware\.steam|net\.lutris\.lutris|org\.libretro)
+fichier: (?i)/(Games?|Jeux)/
+fichier: (?i)\.local/share/(Steam|lutris)/
+domaine: (?i)(store\.steampowered|epicgames\.com/store|gog\.com|itch\.io)
+
+regle: R3
+titre: Partage de fichiers pair à pair
+texte: L'usage de logiciels d'échange pair à pair est interdit sur le réseau de l'entreprise.
+portee: compte
+programme: (?i)\b(transmission|qbittorrent|deluge|rtorrent|ktorrent|amule|vuze|aria2)\b
+programme: (?i)(org\.qbittorrent|com\.transmissionbt)
+fichier: (?i)\.torrent$
+fichier: (?i)\.config/(qBittorrent|transmission|deluge)/
+domaine: (?i)(thepiratebay|yggtorrent|1337x|rarbg|torrent9|nyaa\.si|torrentz)
+domaine: (?i)(tracker\.|announce\.torrent)
+
+regle: R4
+titre: Contenus audiovisuels de divertissement
+texte: Le poste de travail ne doit pas servir au stockage ni à la lecture de contenus de divertissement.
+portee: compte
+fichier: (?i)\.(mkv|avi|mp4|mov|wmv|flv|m4v)$
+fichier: (?i)/(Films?|Movies?|S[ée]ries?|Musique|Music)/
+programme: (?i)\b(kodi|popcorn-time|stremio|vlc-plugin-|smplayer)\b
+domaine: (?i)(streaming|voirfilms|papystreaming|wiflix|french-stream|zone-?t[ée]l[ée]chargement)
+
+regle: R5
+titre: Sites dont l'accès est interdit
+texte: L'accès aux sites contraires aux valeurs de l'entreprise ou à la loi est interdit.
+portee: compte
+# ⚠ À COMPLÉTER selon la charte : cette liste ne peut pas être devinée.
+# Les catégories ci-dessous sont les plus fréquentes ; ajoutez les vôtres.
+domaine: (?i)(pornhub|xvideos|xhamster|youporn|redtube)                    # contenu adulte
+domaine: (?i)(winamax|betclic|unibet|pmu\.fr|parionssport|casino[0-9-]*\.) # jeu d'argent
+domaine: (?i)(crackwatch|nulled\.to|cracked\.io|keygen)                    # contournement de licence
+
+regle: R6
+titre: Usage du poste hors du cadre professionnel
+texte: Le poste est mis à disposition pour l'exercice des missions de l'agent.
+portee: compte
+# Un réseau sans fil enregistré prouve que la machine s'y est associée au
+# moins une fois — donc qu'elle est sortie du site.
+wifi: (?i)(mcdo|mcdonald|burger.?king|starbucks|quick_|kfc)                # restauration
+wifi: (?i)(sncf|inoui|ouigo|ratp|_?AIRPORT|aeroport|air.?france)           # transport
+wifi: (?i)(ibis|novotel|mercure|accor|hotel|campanile|b&b_)               # hôtellerie
+wifi: (?i)(mcdonalds.?free|free.?wifi|wifi.?gratuit|guest|invit[ée])      # accès public
+wifi: (?i)(iphone|android.?ap|galaxy|partage.?de.?connexion|hotspot)      # partage de connexion
+horaire: lun-ven 08:00-19:00

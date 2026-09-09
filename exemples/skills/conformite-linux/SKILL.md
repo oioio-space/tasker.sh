@@ -58,6 +58,16 @@ Lancez aussi le skill **`forensic-linux`** : son `faits.jsonl` porte les
 **dates** — quand la clé USB a été branchée, quand le service a été visité.
 Un manquement daté vaut mieux qu'un manquement constaté.
 
+**Quand les règles sont déjà écrites dans un fichier `.regles`**, ajoutez-le :
+
+```bash
+python3 scripts/controles.py <dossier PREFIX/> \
+        --regles references/regles/usage-non-professionnel.regles \
+        --faits faits.jsonl -o constats.jsonl
+```
+
+Les constats portent alors le numéro de la règle cherchée. Voir le §3.
+
 ### 2 · Lire les règles
 
 Elles arrivent en texte ou en Markdown. Si vous recevez un PDF ou un document
@@ -80,6 +90,50 @@ tableau :
 |---|---|---|---|
 | Art. 4.2 | « les mots de passe sont personnels et renouvelés » | comptes sans mot de passe, sans expiration, ou hachés en MD5 | C0006, C0008, C0009 |
 | Art. 6 | « l'agent veille à la confidentialité » | *trop général pour un contrôle direct — voir les règles non vérifiables* | — |
+
+### Les règles écrites d'avance : le fichier `.regles`
+
+Une règle que l'on rencontre à chaque dossier n'a pas à être retraduite chaque
+fois. `references/regles/` contient des fichiers où la traduction est écrite,
+**à la main et en clair** : une règle par bloc, sa phrase recopiée de la charte,
+puis les indices à chercher — un domaine dans un navigateur, un programme dans
+la liste des paquets, un fichier dans le dossier personnel, un réseau sans fil,
+des heures ouvrées.
+
+    regle: R2
+    titre: Logiciels de jeu vidéo
+    texte: L'installation de logiciels de jeu sur le poste est interdite.
+    programme: (?i)\b(steam|lutris|minecraft)\b        # ludothèques
+    fichier: (?i)/(Games?|Jeux)/
+
+**Ces fichiers ne sont pas la charte de l'entreprise.** Avant de vous en servir,
+confrontez chaque bloc à la charte fournie : retirez ce qu'elle ne dit pas,
+ajoutez ce qu'elle dit. Un bloc dont le `texte:` ne se retrouve pas dans la
+charte doit être retiré, ou signalé comme une observation sans règle.
+
+Le fichier vous appartient : ajouter une règle, c'est ajouter un bloc — jamais
+toucher au code. Le format est décrit en tête de
+`references/regles/usage-non-professionnel.regles`.
+
+Trois choses à savoir pour le rapport :
+
+- **Le motif est dans le constat.** Le champ `methode` cite l'expression
+  cherchée : le lecteur peut la refaire, et la contester. Le champ `question`
+  ne demande plus « quelle règle ? » mais « cette traduction est-elle fidèle ? ».
+- **Ce qu'un indice prouve est écrit dans le constat**, dans `note`. Un domaine
+  prouve une consultation ; un paquet, une installation ; un fichier, une
+  présence ; un réseau sans fil, une association ; une heure, une ouverture de
+  session. **Recopiez cette limite dans le rapport** au lieu de la résumer.
+- **Une règle non cherchée n'est pas une règle respectée.** Quand la pièce
+  manque, le constat est de thème `limite` (« règle R6 : aucun profil de
+  connexion réseau ») ; quand la pièce est là et que rien n'a été trouvé, il est
+  de thème `conforme` — et dit lui-même que cela ne prouve pas le respect de la
+  règle. Ces deux cas vont respectivement au §7 et au §6 du rapport, jamais au §3.
+
+Reportez le tableau du §3 depuis le fichier : `regle`, `texte`, les indices, et
+les constats obtenus. Le manifeste `constats-manifeste.json` contient le
+fichier de règles employé, son empreinte et la liste des motifs — de quoi
+refaire le tableau sans rien deviner.
 
 Trois interdits sur cette table :
 

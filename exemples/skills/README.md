@@ -67,6 +67,17 @@ Lancez l'extraction **vous-même**, hors de l'agent :
     python3 $K/forensic-linux/scripts/extraire.py   "$C" -o ~/analyse/faits.jsonl
     python3 $K/conformite-linux/scripts/controles.py "$C" -o ~/analyse/constats.jsonl
 
+Si vos règles sont déjà écrites dans un fichier `.regles`, donnez-le, avec les
+faits — ce sont eux qui portent les dates et le fuseau du poste :
+
+    python3 $K/conformite-linux/scripts/controles.py "$C" \
+            --regles $K/conformite-linux/references/regles/usage-non-professionnel.regles \
+            --faits ~/analyse/faits.jsonl -o ~/analyse/constats.jsonl
+
+Ce fichier s'écrit à la main : une règle par bloc, la phrase de la charte
+recopiée, puis les indices à chercher. **Relisez-le contre la charte de
+l'entreprise avant de vous en servir** : il n'en est pas la copie.
+
 Puis ouvrez l'agent dans `~/analyse` et demandez-lui le rapport. Il n'a alors
 besoin que de **lire** `faits.jsonl` — pas d'exécuter quoi que ce soit.
 
