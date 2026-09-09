@@ -130,7 +130,41 @@ une fenêtre de contexte. Découpez par catégorie plutôt que tout charger :
 
 Les catégories : `machine`, `compte`, `domaine`, `evenement`, `support`,
 `reseau`, `navigation`, `telechargement`, `usage`, `persistance`, `suspect`,
-`timeline`, `recuperation`.
+`paquet`, `timeline`, `recuperation`, `limite`.
+
+### Les sous-agents de Crush
+
+Au-delà, Crush sait répartir : l'outil **`agent`** lance des sous-agents **en
+parallèle**, et — c'est le point qui compte ici — le code les restreint aux
+outils de **lecture seule** : `view`, `ls`, `grep`, `glob`, `sourcegraph`,
+`lsp_*`. Un sous-agent **ne peut pas écrire**, par construction, quelles que
+soient les permissions du parent.
+
+Pour l'activer, ajoutez-le à vos permissions :
+
+```json
+"permissions": { "allowed_tools": ["view", "ls", "grep", "glob", "agent"] }
+```
+
+`agent` n'est pas `bash` : il n'accorde aucun droit d'exécution. Il reste donc
+compatible avec la règle du §4 — l'extraction se lance à la main, l'agent ne
+fait que lire.
+
+Le sous-agent emploie par défaut le modèle **large**. Si vous voulez lui
+donner le petit, pour aller vite sur du résumé :
+
+```json
+"agents": { "task": { "model": "small" } }
+```
+
+Le skill dit quoi leur demander, et surtout ce qu'ils ne doivent pas faire :
+lire et résumer, jamais conclure ni qualifier.
+
+### Suivre une analyse longue
+
+Crush expose aussi **`todos`**. Le skill s'en sert pour poser les dix sections
+du rapport avant de commencer : une analyse s'interrompt, la liste dit où on en
+était. À ajouter aux permissions si vous le voulez.
 
 ## 8 · Vérifier l'extracteur
 

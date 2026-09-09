@@ -69,7 +69,51 @@ Trois contrôles, dans cet ordre. Ils changent la lecture de tout le reste.
    Un `wtmp` qui commence trois jours avant l'arrêt ne prouve pas que la machine
    n'a servi que trois jours — il prouve que le fichier a été tourné. Dites-le.
 
-### 3 · Recouper
+### 3 · Répartir, quand la collecte est grosse
+
+Un `faits.jsonl` de dizaines de milliers de lignes ne tient pas dans une
+fenêtre de contexte. **N'en chargez jamais la totalité pour « voir ».**
+
+Comptez d'abord, sans lire :
+
+```bash
+cut -d'"' -f8 faits.jsonl | sort | uniq -c | sort -rn   # faits par catégorie
+wc -l faits.jsonl
+```
+
+Puis, selon le volume :
+
+- **Quelques milliers de faits** : lisez par catégorie, avec `grep`.
+
+      grep '"categorie":"evenement"' faits.jsonl
+      grep '"categorie":"suspect"'   faits.jsonl
+
+- **Au-delà** : répartissez sur des **sous-agents**, s'ils sont disponibles.
+  Crush expose pour cela l'outil `agent`, qui les lance **en parallèle** et
+  les restreint **aux outils de lecture seule** — `view`, `ls`, `grep`,
+  `glob` : un sous-agent ne peut, par construction, rien écrire dans les
+  scellés. C'est la façon la plus sûre de traiter un gros volume.
+
+  Une catégorie par sous-agent, une consigne identique pour chacun :
+
+  > Lis `faits.jsonl`, ne retiens que les lignes dont la catégorie est
+  > `reseau`. Rends un résumé de dix lignes au plus, chaque affirmation
+  > suivie des identifiants de faits qui la portent (`F0123`). N'invente
+  > rien, ne conclus rien : je recoupe ensuite.
+
+  Vous gardez pour vous le recoupement et la rédaction — c'est là que le
+  jugement s'exerce, et il demande d'avoir toutes les catégories en tête.
+
+**Ce qu'un sous-agent ne doit jamais faire** : conclure, qualifier de
+suspect, ou décider de ce qui entre dans le rapport. Il lit et il résume.
+Les identifiants de faits qu'il rend vous permettent de tout revérifier
+sans le croire sur parole.
+
+Si l'outil `agent` n'est pas dans les permissions, ce n'est pas grave :
+lisez par catégorie, dans l'ordre du plan de rédaction, et écrivez chaque
+section dès que vous en avez la matière plutôt que de tout garder en tête.
+
+### 4 · Recouper
 
 C'est ici que vous valez mieux qu'un `grep`. Rapprochez, en nommant les deux
 sources à chaque fois :
@@ -96,7 +140,7 @@ sources à chaque fois :
 Quand un rapprochement tient à la seconde près, dites-le. Quand il tient à
 l'heure près, dites-le aussi — la précision fait partie du fait.
 
-### 4 · Rédiger
+### 5 · Rédiger
 
 Écrivez `rapport-forensic-<PREFIX>.md` dans cet ordre, en français, à
 l'indicatif, sans jargon inutile :
@@ -125,6 +169,17 @@ l'indicatif, sans jargon inutile :
 10. **Annexe : méthode** — la commande d'extraction, le nombre de faits, les
     empreintes recopiées de `faits-manifeste.json` (extracteur, fichier de
     faits, et les pièces citées dans le rapport), et la table `id → source`.
+
+## Écrire un rapport plus long que ce que le modèle peut sortir d'un coup
+
+Un rapport complet dépasse souvent la limite de sortie d'un modèle. N'essayez
+pas de tout produire d'un seul jet : **écrivez section par section**, en
+ajoutant à la fin du fichier à chaque fois. Les dix sections sont indépendantes,
+c'est fait pour.
+
+Si un outil de suivi de tâches est disponible — Crush a `todos` —, posez-y les
+dix sections avant de commencer. Une analyse longue s'interrompt ; la liste dit
+où vous en étiez.
 
 ## Reproductibilité
 
