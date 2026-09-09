@@ -261,6 +261,7 @@ n'existent pas chez elle :
 | Arch | `var/lib/pacman/local` (la pose datée par `%INSTALLDATE%`), `pacman.log`, profils `iwd` (SSID en hexadécimal compris) |
 | Alpine | `apk` (`lib/apk/db/installed`, `etc/apk/world`), ni `wtmp` ni journal systemd — l'extraction le dit **normal** au lieu de le compter manquant, syslog de busybox |
 
+    tests/plan.sh                                # la conf elle-même : son plan sur un faux montage par famille
     python3 tests/matrice.py /tmp/matrice        # cinq collectes synthétiques
     for c in /tmp/matrice/*/ ; do python3 forensic-linux/scripts/extraire.py "$c" -o "$c.jsonl" ; done
 
@@ -273,13 +274,16 @@ Une seule collecte réelle a servi en plus : un CentOS 7. Les autres familles
 sont synthétiques — fidèles aux formats, pas à la vie d'un poste. La première
 collecte réelle de chaque famille mérite une relecture attentive des limites.
 
-Les deux `brouillon.py` partagent un bloc recopié — lecture du JSONL, tableau
-Markdown, horloge —, délimité par `# ── commun ──` et `# ── fin commun ──` :
-chaque skill doit rester installable seul, et le bloc doit rester identique.
-Pour vérifier qu'il n'a pas dérivé :
+Deux blocs sont recopiés d'un skill à l'autre, délimités par `# ── commun ──`
+et `# ── fin commun ──` — lecture du JSONL, tableau Markdown et horloge dans
+les deux `brouillon.py` ; lecture des réseaux sans fil dans `extraire.py` et
+`controles.py`. Chaque skill doit rester installable seul, et chaque bloc doit
+rester identique. Pour vérifier qu'ils n'ont pas dérivé :
 
     diff <(sed -n '/^# ── commun ──/,/^# ── fin commun ──/p' forensic-linux/scripts/brouillon.py) \
          <(sed -n '/^# ── commun ──/,/^# ── fin commun ──/p' conformite-linux/scripts/brouillon.py)
+    diff <(sed -n '/^# ── commun ──/,/^# ── fin commun ──/p' forensic-linux/scripts/extraire.py) \
+         <(sed -n '/^# ── commun ──/,/^# ── fin commun ──/p' conformite-linux/scripts/controles.py)
 
 ---
 

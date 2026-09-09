@@ -287,9 +287,57 @@ SSHD = [
      "SSH accepte les mots de passe vides",
      "la charte exige-t-elle un mot de passe non vide ?"),
 ]
-RE_PARE_FEU = re.compile(r'(firewalld|ufw|iptables|nftables)')
-RE_SSID = re.compile(r'^\s*ssid\s*=\s*(.+?)\s*$', re.M | re.I)
+# ── commun ── (identique dans forensic-linux et conformite-linux : chaque skill
+# s'installe seul, et le README dit comment vérifier que le bloc n'a pas dérivé)
+RE_SSID_NM = re.compile(r'^\s*ssid\s*=\s*(.+?)\s*$', re.M | re.I)
+RE_SSID_WPA = re.compile(r'^\s*ssid\s*=\s*"?([^"\n]+)"?', re.M)
 RE_ESSID = re.compile(r'^\s*ESSID\s*=\s*"?([^"\n]+)"?', re.M)
+RE_ACCESS_POINTS = re.compile(r'^\s*access-points:\s*$', re.M)
+RE_POINT_NETPLAN = re.compile(r'^\s{2,}"?([^"\s:][^":\n]*)"?:\s*$', re.M)
+
+
+def ssids_de(nom, txt):
+    """Les réseaux sans fil qu'un membre de l'archive réseau déclare, quel que
+    soit le gestionnaire. Rend [(ssid, méthode)].
+
+    NetworkManager écrit un SSID non UTF-8 en octets décimaux « 1;2;3; » ;
+    iwd nomme le fichier par le SSID, en hexadécimal « =4d63… » quand il sort
+    de [A-Za-z0-9_-] ; netplan indente les SSID sous « access-points: ».
+    """
+    base = nom.rsplit("/", 1)[-1]
+    if "system-connections" in nom:
+        m = RE_SSID_NM.search(txt)
+        if not m:
+            return []
+        ssid = m.group(1)
+        if re.fullmatch(r'(?:\d{1,3};)+', ssid):
+            ssid = bytes(int(x) for x in ssid.split(";") if x).decode("utf-8", "replace")
+        return [(ssid, "ssid= du profil NetworkManager")]
+    if "network-scripts" in nom:
+        return [(m.group(1), "ESSID= du fichier ifcfg") for m in RE_ESSID.finditer(txt)]
+    if "wpa_supplicant" in nom and base.endswith(".conf"):
+        return [(m.group(1), "ssid= de wpa_supplicant.conf") for m in RE_SSID_WPA.finditer(txt)]
+    if "/iwd/" in nom and base.endswith((".psk", ".open", ".8021x")):
+        ssid = base.rsplit(".", 1)[0]
+        if ssid.startswith("="):
+            try:
+                ssid = bytes.fromhex(ssid[1:]).decode("utf-8", "replace")
+            except ValueError:
+                pass
+        return [(ssid, "nom du fichier de profil iwd")]
+    if "netplan" in nom and base.endswith((".yaml", ".yml")):
+        return [(m.group(1).strip(), "clés sous access-points: de netplan")
+                for bloc in RE_ACCESS_POINTS.split(txt)[1:]
+                for m in RE_POINT_NETPLAN.finditer(bloc)]
+    return []
+
+
+def garde_sans_fil(nom):
+    return ("system-connections" in nom or "network-scripts" in nom
+            or "wpa_supplicant" in nom or "/iwd/" in nom or "netplan" in nom)
+# ── fin commun ──
+
+RE_PARE_FEU = re.compile(r'(firewalld|ufw|iptables|nftables)')
 RE_NM_ID = re.compile(r'^\s*id\s*=\s*(.+?)\s*$', re.M)
 RE_NM_UUID = re.compile(r'^\s*uuid\s*=\s*([0-9a-fA-F-]{36})', re.M)
 RE_NM_PERM = re.compile(r'^\s*permissions\s*=\s*user:([^:;]+)', re.M)
@@ -298,28 +346,8 @@ RE_NM_DATE = re.compile(r'^([0-9a-fA-F-]{36})=(\d+)', re.M)
 
 def _garde_reseau(nom):
     base = os.path.basename(nom)
-    return (base in ("sshd_config", "ufw.conf", "timestamps")
-            or "system-connections" in nom or "network-scripts" in nom
-            or "wpa_supplicant" in nom or "/iwd/" in nom or "netplan" in nom
+    return (base in ("sshd_config", "ufw.conf", "timestamps") or garde_sans_fil(nom)
             or RE_PARE_FEU.search(nom) is not None)
-
-
-def _ssids_ailleurs(nom, base, txt):
-    """Les SSID que wpa_supplicant, iwd et netplan connaissent — sans date."""
-    if "wpa_supplicant" in nom and base.endswith(".conf"):
-        return re.findall(r'^\s*ssid\s*=\s*"?([^"\n]+)"?', txt, re.M)
-    if "/iwd/" in nom and base.endswith((".psk", ".open", ".8021x")):
-        ssid = base.rsplit(".", 1)[0]
-        if ssid.startswith("="):
-            try:
-                ssid = bytes.fromhex(ssid[1:]).decode("utf-8", "replace")
-            except ValueError:
-                pass
-        return [ssid]
-    if "netplan" in nom and base.endswith((".yaml", ".yml")):
-        return [m.group(1).strip() for bloc in re.split(r'^\s*access-points:\s*$', txt, flags=re.M)[1:]
-                for m in re.finditer(r'^\s{2,}"?([^"\s:][^":\n]*)"?:\s*$', bloc, re.M)]
-    return []
 
 
 def reseau(c):
@@ -356,26 +384,18 @@ def reseau(c):
         if base == "timestamps" and "NetworkManager" in nom:
             for m in RE_NM_DATE.finditer(txt):
                 dates[m.group(1).lower()] = int(m.group(2))
-        elif "wpa_supplicant" in nom or "/iwd/" in nom or "netplan" in nom:
-            for ssid in _ssids_ailleurs(nom, base, txt):
-                reseaux.append({"ssid": ssid.strip(), "id": None, "uuid": None,
-                                "acteur": None, "source": f"{c.rel(t)} → {nom}"})
-        elif "system-connections" in nom or "network-scripts" in nom:
-            m = RE_SSID.search(txt)
-            ssid = m.group(1) if m else None
-            if ssid and re.fullmatch(r'(?:\d{1,3};)+', ssid):        # SSID non UTF-8
-                ssid = bytes(int(x) for x in ssid.split(";") if x) \
-                    .decode("utf-8", "replace")
-            if not ssid:
-                m = RE_ESSID.search(txt)
-                ssid = m.group(1) if m else None
+        elif garde_sans_fil(nom):
+            # NetworkManager seul sait à quel compte un profil est réservé et
+            # quand la machine s'y est associée pour la dernière fois
             idc, uuid, perm = RE_NM_ID.search(txt), RE_NM_UUID.search(txt), RE_NM_PERM.search(txt)
-            reseaux.append({"ssid": ssid or (idc.group(1) if idc else
-                                             os.path.splitext(base)[0]),
-                            "id": idc.group(1) if idc else None,
-                            "uuid": uuid.group(1).lower() if uuid else None,
-                            "acteur": perm.group(1) if perm else None,
-                            "source": f"{c.rel(t)} → {nom}"})
+            ssids = ssids_de(nom, txt) or (
+                [(idc.group(1), "id= du profil NetworkManager, sans ssid=")] if idc else [])
+            for ssid, methode in ssids:
+                reseaux.append({"ssid": ssid.strip(), "methode": methode,
+                                "id": idc.group(1) if idc else None,
+                                "uuid": uuid.group(1).lower() if uuid else None,
+                                "acteur": perm.group(1) if perm else None,
+                                "source": f"{c.rel(t)} → {nom}"})
     if not pare_feu:
         constat("durcissement", "aucune configuration de pare-feu",
                 "ni firewalld, ni ufw, ni iptables, ni nftables", c.rel(t),
@@ -411,7 +431,9 @@ RE_HISTO_ZSH = re.compile(r'^: (\d{9,11}):\d+;(.*)$')
 RE_INSTALLABLE = re.compile(r'\.(?:AppImage|deb|rpm|exe|msi)$', re.I)
 RE_LS_PERMS = re.compile(r'^[-dlbcpsD][-rwxsStT]{9}')
 RE_LS_ISO = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-RE_DATE_LOG = re.compile(r'^(\d{4}-\d{2}-\d{2}[ T|]\d{2}:\d{2}:\d{2})')
+# dpkg.log « 2026-01-04 18:30:00 », zypp « # 2026-01-05 21:10:00| », pacman
+# « [2026-01-06T20:00:01+0100] » : la date en tête, quel que soit le décor
+RE_DATE_LOG = re.compile(r'^[#\[\s]*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})')
 RE_HOTE = re.compile(
     rb'(?<![a-z0-9.-])(?:[a-z][a-z0-9+.-]{1,10}://)?(?:[a-z0-9-]{1,63}\.)+[a-z]{2,24}'
     rb'(?:[/?#][^\x00\s"\'<>]{0,120})?', re.I)
@@ -594,7 +616,7 @@ def lire_paquets(c):
             for l in txt.splitlines():
                 if l.strip():
                     m = RE_DATE_LOG.match(l)
-                    lignes.append((l, m.group(1).replace("|", " ") if m else None))
+                    lignes.append((l, m.group(1) if m else None))
             if lignes:
                 out.append((f"{c.rel(arch)} → {nom}",
                             "l'historique du gestionnaire de paquets", lignes))
@@ -1053,12 +1075,11 @@ def _chercher_wifi(pieces, motif, brut, ident):
         yield dict(quoi="réseau sans fil enregistré sur le poste", valeur=o["ssid"],
                    source=o["source"], acteur=o["acteur"], date=o["vu_le"],
                    portee="compte" if o["acteur"] else "poste",
-                   methode=f"motif « {brut} » cherché dans le SSID des profils "
-                           "NetworkManager",
+                   methode=f"motif « {brut} » cherché dans le SSID ({o['methode']})",
                    note="date de la dernière association, lue dans "
                         "var/lib/NetworkManager/timestamps" if o["vu_le"] else
-                        "aucune date : le fichier « timestamps » de NetworkManager "
-                        "manque ou ne connaît pas ce profil")
+                        "aucune date : seul NetworkManager date l'association, et "
+                        "son fichier « timestamps » manque ou ne connaît pas ce profil")
 
 
 def _chercher_horaire(pieces, motif, brut, ident):

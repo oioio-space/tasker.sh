@@ -52,6 +52,14 @@ def _epoch_iso(n):
     return datetime.fromtimestamp(n, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+RE_CLE_VALEUR = re.compile(r'^([A-Z_]+)="?([^"\n]*)"?$', re.M)
+
+
+def _champs(txt, motif=RE_CLE_VALEUR):
+    """« CLE=valeur » ligne à ligne → dict. os-release, machine-info, ifcfg."""
+    return dict(motif.findall(txt))
+
+
 def _compte_de(chemin, suffixe):
     """PREFIX_<compte>_<suffixe> → compte."""
     m = re.search(rf'_([^_]+)_{re.escape(suffixe)}$', os.path.basename(chemin))
@@ -70,11 +78,12 @@ class Collecte:
         self.visites = visites    # pages retenues par historique de navigateur
         if not os.path.isdir(self.racine):
             sys.exit(f"pas un dossier : {self.racine}")
-        # la famille du système (ID et ID_LIKE de os-release) : ce qui est
-        # normal ou non dépend d'elle, dès la vérification de complétude
-        osr = self.un("os-release", "SYSTEME")
-        champs = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', self.texte(osr), re.M)) if osr else {}
-        self.famille = " ".join(champs.get(k, "") for k in ("ID", "ID_LIKE")).lower()
+        # os-release, lu une fois : les faits « machine » en viennent, et la
+        # famille du système décide de ce qui est normal ou non, dès la
+        # vérification de complétude
+        self.os_release = self.un("os-release", "SYSTEME")
+        champs = _champs(self.texte(self.os_release)) if self.os_release else {}
+        self.familles = {x.lower() for k in ("ID", "ID_LIKE") for x in champs.get(k, "").split()}
 
     def rel(self, chemin):
         return os.path.relpath(chemin, self.racine)
@@ -239,9 +248,9 @@ def machine(c):
         if nom:
             fait("machine", "nom de la machine", nom, c.rel(h), "cat")
 
-    osr = c.un("os-release", "SYSTEME")
+    osr = c.os_release
     if osr:
-        champs = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', c.texte(osr), re.M))
+        champs = _champs(c.texte(osr))
         for cle, quoi in (("PRETTY_NAME", "système installé"),
                           ("VERSION_ID", "version du système"),
                           ("ID", "famille du système"),
@@ -272,8 +281,7 @@ def machine(c):
                      "tar -xO etc/adjtime",
                      note="en heure locale, les dates du BIOS et des journaux divergent")
             elif nom.endswith("machine-info"):
-                champs = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$',
-                                         blob.decode("utf-8", "replace"), re.M))
+                champs = _champs(blob.decode("utf-8", "replace"))
                 for cle, quoi in (("PRETTY_HOSTNAME", "nom affiché de la machine"),
                                   ("CHASSIS", "type de châssis"),
                                   ("DEPLOYMENT", "environnement déclaré")):
@@ -307,10 +315,11 @@ def machine(c):
     # date de pose en epoch. La plus ancienne date l'installation, la plus
     # récente la dernière administration.
     pacman = c.un("_pacman_local.tar.gz", "PAQUETS")
+    compte_paquets = None                          # (nombre, source, méthode, note)
     if pacman:
         poses = []
         for nom, blob in c.membres_tar(pacman, lambda n: n.endswith("/desc")):
-            champs = dict(re.findall(r'^%([A-Z]+)%\n(.+)$', blob.decode("utf-8", "replace"), re.M))
+            champs = _champs(blob.decode("utf-8", "replace"), RE_CLE_PACMAN)
             if champs.get("NAME") and champs.get("INSTALLDATE", "").isdigit():
                 poses.append((int(champs["INSTALLDATE"]), champs["NAME"]))
         poses.sort()
@@ -321,25 +330,17 @@ def machine(c):
             fait("machine", "dernier paquet installé", poses[-1][1],
                  f"{c.rel(pacman)} → desc", "%INSTALLDATE% le plus récent de pacman",
                  horodatage=_epoch_iso(poses[-1][0]))
-            fait("machine", "paquets installés (nombre)", str(len(poses)), c.rel(pacman),
-                 "compte des dossiers de var/lib/pacman/local")
+            compte_paquets = (len(poses), c.rel(pacman), "compte des dossiers de var/lib/pacman/local", None)
     apk = c.un("_apk_installed.txt", "PAQUETS")
     if apk:
         noms = re.findall(r'^P:(\S+)$', c.texte(apk), re.M)
-        fait("machine", "paquets installés (nombre)", str(len(noms)), c.rel(apk),
-             "compte des champs P: de lib/apk/db/installed",
-             note="apk ne date pas les poses : voir etc/apk/world et var/log/apk.log")
+        compte_paquets = (len(noms), c.rel(apk), "compte des champs P: de lib/apk/db/installed",
+                          "apk ne date pas les poses : voir etc/apk/world et var/log/apk.log")
 
     # La plus vieille salve de paquets date l'installation.
     pk = c.un("_paquets.txt", "PAQUETS")
-    if pk and not pacman and not apk:
+    if pk:
         lignes = [l for l in c.texte(pk).splitlines() if l.strip()]
-        if not lignes:
-            fait("limite", "liste des paquets vide", "0 ligne", c.rel(pk),
-                 "wc -l", confiance="certaine",
-                 note="l'étape a échoué : sur openSUSE, la base RPM est au format ndb "
-                      "que le rpm du poste d'analyse ne lit pas toujours. Les poses se "
-                      "lisent alors dans var/log/zypp/history")
         dates = []
         for l in lignes:
             m = RE_BLOC_RPM.search(l)
@@ -350,25 +351,26 @@ def machine(c):
             iso = lire_date(vieux)
             fait("machine", "installation du système (plus ancien paquet posé)",
                  paquet, c.rel(pk), "rpm -qa --last | tail -n 1",
-                 horodatage=iso or vieux, confiance="forte",
-                 note="date de la salve d'installation, pas une preuve directe ; "
-                      "heure écrite par le poste d'analyse dans son fuseau")
+                 horodatage=iso or vieux, confiance="forte", fuseau="poste d'analyse",
+                 note="date de la salve d'installation, pas une preuve directe")
             recent, paquet_r = dates[0]
             fait("machine", "dernier paquet installé", paquet_r, c.rel(pk),
                  "rpm -qa --last | head -n 1",
-                 horodatage=lire_date(recent) or recent,
+                 horodatage=lire_date(recent) or recent, fuseau="poste d'analyse",
                  note="borne basse de la dernière utilisation administrative")
         # dpkg-query -l pose cinq lignes d'en-tête avant la liste : seules
         # celles qui commencent par un état à deux lettres sont des paquets.
         dpkg = [l for l in lignes if re.match(r'^[a-zA-Z]{2}\s+\S', l)]
-        if dpkg and not dates:
-            fait("machine", "paquets installés (nombre)", str(len(dpkg)), c.rel(pk),
-                 "compte des lignes d'état de dpkg-query -l",
-                 note="dpkg ne date pas les installations : voir le journal "
-                      "du gestionnaire pour les dates")
-        else:
-            fait("machine", "paquets installés (nombre)", str(len(lignes)), c.rel(pk),
-                 "wc -l")
+        if compte_paquets is None and lignes:      # une liste vide est une limite, pas « 0 paquet »
+            if dpkg and not dates:
+                compte_paquets = (len(dpkg), c.rel(pk), "compte des lignes d'état de dpkg-query -l",
+                                  "dpkg ne date pas les installations : voir le journal "
+                                  "du gestionnaire pour les dates")
+            else:
+                compte_paquets = (len(lignes), c.rel(pk), "wc -l", None)
+    if compte_paquets:
+        n, source, methode, note = compte_paquets
+        fait("machine", "paquets installés (nombre)", str(n), source, methode, note=note)
 
 
 # ── 2 · comptes et domaine ────────────────────────────────────────────
@@ -471,6 +473,7 @@ def _last(c, chemin, categorie, quoi, methode):
             note += f", fin {lire_date(g['fin']) or g['fin']}"
         fait(categorie, quoi, acteur, c.rel(chemin), methode,
              horodatage=iso or g["debut"], acteur=acteur, confiance="forte",
+             fuseau="poste d'analyse",
              note=note + " — heure écrite par le poste d'analyse dans son fuseau, "
                          "le binaire wtmp manquant",
              tty=g["tty"] or None, origine=depuis if depuis not in ("", "-") else None,
@@ -529,12 +532,6 @@ def _un_utmp(c, chemin, categorie, quoi_defaut):
     return len(lignes)
 
 
-def _secondes(n):
-    """wtmpdb note ses dates en MICROsecondes, lastlog2 en secondes : un
-    nombre au-delà de l'an 5000 en secondes est en microsecondes."""
-    return n / 1_000_000 if n > 100_000_000_000 else n
-
-
 def _bases_connexion(c):
     """lastlog2.db et wtmp.db : du sqlite, depuis Fedora 40 et Debian 13."""
     for chemin in c.chercher(".db", "CONNEXIONS"):
@@ -544,13 +541,16 @@ def _bases_connexion(c):
             blob = fh.read()
         c.lus.add(chemin)
         base = os.path.basename(chemin)
+        # wtmpdb compte en MICROsecondes, lastlog2 en secondes : l'unité est
+        # celle de la table, pas une devinette sur la grandeur du nombre
         for nom_table, lignes in _sqlite_lire(blob, [
                 ("wtmp", "SELECT User, Login, Logout, TTY, RemoteHost FROM wtmp"),
                 ("lastlog2", "SELECT Name, Time, TTY, RemoteHost FROM Lastlog2")]):
+            diviseur = 1_000_000 if nom_table == "wtmp" else 1
             for l in lignes:
                 l = list(l) + [None] * 5
                 qui, quand = l[0], l[1]
-                iso = _epoch_iso(_secondes(quand)) if isinstance(quand, (int, float)) and quand else None
+                iso = _epoch_iso(quand / diviseur) if isinstance(quand, (int, float)) and quand else None
                 if nom_table == "wtmp":
                     tty, origine, fin = l[3], l[4], l[2]
                 else:
@@ -564,7 +564,7 @@ def _bases_connexion(c):
                      qui, c.rel(chemin), f"sqlite3 sur la table {nom_table} de {base}",
                      horodatage=iso, acteur=qui, note=detail or None,
                      tty=tty or None, origine=origine or None,
-                     fin=_epoch_iso(_secondes(fin)) if isinstance(fin, (int, float)) and fin else None)
+                     fin=_epoch_iso(fin / diviseur) if isinstance(fin, (int, float)) and fin else None)
 
 
 def sessions(c):
@@ -777,13 +777,77 @@ def _journal_brut(source, nom, blob, methode, fin):
 
 
 # ── 5 · réseau ────────────────────────────────────────────────────────
+# ── commun ── (identique dans forensic-linux et conformite-linux : chaque skill
+# s'installe seul, et le README dit comment vérifier que le bloc n'a pas dérivé)
+RE_SSID_NM = re.compile(r'^\s*ssid\s*=\s*(.+?)\s*$', re.M | re.I)
+RE_SSID_WPA = re.compile(r'^\s*ssid\s*=\s*"?([^"\n]+)"?', re.M)
+RE_ESSID = re.compile(r'^\s*ESSID\s*=\s*"?([^"\n]+)"?', re.M)
+RE_ACCESS_POINTS = re.compile(r'^\s*access-points:\s*$', re.M)
+RE_POINT_NETPLAN = re.compile(r'^\s{2,}"?([^"\s:][^":\n]*)"?:\s*$', re.M)
+
+
+def ssids_de(nom, txt):
+    """Les réseaux sans fil qu'un membre de l'archive réseau déclare, quel que
+    soit le gestionnaire. Rend [(ssid, méthode)].
+
+    NetworkManager écrit un SSID non UTF-8 en octets décimaux « 1;2;3; » ;
+    iwd nomme le fichier par le SSID, en hexadécimal « =4d63… » quand il sort
+    de [A-Za-z0-9_-] ; netplan indente les SSID sous « access-points: ».
+    """
+    base = nom.rsplit("/", 1)[-1]
+    if "system-connections" in nom:
+        m = RE_SSID_NM.search(txt)
+        if not m:
+            return []
+        ssid = m.group(1)
+        if re.fullmatch(r'(?:\d{1,3};)+', ssid):
+            ssid = bytes(int(x) for x in ssid.split(";") if x).decode("utf-8", "replace")
+        return [(ssid, "ssid= du profil NetworkManager")]
+    if "network-scripts" in nom:
+        return [(m.group(1), "ESSID= du fichier ifcfg") for m in RE_ESSID.finditer(txt)]
+    if "wpa_supplicant" in nom and base.endswith(".conf"):
+        return [(m.group(1), "ssid= de wpa_supplicant.conf") for m in RE_SSID_WPA.finditer(txt)]
+    if "/iwd/" in nom and base.endswith((".psk", ".open", ".8021x")):
+        ssid = base.rsplit(".", 1)[0]
+        if ssid.startswith("="):
+            try:
+                ssid = bytes.fromhex(ssid[1:]).decode("utf-8", "replace")
+            except ValueError:
+                pass
+        return [(ssid, "nom du fichier de profil iwd")]
+    if "netplan" in nom and base.endswith((".yaml", ".yml")):
+        return [(m.group(1).strip(), "clés sous access-points: de netplan")
+                for bloc in RE_ACCESS_POINTS.split(txt)[1:]
+                for m in RE_POINT_NETPLAN.finditer(bloc)]
+    return []
+
+
+def garde_sans_fil(nom):
+    return ("system-connections" in nom or "network-scripts" in nom
+            or "wpa_supplicant" in nom or "/iwd/" in nom or "netplan" in nom)
+# ── fin commun ──
+
+
+RESEAU_LUS = ("resolv.conf", "hosts", "known_hosts")
+
+
+def _garde_reseau(nom):
+    base = os.path.basename(nom)
+    return (garde_sans_fil(nom) or base in RESEAU_LUS or base.startswith("ifcfg-")
+            or base.endswith((".nmconnection", ".lease", ".leases")))
+
+
 def reseau(c):
     t = c.un("_reseau.tar.gz", "RESEAU")
     if not t:
         return
-    for nom, blob in c.membres_tar(t):
+    for nom, blob in c.membres_tar(t, _garde_reseau):
         txt = blob.decode("utf-8", "replace")
         base = os.path.basename(nom)
+        for ssid, methode in ssids_de(nom, txt):
+            fait("reseau", "réseau sans fil enregistré", ssid, f"{c.rel(t)} → {nom}", methode,
+                 note="la machine connaît ce réseau ; seul NetworkManager date la "
+                      "dernière association (var/lib/NetworkManager/timestamps)")
         if "NetworkManager/system-connections" in nom or base.endswith(".nmconnection"):
             for m in re.finditer(r'^\s*(mac-address|cloned-mac-address)\s*=\s*(\S+)',
                                  txt, re.M):
@@ -794,41 +858,12 @@ def reseau(c):
                 fait("reseau", "adresse IP configurée", m.group(1),
                      f"{c.rel(t)} → {nom}", "grep address= dans le profil NetworkManager",
                      note=f"profil « {base} »")
-            for m in re.finditer(r'^\s*ssid\s*=\s*(.+)$', txt, re.M):
-                fait("reseau", "réseau sans fil enregistré", m.group(1).strip(),
-                     f"{c.rel(t)} → {nom}", "grep ssid dans le profil NetworkManager",
-                     note="la machine s'est associée à ce réseau au moins une fois")
-        elif "wpa_supplicant" in nom and base.endswith(".conf"):
-            for m in re.finditer(r'^\s*ssid\s*=\s*"?([^"\n]+)"?', txt, re.M):
-                fait("reseau", "réseau sans fil enregistré", m.group(1).strip(),
-                     f"{c.rel(t)} → {nom}", "grep ssid= dans wpa_supplicant.conf",
-                     note="réseau configuré ; l'association n'est pas datée ici")
-        elif "/iwd/" in nom and base.endswith((".psk", ".open", ".8021x")):
-            # iwd nomme le fichier par le SSID ; un SSID hors [A-Za-z0-9_-]
-            # est écrit « =<hexadécimal> »
-            ssid = base.rsplit(".", 1)[0]
-            if ssid.startswith("="):
-                try:
-                    ssid = bytes.fromhex(ssid[1:]).decode("utf-8", "replace")
-                except ValueError:
-                    pass
-            fait("reseau", "réseau sans fil enregistré", ssid, f"{c.rel(t)} → {nom}",
-                 "nom du fichier de profil iwd",
-                 note="réseau connu d'iwd ; la date du fichier dans l'archive est "
-                      "celle de la dernière écriture du profil")
-        elif "netplan" in nom and base.endswith((".yaml", ".yml")):
-            for bloc in re.split(r'^\s*access-points:\s*$', txt, flags=re.M)[1:]:
-                for m in re.finditer(r'^\s{2,}"?([^"\s:][^":\n]*)"?:\s*$', bloc, re.M):
-                    fait("reseau", "réseau sans fil enregistré", m.group(1).strip(),
-                         f"{c.rel(t)} → {nom}", "clés sous access-points: dans netplan",
-                         note="réseau configuré par netplan ; pas de date d'association")
         elif base.startswith("ifcfg-"):
-            champs = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', txt, re.M))
+            champs = _champs(txt)
             for cle, quoi in (("HWADDR", "adresse MAC d'une interface"),
                               ("IPADDR", "adresse IP configurée"),
                               ("DNS1", "serveur DNS configuré"),
-                              ("GATEWAY", "passerelle configurée"),
-                              ("ESSID", "réseau sans fil enregistré")):
+                              ("GATEWAY", "passerelle configurée")):
                 if champs.get(cle):
                     fait("reseau", quoi, champs[cle], f"{c.rel(t)} → {nom}",
                          f"grep {cle}= {base}", note=f"interface « {base[6:]} »")
@@ -1124,6 +1159,7 @@ SUSPECT = [
 ARTEFACTS_LUS = ("_history", ".lesshst", ".wget-hsts", "known_hosts", ".viminfo",
                  "authorized_keys")
 RE_HISTO_EPOCH = re.compile(r'^#(\d{9,11})$')
+RE_CLE_PACMAN = re.compile(r'^%([A-Z]+)%\n(.+)$', re.M)
 RE_HISTO_ZSH = re.compile(r'^: (\d{9,11}):\d+;(.*)$')
 
 
@@ -1228,6 +1264,16 @@ def _artefact(source, compte, base, blob):
                      confiance="certaine", note="permet une entrée sans mot de passe")
 
 
+RE_PACMAN = re.compile(r"^\[([^\]]+)\] \[(?:ALPM\] (installed|removed|upgraded) (\S+) \(([^)]*)\)"
+                       r"|PACMAN\] Running '([^']+)')", re.M)
+ACTIONS_PACMAN = {"installed": "paquet posé", "removed": "paquet retiré"}
+
+
+def _commande_paquet(commande, source, methode, quand, acteur=None):
+    fait("paquet", "commande du gestionnaire de paquets", commande, source, methode,
+         horodatage=quand, acteur=acteur)
+
+
 def historique_paquets(c):
     """Les journaux du gestionnaire : ce qui a été posé PUIS RETIRÉ.
 
@@ -1244,13 +1290,9 @@ def historique_paquets(c):
                     ("trans", "SELECT dt_begin, cmdline FROM trans ORDER BY dt_begin DESC LIMIT 200"),
                     ("trans (dnf5)", "SELECT dt_start, cmdline FROM trans ORDER BY dt_start DESC LIMIT 200")]):
                 for quand, ligne in lignes:
-                    iso = None
-                    if isinstance(quand, (int, float)) and quand:
-                        iso = (datetime.fromtimestamp(quand, timezone.utc)
-                               .isoformat().replace("+00:00", "Z"))
-                    fait("paquet", "commande du gestionnaire de paquets", ligne,
-                         f"{c.rel(t)} → {nom}",
-                         f"sqlite3 sur la table {table} de {base}", horodatage=iso)
+                    iso = _epoch_iso(quand) if isinstance(quand, (int, float)) and quand else None
+                    _commande_paquet(ligne, f"{c.rel(t)} → {nom}",
+                                     f"sqlite3 sur la table {table} de {base}", iso)
             continue
         if nom.endswith((".gz", ".xz", ".lzma", ".bz2", ".zst")):
             clair = decomprimer(nom, blob)
@@ -1274,45 +1316,55 @@ def historique_paquets(c):
                 d = re.match(r'\s*(\d{4}-\d\d-\d\d)\s+(\d\d:\d\d:\d\d)', bloc)
                 cmd = re.search(r'^Commandline:\s*(.+)$', bloc, re.M)
                 if d and cmd:
-                    fait("paquet", "commande du gestionnaire de paquets",
-                         cmd.group(1).strip(), f"{c.rel(t)} → {nom}",
-                         "blocs Start-Date/Commandline de apt/history.log",
-                         horodatage=f"{d.group(1)}T{d.group(2)}")
+                    _commande_paquet(cmd.group(1).strip(), f"{c.rel(t)} → {nom}",
+                                     "blocs Start-Date/Commandline de apt/history.log",
+                                     f"{d.group(1)}T{d.group(2)}")
             continue
         # zypper : « date|commande|paquet|version|arch|qui|dépôt|somme » —
         # chaque pose datée, ce que rpm -qa --last ne donne plus quand la base
         # est au format ndb. pacman : « [date] [ALPM] installed x (v) ».
         if base == "history" and "zypp" in nom:
             # les commandes sont notées en commentaire : « # date|command|qui|'zypper' 'in' …| »
-            lignes = [l.lstrip("# ") for l in txt.splitlines() if "|" in l]
-            dates = sorted(l.split("|", 1)[0] for l in lignes)
-            if dates:
+            lignes = [l.lstrip("# ").split("|") for l in txt.splitlines() if "|" in l]
+            premiere = min((ch[0] for ch in lignes), default=None)
+            if premiere:
                 fait("machine", "installation du système (première ligne de zypp/history)",
-                     dates[0], f"{c.rel(t)} → {nom}", "première date de var/log/zypp/history",
-                     horodatage=dates[0].replace(" ", "T"), confiance="forte")
-            for l in lignes:
-                ch = l.split("|")
-                if len(ch) >= 4 and ch[1] in ("install", "remove"):
+                     premiere, f"{c.rel(t)} → {nom}", "première date de var/log/zypp/history",
+                     horodatage=premiere.replace(" ", "T"), confiance="forte")
+            for ch in lignes:
+                if len(ch) < 4:
+                    continue
+                quand = ch[0].replace(" ", "T")
+                if ch[1] in ("install", "remove"):
                     fait("paquet", "paquet retiré" if ch[1] == "remove" else "paquet posé",
                          f"{ch[2]} {ch[3]}", f"{c.rel(t)} → {nom}",
-                         "colonnes de var/log/zypp/history", horodatage=ch[0].replace(" ", "T"),
+                         "colonnes de var/log/zypp/history", horodatage=quand,
                          note=f"par {ch[5]}" if len(ch) > 5 and ch[5] else None)
-                elif len(ch) >= 4 and ch[1] == "command":
-                    fait("paquet", "commande du gestionnaire de paquets",
-                         ch[3].replace("' '", " ").strip("'"), f"{c.rel(t)} → {nom}",
-                         "lignes « command » de zypp/history",
-                         horodatage=ch[0].replace(" ", "T"), acteur=ch[2].split("@")[0] or None)
+                elif ch[1] == "command":
+                    _commande_paquet(ch[3].replace("' '", " ").strip("'"), f"{c.rel(t)} → {nom}",
+                                     "lignes « command » de zypp/history", quand,
+                                     acteur=ch[2].split("@")[0] or None)
             continue
         if base == "pacman.log":
-            for m in re.finditer(r'^\[([^\]]+)\] \[ALPM\] (installed|removed|upgraded) (\S+) \(([^)]*)\)', txt, re.M):
-                fait("paquet", {"installed": "paquet posé", "removed": "paquet retiré",
-                                "upgraded": "paquet mis à jour"}[m.group(2)],
-                     f"{m.group(3)} {m.group(4)}", f"{c.rel(t)} → {nom}",
-                     "lignes [ALPM] de var/log/pacman.log", horodatage=m.group(1))
-            for m in re.finditer(r"^\[([^\]]+)\] \[PACMAN\] Running '([^']+)'", txt, re.M):
-                fait("paquet", "commande du gestionnaire de paquets", m.group(2),
-                     f"{c.rel(t)} → {nom}", "lignes [PACMAN] Running de pacman.log",
-                     horodatage=m.group(1))
+            # un poste Arch met tout à jour chaque semaine : des milliers de
+            # lignes « upgraded » sans intérêt une à une — elles se comptent
+            maj = []
+            for m in RE_PACMAN.finditer(txt):
+                quand, action, paquet, version, commande = m.groups()
+                if commande:
+                    _commande_paquet(commande, f"{c.rel(t)} → {nom}",
+                                     "lignes [PACMAN] Running de pacman.log", quand)
+                elif action == "upgraded":
+                    maj.append(quand)
+                else:
+                    fait("paquet", ACTIONS_PACMAN[action], f"{paquet} {version}",
+                         f"{c.rel(t)} → {nom}", "lignes [ALPM] de var/log/pacman.log",
+                         horodatage=quand)
+            if maj:
+                fait("paquet", "paquets mis à jour (nombre)", str(len(maj)),
+                     f"{c.rel(t)} → {nom}", "lignes [ALPM] upgraded de pacman.log",
+                     horodatage=maj[-1], note=f"du {maj[0]} au {maj[-1]} ; le détail est "
+                                              "dans le fichier, ligne à ligne")
             continue
         for l in txt.splitlines():
             if re.search(r'\b(Erased|Removed|remove|purge)\b', l):
@@ -1456,8 +1508,11 @@ ATTENDU = [
     ("SYSTEME", "_fs_", "le système de fichiers", "le périphérique lui-même",
      "Système de fichiers de {{volume}}", None),
     ("PAQUETS", "_paquets.txt", "la liste des paquets",
-     "/var/lib/rpm ou /var/lib/dpkg",
-     "Paquets installés", "l'image n'a ni base RPM ni base dpkg"),
+     "/var/lib/rpm, /var/lib/dpkg, /var/lib/pacman/local ou /lib/apk/db/installed",
+     "Paquets installés",
+     ("l'image n'a aucune base de paquets connue ; vide : sur openSUSE, la base RPM "
+      "est au format ndb que le rpm du poste d'analyse ne lit pas toujours — les "
+      "poses sont dans var/log/zypp/history", ())),
     ("PAQUETS", "_historique.tar.gz", "l'historique du gestionnaire",
      "/var/log/dpkg.log, /var/log/apt, /var/log/yum.log, /var/lib/dnf",
      "Historique des installations", None),
@@ -1479,13 +1534,15 @@ ATTENDU = [
     ("CONNEXIONS", ("wtmp", "_sessions.txt"), "les sessions",
      "/var/log/wtmp et ses rotations, ou /var/lib/wtmpdb/wtmp.db",
      "Copie des fichiers de connexion",
-     "Fedora 40+ et Debian 13+ n'ont plus wtmp, mais wtmp.db"),
+     ("Fedora 40+ et Debian 13+ n'ont plus wtmp, mais wtmp.db ; Alpine (musl) n'a pas "
+      "d'utmp du tout", ("alpine",))),
     ("CONNEXIONS", ("btmp", "_echecs.txt"), "les échecs d'authentification",
      "/var/log/btmp et ses rotations", "Copie des fichiers de connexion",
-     "btmp est souvent absent ou désactivé"),
+     ("btmp est souvent absent ou désactivé", ("alpine",))),
     ("JOURNAUX", "_journal.txt", "le journal systemd en clair",
      "/var/log/journal/<machine-id>/*.journal", "Journal systemd, en clair",
-     "l'image n'a pas de journal persistant sur disque"),
+     ("l'image n'a pas de journal persistant sur disque ; sans systemd (Alpine, "
+      "Devuan), tout est dans /var/log/messages", ("alpine", "devuan"))),
     ("JOURNAUX", "_var_log.tar.gz", "tout /var/log", "/var/log",
      "Archive de /var/log", None),
     ("RESEAU", "_reseau.tar.gz", "interfaces, DNS, pare-feu, ssh",
@@ -1512,21 +1569,28 @@ def completude(c):
     """
     for dossier, motif, quoi, origine, etape, normal in ATTENDU:
         # Plusieurs motifs = plusieurs formes acceptables de la même pièce :
-        # le binaire wtmp OU la sortie texte de « last » suffisent.
+        # le binaire wtmp OU la sortie texte de « last » suffisent. Une pièce
+        # présente mais vide n'a pas été collectée non plus.
         motifs = motif if isinstance(motif, tuple) else (motif,)
-        if any(c.chercher(m, dossier) for m in motifs):
+        presentes = [f for m in motifs for f in c.chercher(m, dossier)]
+        if any(os.path.getsize(f) for f in presentes):
             continue
+        raison, familles = normal if isinstance(normal, tuple) else (normal, ())
+        connue = bool(familles) and bool(set(familles) & c.familles)
         note = (f"à reprendre sur l'image montée : {origine}. "
                 f"Étape de collecte-linux.conf : « {etape} » — "
                 f"la rejouer seule avec --only <numéro du plan>.")
-        if normal:
-            note += f" Absence normale si {normal}."
-        if "alpine" in c.famille and motifs[0] in ("wtmp", "btmp", "_journal.txt"):
-            note += " Sur Alpine (musl, OpenRC), il n'y a ni wtmp ni journal systemd : ceci est normal."
-        fait("limite", f"pièce absente de la collecte : {quoi}",
+        if raison:
+            note += f" Absence normale si {raison}."
+        if connue:
+            note += (f" Le système est de famille {', '.join(sorted(c.familles))} : "
+                     "cette absence est attendue.")
+        fait("limite",
+             f"pièce {'vide' if presentes else 'absente'} de la collecte : {quoi}"
+             + (" — normal sur cette famille" if connue else ""),
              " ou ".join(f"{dossier}/…{m}" for m in motifs), dossier + "/",
-             "recherche du motif dans la collecte",
-             confiance="à vérifier", note=note)
+             "recherche du motif dans la collecte, et de sa taille",
+             confiance="certaine" if connue else "à vérifier", note=note)
 
 
 # ── 10 · ce qu'on vient chercher : chaînes, empreintes, adresses ─────
