@@ -1694,6 +1694,80 @@ def supprimes(c):
                                                        "base ou courriel") else None)
 
 
+RE_EXTRAIT = re.compile(r'_strings_(?P<volume>.+)_(?P<genre>urls|courriels|ip|chemins)\.txt$')
+_GENRE_CHAINE = {
+    "urls": "adresse web",
+    "courriels": "adresse de courriel",
+    "ip": "adresse IP",
+    "chemins": "chemin personnel",
+}
+
+
+def chaines(c):
+    """Les chaînes lisibles des PÉRIPHÉRIQUES, volume par volume.
+
+    Ce que cette pièce a d'unique : elle est lue sur les octets du disque, pas
+    sur les fichiers. Une adresse effacée du navigateur, un chemin de fichier
+    supprimé, une IP qui n'est plus dans aucune configuration y sont encore —
+    dans le slack, dans le swap, dans une page libérée. C'est la seule pièce
+    qui répond à « cela a-t-il jamais existé sur ce disque ? » quand tout le
+    reste a été vidé.
+
+    En contrepartie, elle ne dit NI QUAND, NI DANS QUEL FICHIER, NI PAR QUI :
+    une chaîne trouvée là n'est pas datée et n'est imputable à personne. Le
+    décalage en octets du .gz est la seule adresse qu'elle ait. Chaque fait le
+    dit, pour qu'aucune ligne du rapport ne fasse dire à cette pièce plus
+    qu'elle ne porte.
+    """
+    base = os.path.join(c.racine, "STRINGS")
+    if not os.path.isdir(base):
+        return
+    volumes = set()
+    for f in sorted(os.listdir(base)):
+        m = RE_EXTRAIT.search(f)
+        if not m:
+            continue
+        volume, genre = m.group("volume"), m.group("genre")
+        volumes.add(volume)
+        lignes = c.texte(os.path.join(base, f)).splitlines()
+        # « <compte> <chaîne> », le plus fréquent d'abord : sort -rn l'a déjà
+        # trié, on garde la tête et on dit combien de queue on laisse.
+        vus = []
+        for l in lignes:
+            ch = l.strip().split(None, 1)
+            if len(ch) == 2 and ch[0].isdigit():
+                vus.append((int(ch[0]), ch[1]))
+        if not vus:
+            continue
+        fait("chaines", f"chaînes distinctes de type « {_GENRE_CHAINE[genre]} »",
+             str(len(vus)), f"STRINGS/{f}",
+             f"strings -a -t d -n 8 sur le périphérique de {volume}, puis motif « {genre} »",
+             note="lu sur les OCTETS du disque : ni date, ni fichier d'origine, ni "
+                  "compte. Une chaîne présente ici a existé sur ce disque, c'est "
+                  "tout ce qu'elle établit")
+        for n, valeur in vus[:20]:
+            fait("chaines", _GENRE_CHAINE[genre], valeur, f"STRINGS/{f}",
+                 f"strings sur le périphérique de {volume}, motif « {genre} »",
+                 confiance="forte",
+                 note=f"{n} occurrence(s) dans les octets du volume {volume} — non "
+                      "datée et non imputable : à recouper avec une pièce qui, elle, "
+                      "porte une date")
+        if len(vus) > 20:
+            fait("limite", f"extrait « {_GENRE_CHAINE[genre]} » tronqué à 20 lignes",
+                 str(len(vus)), f"STRINGS/{f}",
+                 "les 20 plus fréquentes sont rendues", confiance="certaine",
+                 note="le fichier les porte toutes ; cherchez-y une valeur précise "
+                      "avec --indicateurs plutôt que de tout lire")
+    for volume in sorted(volumes):
+        brut = c.chercher(f"_strings_{volume}.txt.gz", "STRINGS")
+        if brut:
+            fait("chaines", "chaînes brutes du périphérique", volume,
+                 c.rel(brut[0]), "strings -a -t d -n 8 sur le périphérique",
+                 note=f"{_taille(os.path.getsize(brut[0]))} compressés ; chaque ligne "
+                      "porte son DÉCALAGE EN OCTETS sur le volume, ce qui permet de "
+                      "revenir à l'emplacement exact. Cherchez-y avec --indicateurs")
+
+
 # ── 8 · la timeline du système de fichiers ────────────────────────────
 # La timeline est la plus grosse pièce de la collecte et la plus riche : une
 # ligne par date de chaque fichier du disque. Elle ne sert à rien seule — des
@@ -1935,6 +2009,11 @@ ATTENDU = [
      "Identité et installation", None),
     ("SYSTEME", "_fs_", "le système de fichiers", "le périphérique lui-même",
      "Système de fichiers de {{volume}}", None),
+    ("STRINGS", "_strings_", "les chaînes lisibles des périphériques",
+     "le périphérique de chaque volume monté sous MONTAGE",
+     "Chaînes lisibles de {{volume}}",
+     ("la collecte a été faite avant que l'étape n'existe, ou passée faute de "
+      "place — un strings de disque pèse des dizaines de gigaoctets", ())),
     ("PAQUETS", "_paquets.txt", "la liste des paquets",
      "/var/lib/rpm, /var/lib/dpkg, /var/lib/pacman/local ou /lib/apk/db/installed",
      "Paquets installés",
@@ -2075,6 +2154,64 @@ def lire_indicateurs(chemin):
     return liste
 
 
+def _chercher_en_flux(chemin, source, alternative, motifs, bloc=1 << 23, chevauche=1 << 12):
+    """Cherche les motifs dans un .gz décompressé au fil de l'eau.
+
+    Le chevauchement n'est pas un détail : une chaîne à cheval sur deux blocs
+    serait invisible sans lui. On garde donc la queue du bloc précédent, et on
+    ignore les correspondances qui tombent entièrement dedans — sinon elles
+    seraient comptées deux fois.
+
+    Un seul fait par motif et par fichier, avec le total et le premier
+    contexte : un disque peut porter des milliers d'occurrences d'une même
+    chaîne, et mille faits identiques ne sont pas une information.
+    """
+    comptes_, contextes = {}, {}
+    reste, decale = b"", 0
+    try:
+        with gzip.open(chemin, "rb") as fh:
+            for morceau in iter(lambda: fh.read(bloc), b""):
+                tampon = reste + morceau
+                for m in alternative.finditer(tampon):
+                    if m.end() <= len(reste):
+                        continue                      # déjà vu au tour d'avant
+                    i = int(m.lastgroup[1:])
+                    comptes_[i] = comptes_.get(i, 0) + 1
+                    if i not in contextes:
+                        d, f = max(0, m.start() - 60), min(len(tampon), m.end() + 60)
+                        contextes[i] = (tampon[d:f].decode("utf-8", "replace")
+                                        .replace("\n", " "),
+                                        decale + m.start())
+                decale += len(tampon) - min(chevauche, len(tampon))
+                reste = tampon[-chevauche:]
+    except (OSError, EOFError, gzip.BadGzipFile):
+        return
+    for i, n in sorted(comptes_.items()):
+        x = motifs[i]
+        x["trouve"] = True
+        contexte, position = contextes[i]
+        fait("indicateur", f"{x['genre']} recherché présent dans les chaînes du disque",
+             x["valeur"], source,
+             f"motif « {x['valeur']} » cherché dans le flux décompressé",
+             note=f"{n} occurrence(s) ; la première vers l'octet {position} du flux, "
+                  f"autour d'elle : « {contexte} ». Lu sur les octets du disque : "
+                  "ni date, ni fichier d'origine, ni compte"
+                  + (f" — {x['etiquette']}" if x["etiquette"] else ""))
+
+
+def _empreintes_en_flux(chemin, source, empreintes, examiner):
+    """L'empreinte porte sur le .gz tel qu'il est, pas sur son contenu."""
+    hs = {g: hashlib.new(g) for g in empreintes}
+    try:
+        with open(chemin, "rb") as fh:
+            for b in iter(lambda: fh.read(1 << 20), b""):
+                for h in hs.values():
+                    h.update(b)
+    except OSError:
+        return
+    examiner(source, source, {g: h.hexdigest() for g, h in hs.items()})
+
+
 def indicateurs(c, liste, fichier=None):
     """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier.
 
@@ -2142,6 +2279,17 @@ def indicateurs(c, liste, fichier=None):
                 examiner(c.rel(chemin), c.rel(chemin), None)
                 continue
             c.lus.add(chemin)
+            # Un .gz simple — le strings d'un disque — se lit EN FLUX. Le lire
+            # comme les autres serait doublement faux : on chercherait dans des
+            # octets compressés, où rien ne peut correspondre, et on tenterait
+            # de charger des gigaoctets en mémoire. C'est pourtant la pièce où
+            # une chaîne effacée a le plus de chances de subsister.
+            if chemin.endswith(".gz") and not chemin.endswith(".tar.gz"):
+                if motifs:
+                    _chercher_en_flux(chemin, c.rel(chemin), alternative, motifs)
+                if empreintes:
+                    _empreintes_en_flux(chemin, c.rel(chemin), empreintes, examiner)
+                continue
             if motifs:
                 try:
                     with open(chemin, "rb") as fh:
@@ -2246,7 +2394,7 @@ def main():
                       ("réseau", reseau), ("navigation", navigation),
                       ("historique des paquets", historique_paquets),
                       ("persistance", persistance), ("supprimés", supprimes),
-                      ("timeline", timeline)):
+                      ("chaînes des disques", chaines), ("timeline", timeline)):
         avant = len(FAITS)
         try:
             fn(c)

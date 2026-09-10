@@ -18,7 +18,8 @@ l'ajouter ici, c'est ne pas la tester.
 
 Sort 0 si tout est trouvé, 1 sinon, en disant ce qui manque.
 """
-import calendar, io, json, os, shutil, sqlite3, subprocess, sys, tarfile, tempfile, time
+import calendar, collections, gzip, io, json, os, re, shutil, sqlite3, subprocess
+import sys, tarfile, tempfile, time
 
 ICI = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.dirname(ICI)
@@ -69,7 +70,7 @@ def utmp(entrees):
 def batir(base):
     R = os.path.join(base, P)
     for d in ("SYSTEME", "COMPTES", "PAQUETS", "RESEAU", "JOURNAUX", "CONNEXIONS",
-              "PERSISTANCE", "TIMELINE", "MACHINES", "PHOTOREC/recup_1"):
+              "PERSISTANCE", "TIMELINE", "MACHINES", "PHOTOREC/recup_1", "STRINGS"):
         os.makedirs(os.path.join(R, d), exist_ok=True)
 
     def w(rel, contenu):
@@ -315,11 +316,51 @@ def batir(base):
                         ("f0004.kdbx", 4000), ("f0005.zip", 90000), ("f0006", 1000)):
         w(f"PHOTOREC/recup_1/{nom}", b"x" * taille)
 
+    # ── STRINGS : les chaînes des périphériques, deux volumes ─────────
+    # Le piège doit porter DEUX volumes, sinon rien ne prouve que la collecte
+    # n'oublie pas le /home monté à part — c'est exactement ce qu'on veut
+    # garantir. Et le .gz doit contenir une chaîne qu'AUCUNE autre pièce ne
+    # porte : c'est le seul moyen de vérifier qu'il est vraiment décompressé
+    # et fouillé, et pas trouvé par ailleurs.
+    for volume, lignes in (
+        ("racine", ["     1024 https://www.yggtorrent.wtf/torrent/999",
+                    "     2048 jdupont1987@gmail.com",
+                    "     4096 10.0.0.9",
+                    "     8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent",
+                    "    16384 chaine-effacee-que-rien-d-autre-ne-porte",
+                    "    32768 https://www.yggtorrent.wtf/torrent/999"]),
+        ("home",   ["     512 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv",
+                    "    1024 mrobert@entreprise.fr",
+                    "    2048 192.168.0.5"]),
+    ):
+        w(f"STRINGS/{P}_strings_{volume}.txt.gz",
+          gzip.compress("\n".join(lignes).encode("utf-8") + b"\n"))
+        extraits = {"urls": [], "courriels": [], "ip": [], "chemins": []}
+        for l in lignes:
+            v = l.split(None, 1)[1]
+            if v.startswith("http"):
+                extraits["urls"].append(v)
+            elif "@" in v:
+                extraits["courriels"].append(v)
+            elif re.fullmatch(r'(\d{1,3}\.){3}\d{1,3}', v):
+                extraits["ip"].append(v)
+            elif v.startswith("/home/"):
+                extraits["chemins"].append(v)
+        for genre, vals in extraits.items():
+            compte = collections.Counter(vals)
+            w(f"STRINGS/{P}_strings_{volume}_{genre}.txt",
+              "".join(f"{n:>7} {v}\n" for v, n in compte.most_common()))
+
     # hors de la collecte : un fichier d'indicateurs posé DEDANS se trouverait
     # lui-même, et l'extracteur l'écarte — le test le vérifie en le posant à côté
     with open(os.path.join(base, "indicateurs.txt"), "w", encoding="utf-8") as fh:
         fh.write("# ce que l'on cherche, venu d'ailleurs\n"
-                 "texte: McDonalds\nfichier: *.torrent\nip: 203.0.113.42   # jamais vue ici\n")
+                 "texte: McDonalds\nfichier: *.torrent\nip: 203.0.113.42   # jamais vue ici\n"
+                 # celle-ci n'existe QUE dans le .gz : si l'extracteur ne
+                 # décompresse pas en flux, elle sort « ABSENTE » et le test
+                 # tombe. C'est le seul moyen de prouver que le strings du
+                 # disque est réellement fouillé.
+                 "texte: chaine-effacee-que-rien-d-autre-ne-porte\n")
     return R
 
 
@@ -369,6 +410,14 @@ ATTENDUS_FAITS = [
     ("timeline : téléchargement", "fichier retrouvé sur le disque"),
     ("timeline : clé USB", "fichier écrit sur un support amovible"),
     ("timeline : lecture", "fichier lu sur un support amovible"),
+    ("chaînes : compte", "chaînes distinctes de type « adresse web »"),
+    ("chaînes : url", "adresse web"),
+    ("chaînes : courriel", "adresse de courriel"),
+    ("chaînes : IP", "adresse IP"),
+    ("chaînes : chemin", "chemin personnel"),
+    ("chaînes : brut", "chaînes brutes du périphérique"),
+    ("indicateur dans le .gz",
+     "texte recherché présent dans les chaînes du disque"),
     ("indicateur trouvé", "texte recherché présent dans un fichier"),
     ("indicateur absent", "ip recherché ABSENT de la collecte"),
 ]

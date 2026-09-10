@@ -79,6 +79,25 @@ Deux fiches à lire, dans cet ordre :
   système d'origine, l'étape à rejouer, et comment distinguer « le système ne
   l'avait pas » de « la collecte l'a ratée ».
 
+### Les chaînes du disque : ce qu'elles prouvent, et ce qu'elles ne prouvent pas
+
+`STRINGS/` porte les chaînes lisibles de **chaque périphérique**, un jeu par
+volume. Elles sont lues sur les octets, pas sur les fichiers : ce qui est
+effacé, ce qui traîne dans le slack ou le swap y est encore. C'est la seule
+pièce qui répond à « cela a-t-il jamais été sur ce disque ? » quand le reste a
+été vidé.
+
+**Une chaîne trouvée là n'est ni datée, ni imputable à un compte.** Elle
+établit une existence sur le volume, rien de plus. Ne la présentez jamais comme
+une action : « l'adresse figure dans les octets du volume racine » se dit, « le
+compte a visité ce site » ne se dit pas — sauf si une autre pièce, datée, le
+porte. Quand aucune ne le fait, écrivez-le.
+
+Les quatre extraits `_urls`, `_courriels`, `_ip`, `_chemins` sont déjà triés par
+fréquence : lisez-les. Le `.txt.gz` pèse des gigaoctets — **ne l'ouvrez pas** ;
+pour y chercher une valeur précise, passez-la en `--indicateurs`, l'extracteur
+le fouille en flux et rend le décalage en octets.
+
 ### 2 · Vérifier avant d'écrire
 
 Trois contrôles, dans cet ordre. Ils changent la lecture de tout le reste.

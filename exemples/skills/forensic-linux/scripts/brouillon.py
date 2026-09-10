@@ -537,6 +537,34 @@ def main():
         S.append(table(["quoi", "combien", "où", "note", "id"],
                        [(f["fait"], f["valeur"], f["source"], T(f.get("note")), f["id"])
                         for f in par["recuperation"]]))
+    if par.get("chaines"):
+        S.append("### Ce que les octets du disque portent encore\n")
+        S.append("Les chaînes lisibles sont lues sur le **périphérique**, pas sur les "
+                 "fichiers : une adresse effacée du navigateur, un chemin supprimé, une "
+                 "IP retirée de toute configuration y subsistent — dans le slack, dans "
+                 "le swap, dans une page libérée. C'est la pièce qui répond à « cela "
+                 "a-t-il jamais été sur ce disque ? » quand le reste a été vidé.\n")
+        S.append("> **Aucune de ces lignes n'est datée, ni imputable à un compte.** Une "
+                 "chaîne trouvée là établit qu'elle a existé sur le volume, rien de "
+                 "plus. Pour en faire un fait daté, il faut la recouper avec une pièce "
+                 "qui porte une date — l'historique, la timeline, un journal.\n")
+        comptages = [f for f in par["chaines"] if f["fait"].startswith("chaînes ")]
+        valeurs = [f for f in par["chaines"] if not f["fait"].startswith("chaînes ")]
+        if comptages:
+            S.append(table(["quoi", "combien", "source", "id"],
+                           [(f["fait"], f["valeur"], f["source"], f["id"])
+                            for f in comptages]))
+        if valeurs:
+            S.append("\n**Les plus fréquentes** — le nombre d'occurrences dit si une "
+                     "chaîne traîne partout ou n'apparaît qu'une fois :\n")
+            S.append(table(["genre", "chaîne", "source", "occurrences", "id"],
+                           [(f["fait"], f["valeur"], f["source"], T(f.get("note")),
+                             f["id"]) for f in valeurs],
+                           quoi="chaînes relevées"))
+        S.append(a_rediger("ce que ces chaînes ajoutent, et SEULEMENT ça : une "
+                           "existence sur le disque, sans date. Dites pour chacune si "
+                           "une autre pièce la date — et quand aucune ne le fait, "
+                           "écrivez-le plutôt que de laisser le lecteur le supposer."))
     if par.get("indicateur"):
         S.append("### Les indicateurs cherchés\n")
         S.append("Ce que l'analyste a demandé de chercher (`--indicateurs`), trouvé ou non :\n")
