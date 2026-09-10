@@ -11,10 +11,11 @@
 # configuration : c'est l'état de Crush, il n'y exécute aucun crushrc.
 #
 # L'avantage sur le JSON n'est pas cosmétique : ceci est un shell, donc $HOME
-# et XDG_CONFIG_HOME sont développés pour de vrai. Les chemins de hook et de
-# data-directory du crush.json, eux, doivent être écrits en absolu à la main —
-# un ~ n'y est pas développé, et un hook qui ne se résout pas ne bloque rien,
-# en silence.
+# et XDG_CONFIG_HOME y sont développés pour de vrai, partout. En crush.json,
+# le ~ n'est développé QUE dans la commande d'un hook (elle passe par le shell
+# embarqué) ; data_directory et skills_paths le prennent au pied de la lettre
+# et cherchent, ou créent, un dossier nommé « ~ ». Ici, la question ne se pose
+# pas : c'est le shell qui résout, avant que Crush ne voie la valeur.
 #
 # ATTENTION : un crushrc est du code exécuté au lancement, dans un shell
 # complet. Ne « source » jamais un fichier que vous n'avez pas lu.
@@ -35,9 +36,14 @@ provider add dgx \
     --discover-models false \
     --extra-body '{"chat_template_kwargs":{"enable_thinking":true}}'
 
-# context-window : c'est la valeur SERVIE qui fait foi, pas celle de la carte
-# du modèle. Le contexte natif est de 1 M, mais vLLM sert 262144 par défaut.
-# Lisez la vraie valeur avant de la recopier ici :
+# context-window : 262144 est ce que DÉCLARE le checkpoint lui-même
+# (max_position_embeddings dans config.json, identique en BF16 et en FP8,
+# rope_scaling null). Le million de jetons annoncé par NVIDIA est réel — RULER
+# @ 1M donne 91,75 — mais il ne s'obtient pas tout seul : il faut servir avec
+#     VLLM_ALLOW_LONG_MAX_MODEL_LEN=1  et  --max-model-len 1048576
+# (SGLang : SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 --context-length
+# 1048576). Si c'est votre cas, mettez 1048576 ici aussi. Dans le doute, c'est
+# la valeur SERVIE qui fait foi, et elle se lit sur le serveur :
 #     curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
 model add "$MODELE" \
     --name "Nemotron 3 Super 120B-A12B" \

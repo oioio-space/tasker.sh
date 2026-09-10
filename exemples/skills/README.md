@@ -111,11 +111,24 @@ deux fichiers sont fournis et font la même chose :
 | `crush.json` | JSON, déprécié mais toujours accepté | seulement si votre version de Crush est ancienne |
 
 Ce n'est pas qu'une question de mode : un `crushrc` est un shell, donc `$HOME`
-et `XDG_CONFIG_HOME` y sont **réellement développés**. Dans `crush.json`, ils ne
-le sont pas, et deux champs en souffrent — le chemin du hook et
-`data_directory` — qu'il faut y écrire en absolu, à la main. C'est pour ça que
-le `crush.json` fourni contient `/home/analyste/…` : **remplacez-le par votre
-vrai dossier personnel.**
+et `XDG_CONFIG_HOME` y sont **réellement développés, partout**. En `crush.json`,
+le `~` n'est développé que dans certains champs — et il fallait lire le code de
+Crush pour savoir lesquels :
+
+| champ de `crush.json` | le `~` marche ? | pourquoi |
+|---|---|---|
+| `hooks[].command` | **oui** | la commande passe par le shell POSIX embarqué (`shell.Run`), qui développe le `~` comme n'importe quel shell |
+| `options.data_directory` | **non** | `SmartJoin` ne teste que `filepath.IsAbs` : Crush crée un dossier nommé `~` dans le dossier courant |
+| `options.skills_paths` | **non** | le chemin part tel quel dans `fastwalk.Walk`, sans expansion — même si le schéma en donne un en exemple |
+| `api_key`, `base_url`, `env` | non, mais… | `$VAR`, `${VAR:-defaut}` et `$(cmd)` y sont développés |
+
+C'est pour ça que le `crush.json` fourni écrit `/home/analyste/…` pour
+`data_directory` et `skills_paths` — **remplacez-le par votre vrai dossier
+personnel** — et garde le `~` pour le hook, où il fonctionne.
+
+La consigne « chemin absolu » de `docs/hooks/` ne parle pas du `~` : elle vise
+les chemins **relatifs** (`./mon-hook.sh`), résolus depuis le dossier de
+travail et non depuis la configuration.
 
 En revanche, `crushrc` est **du code exécuté au lancement**, dans un shell
 complet — et `crush.json` n'est pas inerte non plus : tout `$(...)` qui s'y
@@ -151,9 +164,9 @@ parce qu'il est silencieux. Alors on le vérifie, hors de Crush :
         | ~/.config/crush/garde-scelles.sh ; echo "code $?"
 
 Le script doit écrire son refus et rendre **2**. Un code 0, ou « command not
-found », veut dire que la ceinture est absente : le chemin du hook est faux
-(dans `crush.json`, il doit être **absolu** — voir §2), ou le fichier n'est pas
-exécutable. Le montage en lecture seule, lui, tient toujours.
+found », veut dire que la ceinture est absente : le fichier n'est pas là où le
+hook le nomme, ou il n'est pas exécutable. Le montage en lecture seule, lui,
+tient toujours.
 
 Les dossiers protégés se listent un par ligne dans
 `~/.config/crush/scelles.txt` ; sans ce fichier, c'est `/mnt/scelles`.
@@ -411,9 +424,9 @@ reste, et d'où ça vient :
 | réglage | valeur | pourquoi |
 |---|---|---|
 | `providers.dgx.type` | `openai-compat` | vLLM, NIM et TRT-LLM exposent tous l'API OpenAI |
-| `temperature`, `top_p` | `1.0`, `0.95` | ce que NVIDIA recommande pour ce modèle, **toutes tâches confondues** — raisonnement, appels d'outils, rédaction |
+| `temperature`, `top_p` | `1.0`, `0.95` | la carte du modèle : « Use `temperature=1.0` and `top_p=0.95` across **all tasks and serving backends** — reasoning, tool calling, and general chat alike » |
 | `extra_body.chat_template_kwargs.enable_thinking` | `true` | le raisonnement du modèle s'active par ce drapeau du gabarit de conversation ; `extra_body` n'existe que pour les fournisseurs compatibles OpenAI, et c'est le bon canal. `low_effort: true` allège le raisonnement, `reasoning_budget` le plafonne |
-| `context_window` | `262144` | le modèle accepte un million de jetons ; vLLM le sert à 256 k par défaut. C'est la valeur **servie** qui fait foi, pas celle de la carte du modèle : lisez-la sur le serveur (`curl -s http://dgx.local:8000/v1/models`, champ `max_model_len`) et recopiez-la ici |
+| `context_window` | `262144` | ce que **déclare le checkpoint** : `max_position_embeddings` vaut 262144 dans `config.json`, en BF16 comme en FP8, avec `rope_scaling` à `null`. Le million de jetons se demande explicitement — voir ci-dessous |
 | `default_max_tokens` | `32000` | un brouillon se rédige passage par passage ; 32 k suffisent et bornent une réponse qui s'emballerait |
 | `permissions.allowed_tools` | `view ls grep glob agent` | lecture seule + sous-agents ; `edit` demande à chaque fois, `bash` n'est jamais accordé |
 | `options.disabled_tools` | `fetch web_search sourcegraph download` | le poste est hors ligne : autant que le modèle ne voie pas ces outils, plutôt qu'il les essaie. `download` s'y ajoute parce qu'il écrit en plus sur le disque |
@@ -427,6 +440,50 @@ agentique sont **la dérive de l'objectif** quand le contexte s'allonge et **les
 appels d'outils malformés**. Le brouillon répond à la première (le plan est sur
 disque, le modèle remplit un passage à la fois) ; la lecture seule répond à la
 seconde (un appel malformé ne peut rien casser).
+
+### Le contexte : 256 k par défaut, 1 M sur demande
+
+Le million de jetons annoncé par NVIDIA n'est pas une figure de style — RULER
+@ 1M donne **91,75**, ce qui est très bon — mais il **ne s'obtient pas tout
+seul**. La carte du modèle est explicite :
+
+> Please note that the model supports up to a 1M context size, although the
+> default context size in the Hugging Face configuration is 256k due to higher
+> VRAM requirements.
+
+Autrement dit, ce n'est pas vLLM qui rogne un modèle à 1 M : c'est le
+checkpoint lui-même qui déclare 262144. Pour aller au-delà :
+
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 vllm serve … --max-model-len 1048576
+    # SGLang : SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 --context-length 1048576
+
+Si vous le faites, **portez la même valeur dans `context_window`**, sinon Crush
+se croira borné à 256 k. Pour ces skills, ça change quelque chose : une
+timeline mactime et un `faits.jsonl` de gros dossier tiennent plus large. Dans
+le doute, la valeur servie fait foi et se lit sur le serveur :
+
+    curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
+
+### Servir le modèle : trois options sans lesquelles les skills ne marchent pas
+
+Les deux skills fonctionnent **entièrement par appels d'outils**. Trois options
+de la carte du modèle sont donc indispensables, et deux d'entre elles ne
+s'inventent pas :
+
+| option vLLM | pourquoi |
+|---|---|
+| `--enable-auto-tool-choice` | sans elle, le modèle n'appelle aucun outil : Crush n'ouvre pas un fichier |
+| `--tool-call-parser qwen3_coder` | le format d'appel d'outils de ce modèle ; un autre parseur rend des appels malformés |
+| `--reasoning-parser nemotron_v3` | sépare la trace de raisonnement de la réponse ; sans elle, le raisonnement se retrouve dans le rapport |
+
+Et un détail qui compte quand la machine est coupée d'Internet : ces backends
+réclament un parseur de raisonnement **à télécharger séparément**. Prenez-le
+**avant** de débrancher le réseau :
+
+    curl -O https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/raw/main/super_v3_reasoning_parser.py
+
+Pour mémoire : 8× H100-80GB au minimum, et 2 GPU suffisent en BF16 sur B200 ou
+B300 (`--tensor-parallel-size 2`, sans `--enable-expert-parallel`).
 
 ### Ce qui reste à confirmer sur votre poste
 
@@ -445,8 +502,10 @@ et il vaut mieux le dire que le laisser croire :
     Crush n'embarque pas de parseur JSONC, et la configuration entière serait
     perdue.
 
-Sources, à relire si une version change : la carte du modèle sur NGC et
-`build.nvidia.com` (échantillonnage, `chat_template_kwargs`) ; le schéma
+Sources, à relire si une version change : la carte du modèle et le `config.json`
+sur Hugging Face — `nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16`
+(échantillonnage, `chat_template_kwargs`, `max_position_embeddings`, options de
+service, RULER @ 1M) ; le schéma
 `https://charm.land/crush.json` (`extra_body`, `hooks`, `disabled_tools`,
 `data_directory`, bornes de `temperature`, `top_p` et `max_tokens`) ; le README
 de Crush (formats de configuration, dossiers, dépréciation du JSON) ; et
