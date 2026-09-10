@@ -3,7 +3,7 @@ name: conformite-linux
 description: Confronte une collecte tasker.sh collecte-linux.conf aux règles internes fournies (charte informatique, politique de sécurité) et rédige un rapport de conformité nominatif, daté et sourcé — comptes et mots de passe, élévation de privilèges, secrets laissés en clair, durcissement du poste, usages (supports amovibles, services personnels en ligne, logiciels installés hors gestionnaire). À utiliser quand on demande si les règles ont été respectées sur un poste, ou quelles mauvaises pratiques s'y observent. Ne juge rien sans une règle écrite, et montre la traduction de chaque règle en contrôle vérifiable.
 user-invocable: true
 license: MIT
-compatibility: Exige python3 (bibliothèque standard seule) et une collecte produite par tasker.sh exemples/collecte-linux.conf. Les règles à appliquer sont fournies par l'utilisateur dans un fichier .regles : sans elles, le skill ne relève que des constats, il ne juge rien. Fonctionne entièrement hors ligne : aucun accès réseau, aucune dépendance à installer.
+compatibility: "Exige python3 (bibliothèque standard seule) et une collecte produite par tasker.sh exemples/collecte-linux.conf. Les règles à appliquer sont fournies par l'utilisateur dans un fichier .regles : sans elles, le skill ne relève que des constats, il ne juge rien. Fonctionne entièrement hors ligne : aucun accès réseau, aucune dépendance à installer."
 ---
 
 # Conformité d'un poste Linux aux règles internes

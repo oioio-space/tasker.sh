@@ -414,6 +414,46 @@ ATTENDUS_PRECIS = [
 ]
 
 
+def frontmatter_sain(racine):
+    """Le frontmatter d'un SKILL.md doit survivre à un vrai analyseur YAML.
+
+    Crush le passe à gopkg.in/yaml.v3 : un « : » suivi d'une espace dans un
+    scalaire NON QUOTÉ ouvre une association, et le fichier est rejeté avec
+    « mapping values are not allowed in this context ». Le skill disparaît
+    alors de l'agent, et l'interface se contente d'une pastille rouge — c'est
+    exactement comme ça qu'une description bien écrite peut tout casser.
+    Vérifier « la clé existe » avec une expression rationnelle ne voit rien de
+    tout ça : il faut regarder ce qui rend le scalaire invalide.
+    """
+    ennuis = []
+    for nom in sorted(os.listdir(racine)):
+        chemin = os.path.join(racine, nom, "SKILL.md")
+        if not os.path.isfile(chemin):
+            continue
+        texte = open(chemin, encoding="utf-8").read()
+        if not texte.startswith("---\n") or "\n---" not in texte[4:]:
+            ennuis.append((chemin, "frontmatter absent ou non refermé"))
+            continue
+        for ligne in texte[4:].split("\n---", 1)[0].splitlines():
+            if not ligne.strip() or ligne.lstrip().startswith("#"):
+                continue
+            if ":" not in ligne:
+                continue
+            cle, _, valeur = ligne.partition(":")
+            if not cle.strip() or cle != cle.strip():
+                continue
+            valeur = valeur.strip()
+            if not valeur or valeur[0] in "\"'|>[{&*!":     # quoté ou structuré
+                continue
+            if ": " in valeur or valeur.endswith(":"):
+                ennuis.append((chemin, f"« {cle} » : « : » dans un scalaire non "
+                                       f"quoté — mettez la valeur entre guillemets"))
+            elif " #" in valeur:
+                ennuis.append((chemin, f"« {cle} » : « #» ouvre un commentaire "
+                                       f"dans un scalaire non quoté"))
+    return ennuis
+
+
 def lire(chemin, cle):
     with open(chemin, encoding="utf-8") as fh:
         return {json.loads(l)[cle] for l in fh if l.strip()}
@@ -460,6 +500,15 @@ def main():
         ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus)
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {exige['source']}")
+
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    print("\n── FRONTMATTER DES SKILL.md ──")
+    ennuis = frontmatter_sain(racine)
+    for chemin, motif in ennuis:
+        print(f"  MANQUE  {os.path.basename(os.path.dirname(chemin)):<20} {motif}")
+    manques += len(ennuis)
+    if not ennuis:
+        print("  ok      les frontmatter passent un analyseur YAML")
 
     print(f"\n{base}")
     if manques:
