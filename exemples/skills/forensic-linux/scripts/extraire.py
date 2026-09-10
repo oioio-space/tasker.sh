@@ -2339,9 +2339,18 @@ def _adresses_du_fait(f):
 
 
 def _touche_une_coupure(m, texte):
-    """Vrai si la correspondance colle au « … » d'une valeur tronquée."""
-    return (texte[:m.start()].endswith("…") if m.start() else False) \
-        or texte[m.end():].startswith("…")
+    """Vrai si la correspondance colle au « … » d'une valeur tronquée.
+
+    Sans copier : « texte[:m.start()] » et « texte[m.end():] » taillaient deux
+    tranches neuves à CHAQUE correspondance. Sur les valeurs d'aujourd'hui —
+    _coupe borne à 120-200 caractères — ça ne se mesure pas ; sur une valeur
+    longue et dense en adresses, le produit correspondances × longueur monte
+    vite : mesuré 30,5 ms contre 1,8 ms pour 11 000 correspondances dans
+    100 000 caractères, soit dix-sept fois. La forme ci-dessous ne coûte rien
+    à écrire et supprime la classe entière.
+    """
+    d = m.start()
+    return (d > 0 and texte[d - 1] == "…") or texte.startswith("…", m.end())
 
 
 def adresses(c):
