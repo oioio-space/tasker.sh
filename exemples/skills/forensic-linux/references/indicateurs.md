@@ -96,15 +96,16 @@ bruit est attendu, ce qui n'est pas la même chose que de le subir.
 toute la collecte, mais deux endroits n'ont aucun autre lecteur dans le
 rapport :
 
-- `STRINGS/*.txt.gz` — décompressé en flux ; un secret effacé du système de
-  fichiers peut y être encore ;
+- `STRINGS/*.txt` — le texte brut du périphérique, lu en flux ; un secret
+  effacé du système de fichiers peut y être encore ;
 - `PHOTOREC/` — les fichiers récupérés n'ont ni nom ni date, mais ils ont un
   contenu. C'est souvent là que se trouve le brouillon de configuration ou la
   clé qu'on avait supprimée.
 
-Le fait porte le **décalage en octets** de la première occurrence et le texte
-qui l'entoure : de quoi juger sur pièce sans rouvrir un fichier de plusieurs
-gigaoctets.
+Le fait porte le **décalage en octets** de la première occurrence — compté par
+l'extracteur au fil de sa lecture, et non repris de `strings`, qui est appelé
+nu — et le texte qui l'entoure : de quoi juger sur pièce sans rouvrir un
+fichier de plusieurs gigaoctets.
 
 
 ## Dans quoi ça cherche : les archives sont ouvertes

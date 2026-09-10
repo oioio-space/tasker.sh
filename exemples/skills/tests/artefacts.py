@@ -361,9 +361,9 @@ def batir(base):
 
     # ── STRINGS : les chaînes des périphériques, deux volumes ─────────
     # DEUX volumes, sinon rien ne prouve que la collecte n'oublie pas le /home
-    # monté à part — c'est exactement la garantie à tenir. Et le .gz porte une
-    # chaîne qu'AUCUNE autre pièce ne contient : c'est le seul moyen de
-    # vérifier qu'il est vraiment décompressé et fouillé.
+    # monté à part — c'est exactement la garantie à tenir. Et le fichier brut
+    # porte une chaîne qu'AUCUNE autre pièce ne contient : c'est le seul moyen
+    # de vérifier qu'il est vraiment fouillé.
     #
     # Les extraits sont écrits LITTÉRALEMENT, au format que rend la collecte
     # (« compte décalage valeur »). Les dériver en Python reviendrait à
@@ -371,29 +371,29 @@ def batir(base):
     # lui-même quoi qu'il arrive, ce qui est le contraire d'un test.
     for volume, brut, extraits in (
         ("racine",
-         ["     1024 https://www.yggtorrent.wtf/torrent/999",
-          "     2048 jdupont1987@gmail.com",
-          "     4096 10.0.0.9",
-          "     8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent",
-          "    16384 chaine-effacee-que-rien-d-autre-ne-porte",
-          "    20480 AKIAIOSFODNN7EXAMPLE",
-          "    24576 e8:9c:25:3f:0a:b1",
-          "    32768 https://www.yggtorrent.wtf/torrent/999"],
-         {"urls": "      2 1024 https://www.yggtorrent.wtf/torrent/999\n",
-          "courriels": "      1 2048 jdupont1987@gmail.com\n",
-          "ip": "      1 4096 10.0.0.9\n",
-          "mac": "      1 24576 e8:9c:25:3f:0a:b1\n",
-          "chemins": "      1 8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent\n"}),
+         ["https://www.yggtorrent.wtf/torrent/999",
+          "jdupont1987@gmail.com",
+          "10.0.0.9",
+          "/home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent",
+          "chaine-effacee-que-rien-d-autre-ne-porte",
+          "AKIAIOSFODNN7EXAMPLE",
+          "e8:9c:25:3f:0a:b1",
+          "https://www.yggtorrent.wtf/torrent/999"],
+         {"urls": "      2 https://www.yggtorrent.wtf/torrent/999\n",
+          "courriels": "      1 jdupont1987@gmail.com\n",
+          "ip": "      1 10.0.0.9\n",
+          "mac": "      1 e8:9c:25:3f:0a:b1\n",
+          "chemins": "      1 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent\n"}),
         ("home",
-         ["     512 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv",
-          "    1024 mrobert@entreprise.fr",
-          "    2048 192.168.0.5"],
-         {"chemins": "      1 512 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv\n",
-          "courriels": "      1 1024 mrobert@entreprise.fr\n",
-          "ip": "      1 2048 192.168.0.5\n"}),
+         ["/home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv",
+          "mrobert@entreprise.fr",
+          "192.168.0.5"],
+         {"chemins": "      1 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv\n",
+          "courriels": "      1 mrobert@entreprise.fr\n",
+          "ip": "      1 192.168.0.5\n"}),
     ):
-        w(f"STRINGS/{P}_strings_{volume}.txt.gz",
-          gzip.compress("\n".join(brut).encode("utf-8") + b"\n"))
+        # strings NU, non comprimé : ni décalage en tête de ligne, ni .gz.
+        w(f"STRINGS/{P}_strings_{volume}.txt", "\n".join(brut) + "\n")
         for genre, contenu in extraits.items():
             w(f"STRINGS/{P}_strings_{volume}_{genre}.txt", contenu)
 
@@ -519,10 +519,10 @@ ATTENDUS_PRECIS = [
                                         "source": "Bookmarks"}),
 ]
 
-# Une chaîne qui n'existe QUE dans le .txt.gz. Si l'extracteur cesse de
-# décompresser en flux, elle sort « ABSENTE » et le test tombe — et comme le
-# libellé du fait est désormais le même pour tous les fichiers, c'est la
-# SOURCE qui doit être vérifiée, pas l'intitulé.
+# Une chaîne qui n'existe QUE dans les chaînes brutes du périphérique. Si
+# l'extracteur cesse de les parcourir, elle sort « ABSENTE » et le test tombe —
+# et comme le libellé du fait est désormais le même pour tous les fichiers,
+# c'est la SOURCE qui doit être vérifiée, pas l'intitulé.
 # Le regroupement des supports doit rendre le vid:pid ET le numéro de série
 # rattaché par le temps : c'est tout l'intérêt du tableau, et c'est le
 # rapprochement le plus fragile du lot.
@@ -545,7 +545,7 @@ ATTENDUS_CHAMPS = [
     ("intérêt : photorec mot de passe", {"valeur": "mot de passe en clair",
                                          "source": "PHOTOREC/recup_1/f0007.txt"}),
     ("intérêt : chaînes du disque", {"valeur": "jeton AWS",
-                                     "source": "_strings_racine.txt.gz"}),
+                                     "source": "_strings_racine.txt"}),
     ("intérêt : docx décompressé", {"valeur": "mot de passe en clair",
                                     "source": "PHOTOREC/recup_1/f0008.docx"}),
     # Le document doit être CARACTÉRISÉ, pas seulement fouillé : son sujet lu
@@ -566,9 +566,9 @@ ATTENDUS_CHAMPS = [
     ("chaîne imbriquée dans un motif", {"fait": "texte recherché présent dans un fichier",
                                         "valeur": "Bienvenue2025!",
                                         "source": "PHOTOREC/recup_1/f0007.txt"}),
-    ("indicateur dans le .gz", {"fait": "texte recherché présent dans un fichier",
-                                "valeur": "chaine-effacee-que-rien-d-autre-ne-porte",
-                                "source": ".txt.gz"}),
+    ("indicateur dans les chaînes", {"fait": "texte recherché présent dans un fichier",
+                                     "valeur": "chaine-effacee-que-rien-d-autre-ne-porte",
+                                     "source": "STRINGS/"}),
     ("indicateur dans un .gz du tar", {"fait": "texte recherché présent dans un fichier",
                                        "valeur": "journal-tourne-et-comprime-dans-le-tar",
                                        "source": "_var_log.tar.gz → var/log/auth.log.2.gz"}),
@@ -604,22 +604,36 @@ ATTENDUS_CHAMPS = [
     # local dont plus aucune configuration ne parle.
     ("adresse : MAC des octets bruts", {"valeur": "e8:9c:25:3f:0a:b1",
                                         "genre": "MAC", "confiance": "à vérifier"}),
-    # Les URL sont regroupées par HÔTE, sinon ce n'est plus une synthèse.
+    # Les URL sont regroupées par HÔTE, sinon ce n'est plus une synthèse. Il
+    # n'existe qu'UN fait « adresse » par (genre, valeur) : deux attentes qui
+    # trouvent chacune une provenance différente pour le même hôte prouvent
+    # donc qu'elles ont été recollées sur une seule ligne. Les nommer une par
+    # une, plutôt que d'exiger la chaîne jointe entière, évite qu'un simple
+    # changement d'ordre fasse tomber un test qui ne porte pas là-dessus.
     ("adresse : URL groupée par hôte", {"valeur": "www.yggtorrent.wtf",
-                                        "genre": "URL",
-                                        "ou": "chaînes du disque / navigation"}),
+                                        "genre": "URL", "ou": "navigation"}),
+    ("adresse : le même hôte, du disque", {"valeur": "www.yggtorrent.wtf",
+                                           "genre": "URL",
+                                           "ou": "chaînes du disque"}),
 
     # 203.0.113.42 est l'indicateur que le piège dit « jamais vue ici ». Son
     # fait d'ABSENCE porte la valeur cherchée : lue comme une adresse, elle
     # rangeait parmi les adresses VUES sur le poste celle que l'analyste avait
     # justement cherchée SANS la trouver. Le pire contresens possible ici.
     ("adresse : une absence n'est pas une adresse",
-     {"__absent_si__": ("categorie", "adresse", "valeur", "203.0.113.42")}),
+     {"__jamais__": {"categorie": "adresse", "valeur": "203.0.113.42"}}),
     # Le contexte d'un motif est coupé à soixante octets sans égard pour ce
     # qu'il tranche : « …/999 https://www.yggtor » y rend un hôte qui n'a
     # jamais existé. Inventer une adresse est plus grave que d'en manquer une.
     ("adresse : pas d'hôte tronqué",
-     {"__absent_si__": ("categorie", "adresse", "valeur", "www.yggtor")}),
+     {"__jamais__": {"categorie": "adresse", "valeur": "www.yggtor"}}),
+
+    # La polarité doit être DITE, des deux côtés. Un fait « indicateur » qui
+    # n'a pas de « trouve » est un fait dont seule la phrase française dit
+    # s'il rapporte une présence ou une absence — et c'est ainsi que la valeur
+    # d'une absence se glisse là où on lit des trouvailles.
+    ("indicateur : la polarité est dite",
+     {"__jamais__": {"categorie": "indicateur", "trouve": None}}),
 ]
 
 
@@ -733,21 +747,25 @@ def main():
         # DISPARU — un test qui ne sait dire que « présent » laisse revenir en
         # silence ce qu'on vient de retirer.
         interdit = exige.get("__absent__")
-        # « __absent_si__ » : (champ, valeur, champ, valeur) — AUCUN fait ne
-        # doit porter les deux à la fois. C'est ainsi qu'on teste qu'une chose
-        # vraie ailleurs ne s'est pas glissée là où elle serait un contresens.
-        jamais = exige.get("__absent_si__")
+        # « __jamais__ » : un dict {champ: valeur} qu'AUCUN fait ne doit porter
+        # en entier. C'est ainsi qu'on teste qu'une chose vraie ailleurs ne
+        # s'est pas glissée là où elle serait un contresens. La comparaison est
+        # EXACTE, à rebours du reste : « www.yggtor » est un morceau du
+        # légitime « www.yggtorrent.wtf », et une recherche par sous-chaîne
+        # sonnerait l'alarme sur le fait même qu'elle doit laisser passer.
+        jamais = exige.get("__jamais__")
         if jamais:
-            k1, v1, k2, v2 = jamais
-            ok = not any(d.get(k1) == v1 and d.get(k2) == v2 for d in lus_f)
-            interdit = f"{v2} en {v1}"
+            ok = not any(all(d.get(k) == v for k, v in jamais.items())
+                         for d in lus_f)
+            etiquette = " + ".join(f"{k}={v}" for k, v in jamais.items())
         elif interdit:
             ok = not any(interdit in d for d in lus_f)
+            etiquette = interdit
         else:
             ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
+            etiquette = exige.get("valeur") or exige.get("source")
         manques += not ok
-        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} "
-              f"{exige.get('valeur') or exige.get('source') or interdit}")
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {etiquette}")
 
     print(f"\n── PIÈCES QUI SURVIVENT AU VIDAGE DE L'HISTORIQUE ──")
     with open(constats, encoding="utf-8") as fh:

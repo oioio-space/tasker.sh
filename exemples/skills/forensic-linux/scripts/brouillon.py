@@ -193,8 +193,13 @@ LEXIQUE = {
 
 
 def hote(url):
-    m = re.match(r'^[a-z]+://([^/:]+)', url or "")
-    return m.group(1).lower() if m else (url or "").lower().lstrip(".")
+    """L'hôte d'une URL. MÊME règle que la synthèse des adresses de
+    l'extracteur (RE_URL_HOTE) : schémas web seulement, casse ignorée, point
+    final retiré. Les deux tableaux du rapport sont têtés par un nom d'hôte —
+    s'ils ne s'accordent pas, un hôte figure dans l'un et manque dans l'autre,
+    dans un document dont tout l'intérêt est que chaque ligne se recoupe."""
+    m = re.match(r'(?:https?|ftp)://([^/:]+)', url or "", re.I)
+    return (m.group(1) if m else (url or "").lstrip(".")).rstrip(".").lower()
 
 
 def ou(f):
