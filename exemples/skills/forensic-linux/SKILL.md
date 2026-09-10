@@ -3,7 +3,7 @@ name: forensic-linux
 description: Analyse une collecte produite par tasker.sh exemples/collecte-linux.conf et rédige un rapport forensique daté et sourcé — identité et installation de la machine, chronologie de vie attribuée aux comptes, réseau (IP, MAC, DNS, domaine), navigation et téléchargements, supports amovibles, comptes locaux et de domaine, contrôleurs de domaine, éléments suspects. À utiliser dès qu'un dossier de collecte Linux doit être exploité, ou quand on demande « que s'est-il passé sur ce poste ». Chaque fait rapporté cite son fichier source et la commande qui l'a obtenu.
 user-invocable: true
 license: MIT
-compatibility: "Exige python3 (bibliothèque standard seule, dont sqlite3) et une collecte produite par tasker.sh exemples/collecte-linux.conf. Fonctionne entièrement hors ligne : aucun accès réseau, aucune dépendance à installer. Les outils d'écriture ne sont pas nécessaires sur les scellés, qui se montent en lecture seule (mount -o bind,ro)."
+compatibility: "Exige python3 (bibliothèque standard seule, dont sqlite3) et une collecte produite par tasker.sh exemples/collecte-linux.conf. Installez aussi ripgrep sur le poste d'analyse : sans lui, l'outil grep de l'agent se rabat sur un parcours qui ignore son propre délai de garde et ne rend jamais la main sur une grosse collecte. Fonctionne entièrement hors ligne."
 ---
 
 # Analyse d'une collecte Linux
@@ -118,6 +118,12 @@ chaque ligne cite les identifiants dont elle sort.
 
 **Si l'extraction plante, relancez la même commande** : elle reprend où elle
 s'était arrêtée.
+
+**Avant de lancer un `grep` sur la collecte**, assurez-vous que `ripgrep` est
+installé (`command -v rg`). Sans lui, l'outil se rabat sur un parcours qui
+**ignore son propre délai de garde** : sur une timeline de plusieurs
+gigaoctets, il ne rend jamais la main. Restreignez toujours la recherche à un
+sous-dossier plutôt qu'à la racine de la collecte.
 
 ### 2 · Vérifier avant d'écrire
 

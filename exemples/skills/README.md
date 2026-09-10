@@ -95,6 +95,28 @@ sous-dossier `skills/`), la seconde celui d'**état**. Pour compléter :
     echo "skills : ${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
     ls -d ~/.config/crush ~/.local/share/crush ~/.claude/skills 2>/dev/null
 
+### Une dépendance à ne pas oublier : ripgrep
+
+Installez `ripgrep` sur le poste d'analyse **avant** de couper le réseau :
+
+    command -v rg || sudo apt install ripgrep     # ou dnf/pacman/zypper
+
+Ce n'est pas un confort. L'outil `grep` de Crush appelle `rg` quand il le
+trouve, et se rabat sinon sur un parcours en Go — `searchFilesWithRegex`, dans
+`internal/agent/tools/grep.go`. Or ce repli est appelé **sans le contexte** :
+
+    matches, err = searchFilesWithRegex(pattern, rootPath, include)
+
+Le délai de garde de cinq secondes que Crush pose juste au-dessus ne peut donc
+pas l'interrompre. Sur une collecte forensique — une timeline de plusieurs
+gigaoctets, un `faits.jsonl` de centaines de mégaoctets —, le parcours lit
+chaque fichier texte ligne à ligne, et **l'interface reste sur « Waiting for
+tool response… » sans jamais rendre la main**. Aucune permission n'est
+demandée, et il n'y en a pas à donner : `grep` n'en réclame aucune.
+
+Si ça vous arrive : `esc` annule. Puis vérifiez `command -v rg`, et restreignez
+la recherche à un sous-dossier plutôt qu'à la racine de la collecte.
+
 ### Poser les skills
 
 Pour Crush, une fois pour toutes :
