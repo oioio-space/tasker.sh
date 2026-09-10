@@ -18,7 +18,7 @@ l'ajouter ici, c'est ne pas la tester.
 
 Sort 0 si tout est trouvé, 1 sinon, en disant ce qui manque.
 """
-import calendar, gzip, io, json, os, shutil, sqlite3, subprocess
+import calendar, gzip, io, json, os, shutil, sqlite3, subprocess, zipfile
 import sys, tarfile, tempfile, time
 
 ICI = os.path.dirname(os.path.abspath(__file__))
@@ -328,6 +328,15 @@ def batir(base):
       "# brouillon de configuration retrouve dans l'espace libre\n"
       "smtp_host = smtp.entreprise.fr\n"
       "password = Bienvenue2025!\n")
+    # Un .docx récupéré : un zip de XML. Sans décompression, les motifs n'y
+    # voient RIEN alors que le texte est là — et c'est le cas le plus courant
+    # de tout PHOTOREC, celui d'un document de bureautique.
+    tampon = io.BytesIO()
+    with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("word/document.xml",
+                   "<w:t>Compte rendu</w:t>"
+                   "<w:t>acces admin : password = SecretDansUnDocx!</w:t>")
+    w("PHOTOREC/recup_1/f0008.docx", tampon.getvalue())
 
     # ── STRINGS : les chaînes des périphériques, deux volumes ─────────
     # DEUX volumes, sinon rien ne prouve que la collecte n'oublie pas le /home
@@ -503,6 +512,8 @@ ATTENDUS_INTERETS = [
                                          "source": "PHOTOREC/recup_1/f0007.txt"}),
     ("intérêt : chaînes du disque", {"valeur": "jeton AWS",
                                      "source": "_strings_racine.txt.gz"}),
+    ("intérêt : docx décompressé", {"valeur": "mot de passe en clair",
+                                    "source": "PHOTOREC/recup_1/f0008.docx"}),
 ]
 
 ATTENDUS_INDICATEURS = [
@@ -591,6 +602,28 @@ def main():
             ok = attendu in vus
             manques += not ok
             print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {attendu}")
+    # Un plantage à la fin d'un parcours de plusieurs heures ne doit pas coûter
+    # les heures. On coupe donc le journal en plein milieu d'une ligne — ce que
+    # fait un plantage réel — et on exige que la reprise rende EXACTEMENT le
+    # même fichier de faits qu'un passage d'un seul tenant. Sans cette
+    # égalité, la reprise ne serait pas une reprise : ce serait une autre
+    # analyse, avec d'autres identifiants.
+    print("\n── REPRISE APRÈS PLANTAGE ──")
+    journal = os.path.splitext(faits)[0] + "-reprise.jsonl"
+    complet = open(faits, encoding="utf-8").read()
+    lignes = open(journal, encoding="utf-8").read().splitlines(keepends=True)
+    with open(journal, "w", encoding="utf-8") as fh:
+        fh.writelines(lignes[:max(1, len(lignes) // 2)])
+        fh.write('{"chemin": "coupé par le plant')      # ligne tronquée
+    repris = os.path.join(base, "faits-repris.jsonl")
+    subprocess.run([sys.executable, os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py"),
+                    R, "-o", repris, "--indicateurs", os.path.join(base, "indicateurs.txt")],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pareil = open(repris, encoding="utf-8").read() == complet
+    manques += not pareil
+    print(f"  {'ok ' if pareil else 'MANQUE'}  {'journal coupé, faits rejoués':28s} "
+          f"identiques à un passage d'un seul tenant")
+
     print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")
     with open(faits, encoding="utf-8") as fh:
         lus_f = [json.loads(l) for l in fh if l.strip()]

@@ -105,10 +105,9 @@ tout s'y remonte.
   jamais « le poste n'a pas servi »** : écrivez « la collecte ne porte aucune
   trace entre le X et le Y », et confrontez-le aux limites.
 - **Les supports amovibles**, un par ligne, avec `idVendor:idProduct` et le
-  numéro de série. Le numéro est rattaché au branchement **par le temps** — il
-  suit sa ligne de journal de moins d'une minute —, d'où une confiance
-  « forte ». Sans numéro de série lu, deux supports du même modèle ne se
-  distinguent pas : le fait le dit, reprenez-le.
+  numéro de série — rattaché au branchement **par le temps**, d'où une
+  confiance « forte ». Sans numéro de série lu, deux supports du même modèle
+  ne se distinguent pas : le fait le dit, reprenez-le.
 
 ### Ce que l'outil remarque de lui-même
 
@@ -121,6 +120,10 @@ Catégorie `interet` ; détail dans `references/indicateurs.md`.
 octets n'est ni daté ni imputable, et vient aussi bien d'un paquet
 d'installation ou d'un fichier de test que du compte. **Ouvrez la pièce citée
 avant d'en écrire un mot**, rayez le reste en disant pourquoi.
+
+Les archives sont ouvertes pour cette recherche — un `.docx` est un zip de XML,
+et sans le décompresser les motifs n'y verraient rien. **Si l'extraction
+plante, relancez la même commande** : elle reprend où elle s'était arrêtée.
 
 ### 2 · Vérifier avant d'écrire
 

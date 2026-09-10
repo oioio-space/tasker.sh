@@ -2359,22 +2359,211 @@ def lire_indicateurs(chemin):
     return liste
 
 
-def _blocs(chemin, bloc=1 << 20):
-    """Rend (brut, clair) : les octets du fichier, et leur version lisible.
+# Ce que photorec rend d'un traitement de texte est un .docx : un zip de XML.
+# Les motifs n'y verraient rien sans le décompresser, alors que le texte est
+# bien là — et c'est souvent le contenu le plus parlant de tout PHOTOREC.
+#
+# La borne n'est pas une précaution de style : une archive peut se décompresser
+# en téraoctets (« zip bomb »), et une collecte forensique est justement
+# l'endroit où l'on trouve des fichiers hostiles. Au-delà, on s'arrête et on le
+# DIT — un fait « limite », jamais un silence.
+PLAFOND_ARCHIVE = 256 << 20
+_ZIP = (".zip", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub", ".jar", ".apk")
+RE_FLUX_PDF = re.compile(rb'stream\r?\n(.*?)endstream', re.S)
+
+
+def _membres_zip(chemin, etat):
+    import zipfile
+    rendu = 0
+    try:
+        with zipfile.ZipFile(chemin) as z:
+            for info in z.infolist():
+                if info.is_dir():
+                    continue
+                if rendu + info.file_size > PLAFOND_ARCHIVE:
+                    etat["tronque"] = "plafond d'archive atteint"
+                    return
+                try:
+                    with z.open(info) as fh:
+                        yield fh.read()
+                except (OSError, zipfile.BadZipFile, RuntimeError):
+                    continue           # membre chiffré ou abîmé : les autres restent
+                rendu += info.file_size
+    except (OSError, zipfile.BadZipFile, EOFError, ValueError):
+        etat["illisible"] = "archive illisible"
+
+
+def _flux_pdf(chemin, etat):
+    """Les flux compressés d'un PDF, quand ils le sont en zlib.
+
+    Un PDF n'est pas une archive : c'est un format à objets, dont le texte vit
+    dans des flux souvent comprimés en FlateDecode. On ne cherche pas à le
+    rendre lisible — extraire un texte de PDF demande une bibliothèque —, on
+    veut seulement que les octets DÉCOMPRESSÉS passent sous les motifs. Un
+    mot de passe écrit dans un PDF y devient visible ; sa mise en page, non.
+    """
+    try:
+        with open(chemin, "rb") as fh:
+            brut = fh.read(PLAFOND_ARCHIVE)
+    except OSError:
+        return
+    rendu = 0
+    for m in RE_FLUX_PDF.finditer(brut):
+        try:
+            clair = zlib.decompress(m.group(1))
+        except zlib.error:
+            continue                   # flux non comprimé, ou autre filtre
+        rendu += len(clair)
+        if rendu > PLAFOND_ARCHIVE:
+            etat["tronque"] = "plafond d'archive atteint"
+            return
+        yield clair
+
+
+def _decomprime(chemin, etat):
+    """Le contenu lisible d'un fichier comprimé, morceau par morceau, ou None.
+
+    None veut dire « ce fichier est déjà son propre contenu » — et c'est ce qui
+    permet à _blocs de n'avoir qu'une forme de sortie pour tout le monde.
+    """
+    bas = chemin.lower()
+    if bas.endswith(_ZIP):
+        return _membres_zip(chemin, etat)
+    if bas.endswith(".pdf"):
+        return _flux_pdf(chemin, etat)
+    for suffixe, ouvrir in ((".bz2", bz2.open), (".xz", lzma.open), (".lzma", lzma.open)):
+        if bas.endswith(suffixe):
+            def flux(ouvrir=ouvrir):
+                try:
+                    with ouvrir(chemin, "rb") as fh:
+                        rendu = 0
+                        for m in iter(lambda: fh.read(1 << 20), b""):
+                            rendu += len(m)
+                            if rendu > PLAFOND_ARCHIVE:
+                                etat["tronque"] = "plafond d'archive atteint"
+                                return
+                            yield m
+                except (OSError, EOFError, ValueError):
+                    etat["illisible"] = "archive illisible"
+            return flux()
+    return None
+
+
+def _blocs(chemin, etat=None, bloc=1 << 20):
+    """Rend (brut, clair) : les octets du fichier, et son contenu lisible.
 
     Le strings d'un disque pèse des gigaoctets : il ne peut être ni chargé en
-    mémoire, ni lu deux fois. zlib décompresse au fil des blocs bruts, ce qui
-    donne les deux en UNE lecture — l'empreinte porte sur le fichier tel qu'il
-    est sur le disque, les motifs sur ce qu'il contient. Pour un fichier non
-    compressé, les deux sont le même bloc et rien n'est copié.
+    mémoire, ni lu deux fois. Tout passe donc en flux. L'empreinte se calcule
+    sur « brut », les motifs courent sur « clair » — pour un fichier ordinaire
+    les deux sont le même bloc, et rien n'est copié.
+
+    Un .gz se décompresse au fil des blocs bruts, ce qui donne les deux en UNE
+    lecture. Une archive (zip, docx, pdf, bz2, xz) se lit deux fois : ses
+    octets pour l'empreinte, puis son contenu. C'est le prix pour voir dans un
+    document rendu par photorec, et il ne se paie que sur ces fichiers-là.
     """
+    etat = {} if etat is None else etat
     dec = zlib.decompressobj(16 + zlib.MAX_WBITS) if chemin.endswith(".gz") else None
+    contenu = None if dec else _decomprime(chemin, etat)
     with open(chemin, "rb") as fh:
         for brut in iter(lambda: fh.read(bloc), b""):
-            yield brut, (dec.decompress(brut) if dec else brut)
+            yield brut, (dec.decompress(brut) if dec else
+                         (b"" if contenu is not None else brut))
+    if contenu is not None:
+        for morceau in contenu:
+            yield b"", morceau
 
 
-def indicateurs(c, liste, fichier=None):
+class Reprise:
+    """Un journal de progression, pour ne pas tout refaire après un plantage.
+
+    Le parcours des indicateurs est la partie longue : il lit chaque octet de
+    la collecte, décompresse des gigaoctets de chaînes, ouvre chaque archive.
+    Sur un gros dossier c'est des heures — et un plantage à la fin les perdait
+    toutes.
+
+    Le journal note, fichier par fichier, ce qu'il a produit. À la reprise, un
+    fichier dont la TAILLE et la DATE n'ont pas bougé n'est pas relu : ses
+    faits sont rejoués tels quels. Les scellés étant montés en lecture seule,
+    ces deux critères suffisent — et s'ils bougent, c'est que la collecte a
+    changé, auquel cas il FAUT relire.
+
+    Le journal porte aussi l'empreinte de la liste d'indicateurs : la changer
+    invalide tout, puisque les faits d'avant répondaient à d'autres questions.
+
+    Écrit et vidé après CHAQUE fichier : un plantage ne coûte que le fichier en
+    cours. C'est ce qui distingue un journal de reprise d'un cache.
+    """
+
+    def __init__(self, chemin, signature):
+        self.chemin, self.signature, self.connus = chemin, signature, {}
+        self.fh = None
+
+    def charger(self):
+        """Ce qui est réutilisable du journal précédent, s'il en reste."""
+        try:
+            with open(self.chemin, encoding="utf-8") as fh:
+                entetes = fh.readline()
+                if json.loads(entetes).get("signature") != self.signature:
+                    return 0          # d'autres indicateurs : rien n'est réutilisable
+                for ligne in fh:
+                    try:
+                        e = json.loads(ligne)
+                    except json.JSONDecodeError:
+                        break         # dernière ligne coupée par le plantage
+                    self.connus[e["chemin"]] = e
+        except (OSError, json.JSONDecodeError, KeyError):
+            self.connus = {}
+        return len(self.connus)
+
+    def ouvrir(self):
+        self.fh = open(self.chemin, "w", encoding="utf-8")
+        self.fh.write(json.dumps({"signature": self.signature},
+                                 ensure_ascii=False) + "\n")
+        self.fh.flush()
+        return self
+
+    def reutilisable(self, rel, chemin):
+        e = self.connus.get(rel)
+        if not e:
+            return None
+        try:
+            st = os.stat(chemin)
+        except OSError:
+            return None
+        return e if (e.get("taille") == st.st_size
+                     and e.get("mtime") == int(st.st_mtime)) else None
+
+    def noter(self, rel, chemin, faits, trouves):
+        if not self.fh:
+            return
+        try:
+            st = os.stat(chemin)
+        except OSError:
+            return
+        self.fh.write(json.dumps(
+            {"chemin": rel, "taille": st.st_size, "mtime": int(st.st_mtime),
+             "faits": [{k: v for k, v in f.items() if k != "id"} for f in faits],
+             "trouves": sorted(trouves)}, ensure_ascii=False) + "\n")
+        self.fh.flush()          # après CHAQUE fichier, sinon ce n'est pas une reprise
+
+    def fermer(self):
+        if self.fh:
+            self.fh.close()
+            self.fh = None
+
+
+def _rejouer(f):
+    """Repose un fait du journal, avec un identifiant neuf.
+
+    Les identifiants sont séquentiels : rejoués dans le même ordre, ils
+    retombent sur les mêmes. C'est ce qui permet à un rapport repris de citer
+    les mêmes numéros qu'un rapport d'un seul tenant.
+    """
+    FAITS.append({"id": f"F{len(FAITS) + 1:04d}", **f})
+
+
+def indicateurs(c, liste, fichier=None, reprise=None):
     """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier.
 
     Une seule alternative pour tous les motifs : un membre de 200 Mo n'est
@@ -2464,12 +2653,28 @@ def indicateurs(c, liste, fichier=None):
 
     # le fichier d'indicateurs posé DANS la collecte se trouverait lui-même :
     # chaque chaîne y figure, par construction
+    par_valeur = {x["valeur"]: x for x in liste}
     soi = os.path.abspath(fichier) if fichier else None
-    for d, _, fichiers in os.walk(c.racine):
+    # os.walk n'a pas d'ordre garanti : sans tri, la reprise rejouerait les
+    # faits dans un autre ordre que la première fois, et les identifiants
+    # changeraient. Le tri est donc ici une exigence, pas un confort.
+    for d, sous, fichiers in sorted(os.walk(c.racine)):
+        sous.sort()
         for f in sorted(fichiers):
             chemin = os.path.join(d, f)
             if os.path.abspath(chemin) == soi:
                 continue
+            rel = c.rel(chemin)
+            deja = reprise.reutilisable(rel, chemin) if reprise else None
+            if deja is not None:
+                for x in deja.get("trouves", ()):
+                    if x in par_valeur:
+                        par_valeur[x]["trouve"] = True
+                for fa in deja["faits"]:
+                    _rejouer(fa)
+                continue
+            depart, trouves_avant = len(FAITS), {x["valeur"] for x in liste
+                                                 if x.get("trouve")}
             if chemin.endswith(".tar.gz"):
                 for nom, blob in c.membres_tar(chemin, None if lire else lambda n: False):
                     examiner(f"{c.rel(chemin)} → {nom}", nom,
@@ -2477,9 +2682,17 @@ def indicateurs(c, liste, fichier=None):
                 if not lire:
                     for nom in c.mtimes.get(chemin, {}):
                         examiner(f"{c.rel(chemin)} → {nom}", nom)
+                if reprise:
+                    reprise.noter(rel, chemin, FAITS[depart:],
+                                  {x["valeur"] for x in liste if x.get("trouve")}
+                                  - trouves_avant)
                 continue
             if not lire:
                 examiner(c.rel(chemin), c.rel(chemin))
+                if reprise:
+                    reprise.noter(rel, chemin, FAITS[depart:],
+                                  {x["valeur"] for x in liste if x.get("trouve")}
+                                  - trouves_avant)
                 continue
             c.lus.add(chemin)
             # Une seule voie : _blocs décide seul s'il faut décompresser, et
@@ -2487,10 +2700,25 @@ def indicateurs(c, liste, fichier=None):
             # donc ni chargé d'un coup, ni cherché dans ses octets compressés,
             # où rien ne pourrait correspondre ; et un .txt de plusieurs
             # centaines de mégaoctets ne l'est pas davantage.
+            etat = {}
             try:
-                examiner(c.rel(chemin), c.rel(chemin), _blocs(chemin))
+                examiner(c.rel(chemin), c.rel(chemin), _blocs(chemin, etat))
             except (OSError, zlib.error):
                 pass
+            # Une archive tronquée ou illisible se DIT : sans ça, un document
+            # qu'on n'a pas su ouvrir ressemblerait à un document sans rien
+            # dedans, ce qui n'est pas la même chose du tout.
+            for cle, quoi in (("tronque", "archive lue en partie"),
+                              ("illisible", "archive non lisible")):
+                if cle in etat:
+                    fait("limite", quoi, c.rel(chemin), c.rel(chemin),
+                         "décompression pour y chercher les motifs",
+                         note=etat[cle] + f" ; plafond {_taille(PLAFOND_ARCHIVE)}. "
+                              "Le contenu non lu n'a été soumis à aucun motif")
+            if reprise:
+                reprise.noter(rel, chemin, FAITS[depart:],
+                              {x["valeur"] for x in liste if x.get("trouve")}
+                              - trouves_avant)
     for x in liste:
         if x.get("absent") is False:
             continue          # l'absence d'un motif de l'outil n'est pas un fait
@@ -2571,6 +2799,9 @@ def main():
     ap.add_argument("--indicateurs", metavar="FICHIER",
                     help="chaînes, empreintes, adresses à chercher dans toute la "
                          "collecte, une par ligne : voir references/indicateurs.md")
+    ap.add_argument("--sans-reprise", action="store_true",
+                    help="ignorer le journal de reprise et reparcourir toute la "
+                         "collecte, même ce qui a déjà été lu")
     args = ap.parse_args()
 
     c = Collecte(args.collecte, visites=args.visites)
@@ -2592,8 +2823,28 @@ def main():
     # cherchée à chaque fois, et celle de l'analyste quand il en donne une.
     avant = len(FAITS)
     demandes = lire_indicateurs(args.indicateurs) if args.indicateurs else []
-    indicateurs(c, interets() + demandes, args.indicateurs)
-    print(f"  {'indicateurs et intérêts':22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
+    tous = interets() + demandes
+    # La signature couvre la collecte ET les questions posées : reprendre un
+    # journal établi pour d'autres indicateurs rendrait des réponses à des
+    # questions qu'on ne pose plus.
+    signature = hashlib.sha256(
+        json.dumps([os.path.abspath(args.collecte)]
+                   + sorted(f"{x['genre']}:{x['valeur']}" for x in tous)).encode()
+    ).hexdigest()
+    journal = os.path.splitext(args.sortie)[0] + "-reprise.jsonl"
+    rep = Reprise(journal, signature)
+    if args.sans_reprise:
+        with contextlib.suppress(OSError):
+            os.unlink(journal)
+    elif rep.charger():
+        print(f"  reprise : {len(rep.connus)} fichiers déjà parcourus, relus depuis "
+              f"{os.path.basename(journal)}", file=sys.stderr)
+    try:
+        indicateurs(c, tous, args.indicateurs, rep.ouvrir())
+    finally:
+        rep.fermer()
+    print(f"  {'indicateurs et intérêts':22s} {len(FAITS) - avant:5d} faits",
+          file=sys.stderr)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:
         for f in FAITS:

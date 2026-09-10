@@ -105,3 +105,56 @@ rapport :
 Le fait porte le **décalage en octets** de la première occurrence et le texte
 qui l'entoure : de quoi juger sur pièce sans rouvrir un fichier de plusieurs
 gigaoctets.
+
+
+## Dans quoi ça cherche : les archives sont ouvertes
+
+Un fichier comprimé n'est pas lu comme un bloc opaque. Sont décompressés, le
+temps de la recherche seulement :
+
+| forme | ce que c'est |
+|---|---|
+| `.gz` | en flux, sans jamais le charger — c'est le cas des chaînes de disque |
+| `.zip`, `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.epub`, `.jar`, `.apk` | un zip : chaque membre passe sous les motifs |
+| `.pdf` | les flux `FlateDecode` sont décomprimés. Le but n'est pas de rendre le PDF lisible — cela demanderait une bibliothèque — mais que ses octets décompressés passent sous les motifs. Un mot de passe écrit dans un PDF y devient visible ; sa mise en page, non |
+| `.bz2`, `.xz`, `.lzma` | en flux |
+
+C'est ce qui compte le plus pour `PHOTOREC/` : ce que photorec rend d'un
+traitement de texte est un `.docx`, et sans décompression les motifs n'y
+verraient rien alors que le texte est bien là.
+
+**L'empreinte porte sur le fichier tel qu'il est sur le disque**, jamais sur
+son contenu décompressé : un `sha256:` d'indicateur se compare bien au fichier
+qu'on lui a donné.
+
+**Le plafond est de 256 Mo décompressés par fichier.** Ce n'est pas une
+précaution de style : une archive peut se décompresser en téraoctets (*zip
+bomb*), et une collecte forensique est justement l'endroit où l'on trouve des
+fichiers hostiles. Au-delà, la lecture s'arrête et un fait `limite` le dit —
+« archive lue en partie » — parce qu'un document qu'on n'a pas su ouvrir
+entièrement ne doit pas ressembler à un document sans rien dedans.
+
+
+## Reprendre après un plantage
+
+Le parcours des indicateurs est la partie longue de l'extraction : il lit
+chaque octet de la collecte, décompresse des gigaoctets de chaînes, ouvre
+chaque archive. Sur un gros dossier, c'est des heures.
+
+Un journal `<sortie>-reprise.jsonl` note, **fichier par fichier**, ce qui a été
+parcouru et ce que cela a produit. Il est vidé sur le disque après chaque
+fichier : un plantage ne coûte que le fichier en cours.
+
+Pour reprendre, relancez **la même commande**. Un fichier dont la taille et la
+date n'ont pas bougé n'est pas relu : ses faits sont rejoués tels quels. Les
+scellés étant montés en lecture seule, ces deux critères suffisent — et s'ils
+bougent, c'est que la collecte a changé, auquel cas il faut relire.
+
+Le résultat est **identique à un passage d'un seul tenant, identifiants
+compris** : le parcours est trié, donc les faits rejoués retombent sur les
+mêmes numéros. C'est vérifié par le test, qui coupe le journal en plein milieu
+d'une ligne — ce que fait un plantage réel — et compare les deux sorties.
+
+Le journal porte l'empreinte de la collecte et de la liste d'indicateurs :
+changer la liste l'invalide, puisque les faits d'avant répondaient à d'autres
+questions. `--sans-reprise` force un parcours complet.

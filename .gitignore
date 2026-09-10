@@ -8,3 +8,6 @@ __pycache__/
 # Sorties des tests des skills (tests/artefacts.py, tests/matrice.py).
 exemples/skills/artefacts/
 exemples/skills/matrice/
+
+# Journal de reprise de extraire.py : il se refait tout seul.
+*-reprise.jsonl
