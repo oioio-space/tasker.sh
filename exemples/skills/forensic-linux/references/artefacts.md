@@ -405,3 +405,46 @@ mérite d'être lue.
 | **sortie de photorec** | `PHOTOREC/` | des contenus effacés, **par type** (document, image, archive, secret possible) | **ni le nom, ni la date, ni le chemin** d'origine. Le type vient de l'extension que photorec devine. Une empreinte ou une chaîne connue s'y cherche avec `--indicateurs` |
 | **`/etc/fstab`** | `SYSTEME/fstab` | les volumes que la machine **déclarait** — y compris un partage réseau ou un volume chiffré absent de la collecte | qu'ils aient été montés |
 | **disques de machines virtuelles** (`.vmdk`, `.qcow2`…) | `MACHINES/` | qu'une VM vit sur ce poste : **elle emporte son propre système**, et ce qu'on y a fait n'est dans aucune de ces pièces | son contenu, qui demande une collecte à part |
+
+
+## STRINGS/ — les chaînes lisibles des périphériques
+
+Un jeu de fichiers par volume monté sous le point de montage de l'analyse, la
+racine comme un `/home` posé sur un autre disque. La liste est celle qui sert à
+photorec : aucun volume ne peut être oublié, aucun n'est nommé à la main.
+
+    PREFIX_strings_<volume>.txt.gz        les chaînes brutes, avec leur décalage
+    PREFIX_strings_<volume>_urls.txt      les adresses web, comptées
+    PREFIX_strings_<volume>_courriels.txt les adresses de courriel
+    PREFIX_strings_<volume>_ip.txt        les adresses IP
+    PREFIX_strings_<volume>_chemins.txt   les chemins sous /home, /root, /media…
+
+Les quatre extraits sont au format `compte décalage valeur` : le nombre
+d'occurrences, le décalage en octets de la **première** d'entre elles, puis la
+chaîne. Le décalage permet de citer un emplacement précis, et de le retrouver
+dans le `.gz` sans le parcourir en entier.
+
+**Pourquoi cette pièce existe.** `strings` est lancé sur le PÉRIPHÉRIQUE, pas
+sur les fichiers. Il lit donc les octets du volume tels qu'ils sont : ce qui a
+été effacé mais dont les blocs n'ont pas été réécrits, le *slack* de fin de
+bloc, le swap, les pages libérées d'une base de navigateur. C'est la seule
+pièce de la collecte qui répond à « cela a-t-il jamais existé sur ce disque ? »
+quand l'historique a été vidé et les fichiers supprimés.
+
+**Ce qu'elle ne dit pas, et il faut le répéter dans le rapport :** ni quand, ni
+dans quel fichier, ni par quel compte. Une chaîne n'y est pas datée et n'est
+imputable à personne. Elle devient un fait daté seulement si une autre pièce —
+un historique, la timeline, un journal — porte la même valeur avec une date.
+Quand aucune ne le fait, c'est cela qu'il faut écrire.
+
+**Comment y chercher.** Jamais en ouvrant le `.gz` : il pèse des gigaoctets.
+`extraire.py --indicateurs` le décompresse en flux, avec un chevauchement entre
+les blocs pour ne pas manquer une chaîne à cheval, et rend le décalage de la
+première occurrence.
+
+**Les limites du procédé.** `strings -n 8` ignore les suites de moins de huit
+caractères imprimables : un mot de passe court, un identifiant bref n'y sont
+pas. Le texte encodé en UTF-16 (rare sous Linux, courant dans un document
+Office) ne sort pas non plus sans `strings -el`. Et un volume chiffré ne rend
+que du bruit : si le `.gz` est anormalement petit ou illisible, c'est le
+premier soupçon à vérifier.

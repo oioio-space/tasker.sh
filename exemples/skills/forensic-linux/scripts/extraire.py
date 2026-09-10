@@ -1927,6 +1927,147 @@ _GENRES = {
 }
 
 
+# ── 10 · les synthèses ────────────────────────────────────────────────
+# Ces deux-là ne lisent aucune pièce : elles relisent les FAITS déjà établis.
+# C'est voulu. Un tableau de synthèse qui irait rechercher ses propres données
+# pourrait dire autre chose que le corps du rapport ; celui-ci ne le peut pas,
+# et chaque ligne cite les identifiants des faits dont elle sort. Le lecteur
+# peut donc remonter de la synthèse à la pièce, ce qui est tout l'intérêt.
+
+def _horo(f):
+    """L'horodatage d'un fait, en datetime comparable, ou None.
+
+    Les faits portent trois formes : epoch converti en UTC (suffixe Z), heure
+    du poste avec décalage, et heure locale sans fuseau quand la pièce n'en
+    donne pas. On compare des instants : les deux premières sont ramenées à
+    UTC, la troisième est prise telle quelle, ce qui suffit pour situer un jour
+    et mesurer un écart de plusieurs semaines.
+    """
+    h = f.get("horodatage")
+    if not h:
+        return None
+    try:
+        d = datetime.fromisoformat(h.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d.astimezone(timezone.utc).replace(tzinfo=None) if d.tzinfo else d
+
+
+# Un trou plus court que ça n'est pas un fait : un poste ne sert pas tous les
+# jours, un week-end en fait déjà deux. Quatorze jours, c'est plus qu'un congé
+# ordinaire, et c'est la durée à partir de laquelle l'absence mérite d'être
+# posée comme une question.
+TROU_JOURS = 14
+
+
+def periodes(c):
+    """Quand le poste a laissé des traces, et quand il n'en a laissé aucune.
+
+    L'absence de trace n'est PAS l'absence d'usage, et c'est le seul point qui
+    compte ici : wtmp est tourné, les journaux sont purgés, un compte peut
+    travailler sans rien écrire que la collecte ait pris. Chaque période sans
+    trace est donc posée comme une question — « rien entre le X et le Y » —,
+    jamais comme un constat d'inutilisation. Le fait le dit en toutes lettres,
+    pour qu'aucune reprise dans le rapport ne puisse le durcir.
+    """
+    # Départager les ex æquo sur l'identifiant : deux faits au même instant
+    # sont fréquents (une ligne de journal en produit plusieurs), et sans ce
+    # second critère la borne citée changerait d'une exécution à l'autre.
+    dates = sorted(((h, f) for f in FAITS for h in (_horo(f),) if h),
+                   key=lambda x: (x[0], x[1]["id"]))
+    if len(dates) < 2:
+        return
+    debut, fin = dates[0], dates[-1]
+    fait("periode", "première trace datée de la collecte",
+         debut[0].date().isoformat(), debut[1]["source"],
+         f"le plus ancien horodatage des {len(dates)} faits datés",
+         horodatage=debut[1].get("horodatage"), depuis=debut[1]["id"],
+         note=f"fait {debut[1]['id']} : {debut[1]['fait']}")
+    fait("periode", "dernière trace datée de la collecte",
+         fin[0].date().isoformat(), fin[1]["source"],
+         f"le plus récent horodatage des {len(dates)} faits datés",
+         horodatage=fin[1].get("horodatage"), depuis=fin[1]["id"],
+         note=f"fait {fin[1]['id']} : {fin[1]['fait']} — au-delà, la collecte ne "
+              "dit rien, ce qui ne veut pas dire que le poste s'est arrêté")
+    for (h1, f1), (h2, f2) in zip(dates, dates[1:]):
+        ecart = (h2 - h1).days
+        if ecart < TROU_JOURS:
+            continue
+        # La source est la collecte ENTIÈRE, pas une pièce : un trou n'existe
+        # que parce qu'AUCUNE pièce ne porte de date sur la période. Nommer ici
+        # les deux pièces qui le bornent laisserait croire que le trou vient
+        # d'elles ; elles sont dans la note, avec les identifiants.
+        fait("periode", "aucune trace pendant une longue période",
+             f"du {h1.date().isoformat()} au {h2.date().isoformat()}", c.prefix,
+             "écart entre deux faits datés consécutifs, toutes pièces confondues",
+             horodatage=f1.get("horodatage"), jours=ecart, confiance="à vérifier",
+             depuis=f1["id"], jusqu=f2["id"],
+             note=f"borné par {f1['id']} ({f1['fait']}, {f1['source']}) et "
+                  f"{f2['id']} ({f2['fait']}, {f2['source']}). "
+                  "CE N'EST PAS UNE PREUVE DE NON-USAGE : wtmp est tourné, les "
+                  "journaux sont purgés, et un usage qui n'écrit rien ne laisse "
+                  "rien. À confronter aux limites de collecte du rapport")
+
+
+RE_VIDPID = re.compile(r'idVendor=(?P<vid>[0-9a-fA-F]{4}).*?idProduct=(?P<pid>[0-9a-fA-F]{4})')
+
+
+def supports(c):
+    """Un support amovible par ligne, au lieu d'événements épars.
+
+    Le journal écrit le branchement, le numéro de série et le montage sur des
+    lignes séparées, à quelques secondes d'écart. Les recoller donne ce qu'un
+    lecteur cherche vraiment : quel support, reconnu à quoi, vu quand pour la
+    première et la dernière fois, monté où et par qui.
+
+    Le rapprochement se fait sur le TEMPS, parce que c'est ce que le journal
+    donne — le numéro de série suit son branchement de moins d'une minute. Un
+    numéro rattaché de cette façon est donc « forte », pas « certaine », et le
+    fait porte les identifiants des deux lignes pour qu'on puisse vérifier.
+    """
+    branchements = [f for f in FAITS if f["fait"] == "support amovible USB branché"]
+    series = [f for f in FAITS if f["fait"] == "numéro de série du support USB"]
+    montages = [f for f in FAITS if f["fait"] == "système de fichiers amovible monté"]
+    if not branchements:
+        return
+    appareils = {}
+    for f in branchements:
+        m = RE_VIDPID.search(f["valeur"] or "")
+        cle = (m.group("vid").lower(), m.group("pid").lower()) if m else ("?", "?")
+        a = appareils.setdefault(cle, {"vues": [], "series": {}, "montages": {}})
+        a["vues"].append(f)
+        h = _horo(f)
+        # même seconde ou presque : le journal écrit les deux lignes d'affilée
+        for g in series:
+            hg = _horo(g)
+            if h and hg and abs((hg - h).total_seconds()) <= 60:
+                a["series"].setdefault(g["valeur"], g["id"])
+        for g in montages:
+            hg = _horo(g)
+            if h and hg and 0 <= (hg - h).total_seconds() <= 300:
+                a["montages"].setdefault(g["valeur"], (g["id"], g.get("acteur")))
+    for (vid, pid), a in sorted(appareils.items()):
+        vues = sorted(a["vues"], key=lambda f: _horo(f) or datetime.min)
+        ids = ", ".join(f["id"] for f in vues[:8])
+        comptes = sorted({c_ for _, c_ in a["montages"].values() if c_})
+        fait("appareil", "support amovible reconnu",
+             " / ".join(a["series"]) or f"{vid}:{pid} (sans numéro de série lu)",
+             vues[0]["source"], "branchements du journal regroupés par idVendor:idProduct",
+             horodatage=vues[0].get("horodatage"),
+             confiance="forte" if a["series"] else "à vérifier",
+             vid=vid, pid=pid, branchements=len(vues),
+             premiere=vues[0].get("horodatage"), derniere=vues[-1].get("horodatage"),
+             montages=" / ".join(a["montages"]) or None,
+             acteur=comptes[0] if len(comptes) == 1 else None,
+             note=f"idVendor={vid} idProduct={pid} ; {len(vues)} branchement(s) "
+                  f"({ids})"
+                  + (f" ; monté par {', '.join(comptes)}" if comptes else
+                     " ; aucun montage relevé — branché sans être monté, ou montage "
+                     "hors des journaux collectés")
+                  + ("" if a["series"] else " ; AUCUN numéro de série dans le journal : "
+                     "deux supports du même modèle ne se distinguent pas"))
+
+
 # ── mise en ordre ─────────────────────────────────────────────────────
 def decomprimer(nom, blob):
     """Le contenu d'un journal tourné, quel que soit son compresseur.
@@ -2373,7 +2514,8 @@ def main():
                       ("réseau", reseau), ("navigation", navigation),
                       ("historique des paquets", historique_paquets),
                       ("persistance", persistance), ("supprimés", supprimes),
-                      ("chaînes des disques", chaines), ("timeline", timeline)):
+                      ("chaînes des disques", chaines), ("timeline", timeline),
+                      ("périodes", periodes), ("supports amovibles", supports)):
         avant = len(FAITS)
         try:
             fn(c)

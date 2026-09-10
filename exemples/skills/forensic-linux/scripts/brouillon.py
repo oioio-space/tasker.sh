@@ -323,12 +323,14 @@ def main():
         vus.add(f["valeur"])
         lignes.append((f["valeur"], f["fait"], len(s),
                        quand(s[0]["fait"]) if s else "—", quand(s[-1]["fait"]) if s else "—",
-                       f["id"]))
+                       f["source"], f["id"]))
     for nom in sorted(k for k in par_compte if k and k not in vus):
         s = par_compte[nom]
         lignes.append((nom, "a ouvert des sessions sans figurer dans passwd", len(s),
-                       quand(s[0]["fait"]), quand(s[-1]["fait"]), s[0]["fait"]["id"]))
-    S.append(table(["compte", "nature", "sessions", "première", "dernière", "id"], lignes))
+                       quand(s[0]["fait"]), quand(s[-1]["fait"]),
+                       s[0]["fait"]["source"], s[0]["fait"]["id"]))
+    S.append(table(["compte", "nature", "sessions", "première", "dernière",
+                    "source", "id"], lignes))
     propres = [f for f in par.get("paquet", []) + par.get("compte", []) + par.get("persistance", [])
                if f.get("acteur") and f["fait"] not in ("compte local ouvrant une session",
                                                         "compte de service avec un shell",
@@ -360,7 +362,31 @@ def main():
                        "passerelle), et si elle a connu d'autres réseaux."))
 
     # ── 5 ──
-    S.append("## 5 · Ce qui s'est passé, session par session\n")
+    if par.get("periode"):
+        S.append("## 5 · Quand le poste a laissé des traces\n")
+        bornes = [f for f in par["periode"] if not f.get("jours")]
+        trous = [f for f in par["periode"] if f.get("jours")]
+        if bornes:
+            S.append(table(["borne", "date", "source", "id"],
+                           [(f["fait"], f["valeur"], f["source"], f["id"])
+                            for f in bornes]))
+        if trous:
+            S.append("\n**Les périodes sans aucune trace**, toutes pièces confondues :\n")
+            S.append(table(["durée", "période", "bornée par", "id"],
+                           [(f"{f['jours']} jours", f["valeur"],
+                             f"{f.get('depuis')} → {f.get('jusqu')}", f["id"])
+                            for f in trous]))
+        S.append("> **Un trou n'est pas une preuve de non-usage.** `wtmp` est tourné, "
+                 "les journaux sont purgés, et un usage qui n'écrit rien ne laisse "
+                 "rien. Ces lignes disent que la collecte ne porte aucune trace sur "
+                 "la période — pas que le poste est resté éteint. Confrontez-les aux "
+                 "limites du §10 avant d'en tirer quoi que ce soit.\n")
+        S.append(a_rediger("une phrase par trou : ce qui pourrait l'expliquer, et ce "
+                           "qu'il faudrait pour trancher — la date de rotation de "
+                           "wtmp, la rétention du journal, un congé connu. Si vous "
+                           "n'avez rien, écrivez que vous n'avez rien."))
+
+    S.append("## 6 · Ce qui s'est passé, session par session\n")
     S.append("Une session, c'est un compte ouvert sur un terminal entre deux instants. "
              "Ce qui arrive dans cette fenêtre lui est **rapproché** — pas prouvé : quand "
              "deux sessions se chevauchent, la ligne le dit, et l'attribution reste à "
@@ -407,7 +433,7 @@ def main():
                        "simultanée) » ne s'attribue à personne sans une autre trace."))
 
     # ── 6 ──
-    S.append("## 6 · La navigation et les téléchargements\n")
+    S.append("## 7 · La navigation et les téléchargements\n")
     # les saisies de formulaire sont dans « usage » : un compte dont l'historique
     # a été vidé mais dont les frappes restent doit garder sa section
     usage_nav = [f for f in par.get("usage", [])
@@ -488,7 +514,19 @@ def main():
                        "citez les deux ou dites que le second manque."))
 
     # ── 7 ──
-    S.append("## 7 · Les supports amovibles\n")
+    S.append("## 8 · Les supports amovibles\n")
+    if par.get("appareil"):
+        S.append("Un support par ligne, recollé depuis les lignes éparses du journal. "
+                 "Le numéro de série est rattaché par le **temps** — il suit son "
+                 "branchement de moins d'une minute — d'où une confiance « forte » et "
+                 "non « certaine » : la note donne les identifiants pour vérifier.\n")
+        S.append(table(["support", "vid:pid", "branchements", "première", "dernière",
+                        "monté sur", "compte", "id"],
+                       [(f["valeur"], f"{f.get('vid')}:{f.get('pid')}",
+                         f.get("branchements"), quand({"horodatage": f.get("premiere")}),
+                         quand({"horodatage": f.get("derniere")}), f.get("montages"),
+                         f.get("acteur"), f["id"]) for f in par["appareil"]]))
+        S.append("\n**Le détail, ligne à ligne :**\n")
     S.append(table(["date", "fait", "valeur", "compte", "id"],
                    [(quand(f), f["fait"], f["valeur"], f.get("acteur"), f["id"])
                     for f in H.tri(par.get("support", []))]))
@@ -517,7 +555,7 @@ def main():
                        "Sans ligne de timeline : « ce qui y a été copié n'est pas établi »."))
 
     # ── 8 ──
-    S.append("## 8 · Ce qui attire l'œil\n")
+    S.append("## 9 · Ce qui attire l'œil\n")
     S.append(table(["date", "constat", "valeur", "compte", "confiance", "id", "à vérifier"],
                    [(quand(f), f["fait"], f["valeur"], f.get("acteur"), f.get("confiance"),
                      f["id"], "…") for f in H.tri(par.get("suspect", []))]))
@@ -589,7 +627,7 @@ def main():
                        "ce qui est banal en le disant."))
 
     # ── 9 ──
-    S.append("## 9 · Les limites\n")
+    S.append("## 10 · Les limites\n")
     S.append(table(["limite", "valeur", "note", "id"],
                    [(f["fait"], f["valeur"], T(f.get("note")), f["id"]) for f in par.get("limite", [])]))
     reprises = []
@@ -614,7 +652,7 @@ def main():
                        "le réseau auraient dit."))
 
     # ── 10 ──
-    S.append("## 10 · Annexe : méthode\n")
+    S.append("## 11 · Annexe : méthode\n")
     outil = man.get("outil") or {}
     S.append(tableau(["", ""], [
         ("commande", f"`{man.get('commande')}`" if man.get("commande") else None),
@@ -641,7 +679,7 @@ def main():
             restants.pop(t)
         if not restants:
             break
-    S.append("## 11 · Lexique\n")
+    S.append("## 12 · Lexique\n")
     S.append("Les termes techniques employés ci-dessus, pour un lecteur qui n'est pas du métier.\n")
     S.append(tableau(["terme", "ce que c'est"], [(t, d) for t, d in LEXIQUE.items() if t not in restants]))
 

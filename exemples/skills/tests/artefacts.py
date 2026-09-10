@@ -410,6 +410,9 @@ ATTENDUS_FAITS = [
     ("timeline : téléchargement", "fichier retrouvé sur le disque"),
     ("timeline : clé USB", "fichier écrit sur un support amovible"),
     ("timeline : lecture", "fichier lu sur un support amovible"),
+    ("périodes : borne", "première trace datée de la collecte"),
+    ("périodes : trou", "aucune trace pendant une longue période"),
+    ("supports : regroupés", "support amovible reconnu"),
     ("chaînes : compte", "chaînes distinctes de type « adresse web »"),
     ("chaînes : url", "adresse web"),
     ("chaînes : courriel", "adresse de courriel"),
@@ -464,6 +467,17 @@ ATTENDUS_PRECIS = [
 # décompresser en flux, elle sort « ABSENTE » et le test tombe — et comme le
 # libellé du fait est désormais le même pour tous les fichiers, c'est la
 # SOURCE qui doit être vérifiée, pas l'intitulé.
+# Le regroupement des supports doit rendre le vid:pid ET le numéro de série
+# rattaché par le temps : c'est tout l'intérêt du tableau, et c'est le
+# rapprochement le plus fragile du lot.
+ATTENDUS_CHAMPS = [
+    ("support : vid:pid + série", {"fait": "support amovible reconnu",
+                                   "valeur": "4C530001230405112233",
+                                   "vid": "0781", "pid": "5583",
+                                   "montages": "/run/media/jdupont/SANDISK32",
+                                   "acteur": "jdupont"}),
+]
+
 ATTENDUS_INDICATEURS = [
     ("indicateur dans le .gz", {"fait": "texte recherché présent dans un fichier",
                                 "valeur": "chaine-effacee-que-rien-d-autre-ne-porte",
@@ -550,10 +564,10 @@ def main():
             ok = attendu in vus
             manques += not ok
             print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {attendu}")
-    print("\n── LE .GZ DES CHAÎNES EST-IL VRAIMENT FOUILLÉ ? ──")
+    print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")
     with open(faits, encoding="utf-8") as fh:
         lus_f = [json.loads(l) for l in fh if l.strip()]
-    for artefact, exige in ATTENDUS_INDICATEURS:
+    for artefact, exige in ATTENDUS_CHAMPS + ATTENDUS_INDICATEURS:
         ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {exige['valeur']}")

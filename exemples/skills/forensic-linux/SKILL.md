@@ -79,24 +79,36 @@ Deux fiches à lire, dans cet ordre :
   système d'origine, l'étape à rejouer, et comment distinguer « le système ne
   l'avait pas » de « la collecte l'a ratée ».
 
-### Les chaînes du disque : ce qu'elles prouvent, et ce qu'elles ne prouvent pas
+### Les chaînes du disque
 
-`STRINGS/` porte les chaînes lisibles de **chaque périphérique**, un jeu par
-volume. Elles sont lues sur les octets, pas sur les fichiers : ce qui est
-effacé, ce qui traîne dans le slack ou le swap y est encore. C'est la seule
-pièce qui répond à « cela a-t-il jamais été sur ce disque ? » quand le reste a
-été vidé.
+`STRINGS/` porte les chaînes lisibles de chaque périphérique. **Une chaîne
+trouvée là n'est ni datée, ni imputable à un compte** : elle établit une
+existence sur le volume, rien de plus. « L'adresse figure dans les octets du
+volume racine » se dit ; « le compte a visité ce site » ne se dit pas, sauf si
+une pièce datée le porte. Lisez les quatre extraits `_urls`, `_courriels`,
+`_ip`, `_chemins` ; **n'ouvrez pas le `.txt.gz`**, qui pèse des gigaoctets —
+pour y chercher une valeur, passez-la en `--indicateurs`. Le détail est dans
+`references/artefacts.md`.
 
-**Une chaîne trouvée là n'est ni datée, ni imputable à un compte.** Elle
-établit une existence sur le volume, rien de plus. Ne la présentez jamais comme
-une action : « l'adresse figure dans les octets du volume racine » se dit, « le
-compte a visité ce site » ne se dit pas — sauf si une autre pièce, datée, le
-porte. Quand aucune ne le fait, écrivez-le.
+### Trois synthèses, et ce qu'elles valent
 
-Les quatre extraits `_urls`, `_courriels`, `_ip`, `_chemins` sont déjà triés par
-fréquence : lisez-les. Le `.txt.gz` pèse des gigaoctets — **ne l'ouvrez pas** ;
-pour y chercher une valeur précise, passez-la en `--indicateurs`, l'extracteur
-le fouille en flux et rend le décalage en octets.
+L'extracteur produit trois tableaux qui ne lisent aucune pièce : ils relisent
+les faits déjà établis. Chaque ligne cite les identifiants dont elle sort, donc
+tout s'y remonte.
+
+- **Les comptes**, avec première et dernière session, et la pièce qui le dit.
+  Un compte à zéro session n'est **pas** un compte inutilisé : c'est un compte
+  dont `wtmp` ne porte pas de session. Dites-le ainsi.
+- **Les périodes sans trace.** Un trou de plusieurs semaines est posé comme une
+  question, jamais comme un constat d'inutilisation — `wtmp` est tourné, les
+  journaux sont purgés, un usage qui n'écrit rien ne laisse rien. **N'écrivez
+  jamais « le poste n'a pas servi »** : écrivez « la collecte ne porte aucune
+  trace entre le X et le Y », et confrontez-le aux limites.
+- **Les supports amovibles**, un par ligne, avec `idVendor:idProduct` et le
+  numéro de série. Le numéro est rattaché au branchement **par le temps** — il
+  suit sa ligne de journal de moins d'une minute —, d'où une confiance
+  « forte ». Sans numéro de série lu, deux supports du même modèle ne se
+  distinguent pas : le fait le dit, reprenez-le.
 
 ### 2 · Vérifier avant d'écrire
 
