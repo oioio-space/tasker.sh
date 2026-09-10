@@ -527,8 +527,17 @@ s'inventent pas :
 | option vLLM | pourquoi |
 |---|---|
 | `--enable-auto-tool-choice` | sans elle, le modèle n'appelle aucun outil : Crush n'ouvre pas un fichier |
-| `--tool-call-parser qwen3_coder` | le format d'appel d'outils de ce modèle ; un autre parseur rend des appels malformés |
-| `--reasoning-parser nemotron_v3` | sépare la trace de raisonnement de la réponse ; sans elle, le raisonnement se retrouve dans le rapport |
+| `--tool-call-parser qwen3_coder` | le format d'appel d'outils de ce modèle ; un autre parseur laisse `tool_calls` à `null` malgré une invite correcte |
+| `--reasoning-parser nemotron_v3` | sépare la trace de raisonnement de la réponse. Mal réglé, le raisonnement **déborde dans les arguments des outils** — et dans le rapport |
+| `--kv-cache-dtype fp8` | recommandé par NVIDIA **et** par le billet vLLM ; c'est ce qui rend le contexte long tenable en mémoire |
+| `--gpu-memory-utilization 0.85` à `0.9` | 0.9 dans la carte du modèle, 0.85 dans le billet vLLM ; commencez à 0.85 |
+
+Les quatre modes de panne connus de ce montage, pour les reconnaître :
+`tool_calls` à `null` (mauvais parseur d'outils) · du texte de raisonnement dans
+les arguments (parseur de raisonnement mal réglé) · `finish_reason: "length"`
+avant même que l'appel d'outil sorte (`max_tokens` trop petit — le raisonnement
+est émis **avant** l'appel et se compte dessus) · l'agent qui refait deux fois
+la même action (les résultats d'outil ne lui reviennent pas).
 
 Et un détail qui compte quand la machine est coupée d'Internet : ces backends
 réclament un parseur de raisonnement **à télécharger séparément**. Prenez-le
@@ -538,6 +547,44 @@ réclament un parseur de raisonnement **à télécharger séparément**. Prenez-
 
 Pour mémoire : 8× H100-80GB au minimum, et 2 GPU suffisent en BF16 sur B200 ou
 B300 (`--tensor-parallel-size 2`, sans `--enable-expert-parallel`).
+
+### Régler les tailles : la contrainte, pas des nombres magiques
+
+Trois valeurs se tiennent, et les régler indépendamment fait échouer la session
+en plein rapport. Avec **S** = ce que sert `--max-model-len` et **M** = la marge
+de résumé de Crush (20 000 si `context_window` dépasse 200 000, sinon 20 % de
+`context_window`) :
+
+    (context_window − M) + plus gros résultat d'outil + max_tokens  ≤  S
+
+Trois choses à en retenir :
+
+1. **`context_window` reste sous S, jamais égal.** C'est la leçon de ceux qui
+   ont branché un agent sur vLLM avant nous : annoncer le maximum théorique
+   fait empaqueter des invites que le serveur refuse ensuite, en pleine
+   session. Un `context_window` égal à S dépasse même avec un `max_tokens`
+   modeste, parce que le contrôle de Crush n'a lieu qu'**entre deux étapes**.
+2. **Le plus gros résultat d'outil, ici, c'est relire le rapport en cours** :
+   20 à 30 k jetons pour 1 500 lignes. C'est lui qui impose la marge.
+3. **`max_tokens` a un plancher autant qu'un plafond.** Le raisonnement est
+   émis **avant** l'appel d'outil et se compte sur `max_tokens` : trop petit,
+   la réponse est tronquée (`finish_reason: "length"`) avant même que l'outil
+   soit appelé. 16 000 est large pour une section de rapport et laisse de la
+   marge sous le plafond.
+
+Ce qui donne, pour `max_tokens` 16 000 et un pic d'outil de 25 000 :
+
+| servi (`--max-model-len`) | `context_window` | pire cas | verdict |
+|---|---|---|---|
+| 131 072 | 131 072 | 145 858 | dépasse de 14 786 |
+| 131 072 | 110 000 | 129 000 | tient |
+| 262 144 | 262 144 | 283 144 | dépasse de 21 000 |
+| 262 144 | **240 000** | 261 000 | tient — c'est le réglage livré |
+
+Servir plus large ne fait pas que repousser l'erreur : à 131 072, Crush résume
+dès 105 000 jetons, et **chaque résumé perd du détail** — ce qu'on ne veut pas
+dans un rapport où chaque fait cite sa source. À 240 000, le premier résumé
+n'arrive qu'à 220 000.
 
 ### Ce qui reste à confirmer sur votre poste
 

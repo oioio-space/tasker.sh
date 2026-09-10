@@ -38,10 +38,18 @@ provider add dgx \
     --discover-models false \
     --extra-body '{"chat_template_kwargs":{"enable_thinking":true}}'
 
-# context-window : mettez CE QUE VOTRE SERVEUR SERT, pas ce qu'annonce la carte
-# du modèle. Trop grand, Crush se croit au large, ne résume jamais à temps, et
-# c'est le serveur qui refuse en plein rapport. La valeur servie se lit par
+# context-window : SOUS ce que sert --max-model-len, jamais égal. C'est la règle
+# de ceux qui ont branché un agent sur vLLM avant nous : annoncer le maximum
+# théorique fait empaqueter des invites que le serveur refuse ensuite en pleine
+# session. La valeur servie se lit par
 #     curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
+#
+# La contrainte complète, S = ce que sert vLLM, M = la marge de résumé :
+#     (context-window − M) + plus gros résultat d'outil + max-tokens  ≤  S
+# Le plus gros résultat d'outil ici, c'est relire le rapport en cours : 20 à
+# 30 k jetons. D'où, pour max-tokens 16000 et un pic de 25000 :
+#     servi 131072  →  context-window 110000
+#     servi 262144  →  context-window 240000   (ce qui est réglé ci-dessous)
 #
 # 262144 est ce que DÉCLARE le checkpoint lui-même
 # (max_position_embeddings dans config.json, identique en BF16 et en FP8,
@@ -54,7 +62,7 @@ provider add dgx \
 #     curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
 model add "$MODELE" \
     --name "Nemotron 3 Super 120B-A12B" \
-    --context-window 262144 \
+    --context-window 240000 \
     --default-max-tokens 16000 \
     --can-reason true \
     --supports-images false \
