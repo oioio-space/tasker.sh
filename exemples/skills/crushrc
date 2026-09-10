@@ -64,14 +64,25 @@ model add "$MODELE" \
 # Crush veut un modèle « large » et un « small » (résumés, sous-agents). Le
 # DGX n'en sert qu'un : small est le même, avec un budget de réponse plus
 # court. Si un second modèle est servi, c'est ici qu'il se déclare.
-# max-tokens 16000, et pas davantage : Crush déclenche son résumé automatique
-# quand il ne reste qu'une MARGE — 20000 jetons si context-window dépasse
-# 200000, et 20 % de context-window sinon (internal/agent/agent.go). Le résumé
-# arrive entre deux étapes : si max-tokens dépasse cette marge, la requête qui
-# le précède dépasse déjà, et le serveur répond « Bad Request » en plein
-# rapport. 16000 tient pour 131072 comme pour 262144 et au-delà.
+# max-tokens 16000 : Crush déclenche son résumé automatique quand il ne reste
+# qu'une MARGE — 20000 jetons si context-window dépasse 200000, et 20 % de
+# context-window sinon (internal/agent/agent.go). Le résumé arrive entre deux
+# étapes : si max-tokens dépasse cette marge, la requête qui le précède dépasse
+# déjà, et le serveur répond « Bad Request » en plein rapport.
+#
+# Rester sous la marge est nécessaire, pas suffisant : le contrôle n'a lieu
+# qu'ENTRE deux étapes, et une seule étape peut ajouter un résultat d'outil
+# énorme — relire un rapport de 1500 lignes, c'est 20 à 30 k jetons d'un coup.
+# 16000 laisse de quoi l'absorber. C'est un choix de sécurité, pas un optimum :
+# montez-le si les réponses sont tronquées, baissez-le au moindre Bad Request.
 model large "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 16000
 model small "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 8000
+
+# NB : --think et --reasoning-effort seraient INERTES ici. reasoning_effort
+# exige que le modèle déclare reasoning_levels, et « think » n'est traduit que
+# pour une liste d'identifiants de fournisseurs connus, dont « dgx » ne fait
+# pas partie (internal/agent/coordinator.go). Le seul levier qui marche sur un
+# fournisseur openai-compat maison est le --extra-body ci-dessus.
 
 # ── les outils ────────────────────────────────────────────────────────
 # Lecture seule sans confirmation : c'est tout ce dont les skills ont besoin.
