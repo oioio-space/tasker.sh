@@ -2267,6 +2267,59 @@ def completude(c):
 TYPES_INDICATEUR = ("sha256", "sha1", "md5", "texte", "regex", "ip", "domaine", "fichier")
 
 
+# ── ce que l'outil cherche de lui-même ────────────────────────────────
+# Ces motifs ne viennent pas de l'analyste : ils sont cherchés à chaque
+# extraction, dans TOUTE la collecte — donc aussi dans les chaînes du disque
+# et dans ce que photorec a rendu, où le reste du rapport ne va pas.
+#
+# La liste est COURTE, et c'est délibéré. Sur des dizaines de gigaoctets
+# d'octets bruts, un motif approximatif ne rend pas un indice : il rend des
+# milliers de faux, et un rapport que personne ne relit. N'y figure donc que
+# ce qui a une forme reconnaissable et peu d'homonymes. Ont été écartés pour
+# cette raison : les adresses bitcoin et ethereum (du base58 et de
+# l'hexadécimal, qu'un disque produit par accident à la pelle), les IBAN
+# génériques, et les numéros de carte — qui demandent une vérification de Luhn
+# qu'une expression rationnelle ne sait pas faire.
+#
+# Chaque fait qui en sort est « à vérifier » et jamais autre chose : trouvé
+# dans l'espace libre, un secret n'est ni daté, ni imputable, et peut venir
+# d'un paquet d'installation autant que d'un fichier de l'utilisateur.
+INTERETS = [
+    ("clé privée", r'-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY',
+     "une clé privée en clair ; comparez-la aux clés des comptes"),
+    ("mot de passe en clair", r'(?:password|passwd|mot_?de_?passe)["\s]{0,3}[=:]["\s]{0,3}[^\s"\',;]{6,64}',
+     "un mot de passe écrit en clair dans un fichier ou dans l'espace libre"),
+    ("identifiants dans une URL", r'\b[a-z][a-z0-9+.-]{1,10}://[^\s:/@]{1,64}:[^\s@/]{3,64}@[^\s/]{3,}',
+     "un identifiant et un secret passés dans une adresse"),
+    ("chaîne de connexion", r'\b(?:mysql|postgres(?:ql)?|mongodb(?:\+srv)?|redis|amqp|ldaps?)://[^\s]{4,}',
+     "une base de données ou un annuaire joint depuis ce poste"),
+    ("jeton AWS", r'\bAKIA[0-9A-Z]{16}\b', "une clé d'accès Amazon"),
+    ("jeton GitHub", r'\bgh[pousr]_[A-Za-z0-9]{36}\b', "un jeton GitHub"),
+    ("jeton Slack", r'\bxox[baprs]-[A-Za-z0-9-]{10,}', "un jeton Slack"),
+    ("clé Google", r'\bAIza[0-9A-Za-z_-]{35}\b', "une clé d'API Google"),
+    ("adresse en .onion", r'\b[a-z2-7]{16}\.onion\b|\b[a-z2-7]{56}\.onion\b',
+     "un service accessible seulement par Tor"),
+    ("clé de réseau sans fil", r'\bpsk["\s]{0,3}=["\s]{0,3}[^\s"\',;]{8,63}',
+     "la clé d'un réseau sans fil, en clair"),
+    ("couple identifiant/mot de passe",
+     r'\b[\w.+-]{3,64}@[\w.-]{3,}\.[a-z]{2,12}:[^\s:]{4,64}\b',
+     "la forme des listes de comptes qui circulent après une fuite"),
+]
+
+
+def interets():
+    """Les motifs de l'outil, à la forme que le moteur d'indicateurs attend.
+
+    Même liste, même moteur, même chercheur que --indicateurs : il n'y a qu'une
+    façon de parcourir la collecte, et elle sert aux deux. « absent » à False
+    parce qu'un motif de cette liste qu'on ne trouve pas n'est pas un fait —
+    ne pas avoir de clé privée qui traîne est la normale, pas une découverte.
+    """
+    return [{"genre": nom, "valeur": nom, "motif": re.compile(m.encode("utf-8"), re.I),
+             "etiquette": quoi, "categorie": "interet", "absent": False}
+            for nom, m, quoi in INTERETS]
+
+
 def lire_indicateurs(chemin):
     liste = []
     with open(chemin, encoding="utf-8") as fh:
@@ -2356,8 +2409,9 @@ def indicateurs(c, liste, fichier=None):
         for x in noms:
             if fnmatch.fnmatch(base, x["valeur"]) or fnmatch.fnmatch(nom, x["valeur"]):
                 x["trouve"] = True
-                fait("indicateur", "fichier au nom recherché", nom, source,
-                     f"nom comparé au motif « {x['valeur']} »", note=x["etiquette"])
+                fait(x.get("categorie", "indicateur"), "fichier au nom recherché",
+                     nom, source, f"nom comparé au motif « {x['valeur']} »",
+                     note=x["etiquette"])
         if blocs is None:
             return
         hs = {g: hashlib.new(g) for g in empreintes}
@@ -2384,19 +2438,29 @@ def indicateurs(c, liste, fichier=None):
             h = hs[g].hexdigest()
             if h in attendus:
                 attendus[h]["trouve"] = True
-                fait("indicateur", f"fichier à l'empreinte {g} recherchée", nom, source,
+                fait(attendus[h].get("categorie", "indicateur"),
+                     f"fichier à l'empreinte {g} recherchée", nom, source,
                      f"{g} du fichier = {h}", note=attendus[h]["etiquette"])
         for i, n in sorted(comptes_.items()):
             x = motifs[i]
             x["trouve"] = True
             contexte, octet = contextes[i]
-            fait("indicateur", f"{x['genre']} recherché présent dans un fichier",
+            interet = x.get("categorie") == "interet"
+            fait(x.get("categorie", "indicateur"),
+                 # Le genre est dans la VALEUR ; le répéter dans le libellé le
+                 # rendrait redondant et bancal — « clé privée repéré ».
+                 "repéré dans les octets d'un fichier" if interet
+                 else f"{x['genre']} recherché présent dans un fichier",
                  x["valeur"], source,
                  f"motif « {x['valeur']} » cherché dans les octets du fichier",
-                 octet=octet,
+                 octet=octet, occurrences=n, contexte=contexte,
+                 confiance="à vérifier" if interet else "certaine",
                  note=f"{n} occurrence(s) ; la première vers l'octet {octet}, autour "
                       f"d'elle : « {contexte} »"
-                      + (f" — {x['etiquette']}" if x["etiquette"] else ""))
+                      + (f" — {x['etiquette']}" if x["etiquette"] else "")
+                      + (". Trouvé dans les octets : ni daté, ni imputable, et peut "
+                         "venir d'un paquet d'installation autant que d'un fichier du "
+                         "compte. À confirmer sur la pièce citée" if interet else ""))
 
     # le fichier d'indicateurs posé DANS la collecte se trouverait lui-même :
     # chaque chaîne y figure, par construction
@@ -2428,6 +2492,8 @@ def indicateurs(c, liste, fichier=None):
             except (OSError, zlib.error):
                 pass
     for x in liste:
+        if x.get("absent") is False:
+            continue          # l'absence d'un motif de l'outil n'est pas un fait
         if not x.get("trouve"):
             fait("indicateur", f"{x['genre']} recherché ABSENT de la collecte", x["valeur"],
                  c.prefix, "recherche dans chaque fichier et chaque membre d'archive",
@@ -2522,10 +2588,12 @@ def main():
         except Exception as e:                                    # noqa: BLE001
             print(f"  ! {etape} : {type(e).__name__} {e}", file=sys.stderr)
         print(f"  {etape:22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
-    if args.indicateurs:
-        avant = len(FAITS)
-        indicateurs(c, lire_indicateurs(args.indicateurs), args.indicateurs)
-        print(f"  {'indicateurs':22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
+    # Un seul parcours de la collecte pour les deux listes : celle de l'outil,
+    # cherchée à chaque fois, et celle de l'analyste quand il en donne une.
+    avant = len(FAITS)
+    demandes = lire_indicateurs(args.indicateurs) if args.indicateurs else []
+    indicateurs(c, interets() + demandes, args.indicateurs)
+    print(f"  {'indicateurs et intérêts':22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:
         for f in FAITS:

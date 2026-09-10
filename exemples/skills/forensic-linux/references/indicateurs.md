@@ -55,3 +55,53 @@ Les mêmes recherches se font dans une règle, avec l'indice `chaine:` — pour
 une chaîne ou une expression — et les indices `domaine:` ou `fichier:`. Les
 empreintes, elles, ne se cherchent qu'ici : le rapport de conformité reprend
 les faits `indicateur` de `faits.jsonl` quand on lui donne `--faits`.
+
+
+## Ce que l'outil cherche de lui-même
+
+Indépendamment de `--indicateurs`, une liste courte est passée sur toute la
+collecte à chaque extraction. Les faits sortent dans la catégorie `interet`.
+
+| motif | ce qu'il attrape |
+|---|---|
+| clé privée | l'en-tête `-----BEGIN … PRIVATE KEY` |
+| mot de passe en clair | `password=`, `passwd:`, `mot_de_passe =` suivi d'au moins six caractères |
+| identifiants dans une URL | `schéma://utilisateur:secret@hôte` |
+| chaîne de connexion | `mysql://`, `postgresql://`, `mongodb://`, `redis://`, `amqp://`, `ldap://` |
+| jeton AWS, GitHub, Slack, clé Google | les formes fixes `AKIA…`, `ghp_…`, `xoxb-…`, `AIza…` |
+| adresse en .onion | un service accessible seulement par Tor |
+| clé de réseau sans fil | `psk=` suivi d'au moins huit caractères |
+| couple identifiant/mot de passe | `adresse@domaine:secret`, la forme des listes issues de fuites |
+
+**Pourquoi la liste est si courte.** Sur des dizaines de gigaoctets d'octets
+bruts, un motif approximatif ne rend pas un indice : il rend des milliers de
+faux, et un rapport que personne ne relit. N'y figure donc que ce qui a une
+forme reconnaissable et peu d'homonymes.
+
+Ont été écartés délibérément, et il vaut mieux le savoir que le redécouvrir :
+
+- **adresses bitcoin et ethereum** — du base58 et de l'hexadécimal, qu'un
+  disque produit par accident à la pelle ;
+- **IBAN génériques** — deux lettres, deux chiffres et de l'alphanumérique :
+  la moitié des identifiants de paquets y ressemblent ;
+- **numéros de carte bancaire** — ils demandent une vérification de Luhn
+  qu'une expression rationnelle ne sait pas faire. Sans elle, ce sont seize
+  chiffres, et un disque en est plein.
+
+Si l'un de ces trois vous intéresse pour une affaire précise, donnez-le en
+`regex:` dans votre propre fichier d'indicateurs : vous saurez alors que le
+bruit est attendu, ce qui n'est pas la même chose que de le subir.
+
+**Où ça cherche, et pourquoi c'est là que ça compte.** Le parcours couvre
+toute la collecte, mais deux endroits n'ont aucun autre lecteur dans le
+rapport :
+
+- `STRINGS/*.txt.gz` — décompressé en flux ; un secret effacé du système de
+  fichiers peut y être encore ;
+- `PHOTOREC/` — les fichiers récupérés n'ont ni nom ni date, mais ils ont un
+  contenu. C'est souvent là que se trouve le brouillon de configuration ou la
+  clé qu'on avait supprimée.
+
+Le fait porte le **décalage en octets** de la première occurrence et le texte
+qui l'entoure : de quoi juger sur pièce sans rouvrir un fichier de plusieurs
+gigaoctets.

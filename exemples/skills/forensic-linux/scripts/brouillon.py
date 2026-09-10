@@ -616,6 +616,26 @@ def main():
                            "existence sur le disque, sans date. Dites pour chacune si "
                            "une autre pièce la date — et quand aucune ne le fait, "
                            "écrivez-le plutôt que de laisser le lecteur le supposer."))
+    if par.get("interet"):
+        S.append("### Ce que l'outil a remarqué de lui-même\n")
+        S.append("Une courte liste de motifs est cherchée dans **toute** la collecte à "
+                 "chaque extraction — y compris dans les chaînes des disques et dans "
+                 "ce que photorec a rendu, où rien d'autre dans ce rapport ne va. "
+                 "Personne ne l'a demandée : elle est là pour que ce qui traîne dans "
+                 "l'espace libre ne passe pas inaperçu.\n")
+        S.append("> **Toutes ces lignes sont « à vérifier ».** Un secret trouvé dans "
+                 "les octets n'est ni daté ni imputable, et peut venir d'un paquet "
+                 "d'installation, d'un exemple de documentation ou d'un fichier de "
+                 "test autant que d'un fichier du compte. **Ouvrez la pièce citée "
+                 "avant d'en écrire un mot.**\n")
+        S.append(table(["quoi", "où", "occurrences", "octet", "autour", "id"],
+                       [(f["valeur"], f["source"], f.get("occurrences"), f.get("octet"),
+                         T(f.get("contexte")), f["id"]) for f in par["interet"]],
+                       quoi="motifs remarqués"))
+        S.append(a_rediger("pour chaque ligne retenue : ce que la pièce contient "
+                           "vraiment, une fois ouverte. Rayez le reste en disant "
+                           "pourquoi — « chaîne d'exemple d'un paquet », « clé de "
+                           "test ». Une ligne non vérifiée ne va pas dans le rapport."))
     if par.get("indicateur"):
         S.append("### Les indicateurs cherchés\n")
         S.append("Ce que l'analyste a demandé de chercher (`--indicateurs`), trouvé ou non :\n")

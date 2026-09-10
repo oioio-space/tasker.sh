@@ -312,9 +312,22 @@ def batir(base):
     w(f"TIMELINE/{P}_mactime.csv", "\n".join(lignes) + "\n")
 
     # ── ce que photorec a rendu ───────────────────────────────────────
-    for nom, taille in (("f0001.pdf", 50000), ("f0002.docx", 30000), ("f0003.jpg", 800000),
+    # Deux pièces LISIBLES parmi le remplissage : c'est tout l'enjeu, un
+    # fichier récupéré sans nom ni date reste du contenu, et l'outil doit
+    # regarder dedans. La clé privée et le mot de passe en clair ne sont
+    # nulle part ailleurs dans la collecte.
+    for nom, taille in (("f0001.pdf", 50000), ("f0003.jpg", 800000),
                         ("f0004.kdbx", 4000), ("f0005.zip", 90000), ("f0006", 1000)):
         w(f"PHOTOREC/recup_1/{nom}", b"x" * taille)
+    w("PHOTOREC/recup_1/f0002.txt",
+      "notes de reprise\n"
+      "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+      "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz\n"
+      "-----END OPENSSH PRIVATE KEY-----\n")
+    w("PHOTOREC/recup_1/f0007.txt",
+      "# brouillon de configuration retrouve dans l'espace libre\n"
+      "smtp_host = smtp.entreprise.fr\n"
+      "password = Bienvenue2025!\n")
 
     # ── STRINGS : les chaînes des périphériques, deux volumes ─────────
     # DEUX volumes, sinon rien ne prouve que la collecte n'oublie pas le /home
@@ -333,6 +346,7 @@ def batir(base):
           "     4096 10.0.0.9",
           "     8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent",
           "    16384 chaine-effacee-que-rien-d-autre-ne-porte",
+          "    20480 AKIAIOSFODNN7EXAMPLE",
           "    32768 https://www.yggtorrent.wtf/torrent/999"],
          {"urls": "      2 1024 https://www.yggtorrent.wtf/torrent/999\n",
           "courriels": "      1 2048 jdupont1987@gmail.com\n",
@@ -478,6 +492,19 @@ ATTENDUS_CHAMPS = [
                                    "acteur": "jdupont"}),
 ]
 
+# L'outil doit regarder DANS les chaînes du disque et DANS ce que photorec a
+# rendu — deux endroits où rien d'autre dans le rapport ne va. Les trois appâts
+# n'existent qu'à ces endroits-là.
+ATTENDUS_INTERETS = [
+    ("intérêt : photorec lisible", {"fait": "repéré dans les octets d'un fichier",
+                                    "valeur": "clé privée",
+                                    "source": "PHOTOREC/recup_1/f0002.txt"}),
+    ("intérêt : photorec mot de passe", {"valeur": "mot de passe en clair",
+                                         "source": "PHOTOREC/recup_1/f0007.txt"}),
+    ("intérêt : chaînes du disque", {"valeur": "jeton AWS",
+                                     "source": "_strings_racine.txt.gz"}),
+]
+
 ATTENDUS_INDICATEURS = [
     ("indicateur dans le .gz", {"fait": "texte recherché présent dans un fichier",
                                 "valeur": "chaine-effacee-que-rien-d-autre-ne-porte",
@@ -567,7 +594,7 @@ def main():
     print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")
     with open(faits, encoding="utf-8") as fh:
         lus_f = [json.loads(l) for l in fh if l.strip()]
-    for artefact, exige in ATTENDUS_CHAMPS + ATTENDUS_INDICATEURS:
+    for artefact, exige in ATTENDUS_CHAMPS + ATTENDUS_INTERETS + ATTENDUS_INDICATEURS:
         ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {exige['valeur']}")

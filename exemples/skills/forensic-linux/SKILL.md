@@ -110,6 +110,18 @@ tout s'y remonte.
   « forte ». Sans numéro de série lu, deux supports du même modèle ne se
   distinguent pas : le fait le dit, reprenez-le.
 
+### Ce que l'outil remarque de lui-même
+
+Une courte liste de motifs — clé privée, mot de passe en clair, jeton d'API,
+adresse en `.onion` — est cherchée dans toute la collecte, **y compris dans les
+chaînes des disques et dans ce que photorec a rendu**, où rien d'autre ne va.
+Catégorie `interet` ; détail dans `references/indicateurs.md`.
+
+**Ces lignes sont « à vérifier », sans exception** : un secret trouvé dans les
+octets n'est ni daté ni imputable, et vient aussi bien d'un paquet
+d'installation ou d'un fichier de test que du compte. **Ouvrez la pièce citée
+avant d'en écrire un mot**, rayez le reste en disant pourquoi.
+
 ### 2 · Vérifier avant d'écrire
 
 Trois contrôles, dans cet ordre. Ils changent la lecture de tout le reste.
