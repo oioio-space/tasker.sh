@@ -4,3 +4,7 @@
 *_etat.txt
 __pycache__/
 *.pyc
+
+# Sorties des tests des skills (tests/artefacts.py, tests/matrice.py).
+exemples/skills/artefacts/
+exemples/skills/matrice/

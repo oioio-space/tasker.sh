@@ -400,8 +400,13 @@ def main():
 
     # ── 6 ──
     S.append("## 6 · La navigation et les téléchargements\n")
+    # les saisies de formulaire sont dans « usage » : un compte dont l'historique
+    # a été vidé mais dont les frappes restent doit garder sa section
+    usage_nav = [f for f in par.get("usage", [])
+                 if f["fait"] in ("saisie dans un formulaire", "fichier ouvert récemment")
+                 or "navigateur" in f["fait"]]
     comptes_nav = sorted({f.get("acteur") or "?" for f in par.get("navigation", [])
-                          + par.get("telechargement", [])})
+                          + par.get("telechargement", []) + usage_nav})
     for compte in comptes_nav:
         mien = lambda liste: [f for f in liste if (f.get("acteur") or "?") == compte]   # noqa: E731
         pages = [f for f in mien(par.get("navigation", [])) if f["fait"] == "page visitée"]
@@ -452,13 +457,14 @@ def main():
             S.append("**Marque-pages** — un signet est un choix délibéré, daté, et il "
                      "survit au vidage de l'historique :\n")
             S.append(table(["enregistré le", "adresse", "titre", "id"],
-                           [(quand(f), f["valeur"], f.get("note"), f["id"]) for f in H.tri(signets)]))
+                           [(quand(f), f["valeur"], T(f.get("note")), f["id"])
+                            for f in H.tri(signets)]))
         if recherches or saisies:
             S.append("**Ce que le compte a tapé** — recherches et saisies de formulaire : "
                      "l'intention, là où l'historique ne donne que la page atteinte.\n")
             S.append(table(["date", "quoi", "saisi", "détail", "id"],
                            [(quand(f), "recherche" if f in recherches else "formulaire",
-                             f["valeur"], f.get("note"), f["id"])
+                             f["valeur"], T(f.get("note")), f["id"])
                             for f in H.tri(recherches + saisies)]))
         if secrets:
             S.append("**Sites avec un mot de passe enregistré dans le navigateur** "

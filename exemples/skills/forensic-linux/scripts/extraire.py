@@ -1139,15 +1139,22 @@ def _historique_navigateur(source, compte, blob, req, outil, limite):
             fait("telechargement", "fichier téléchargé", cible, source,
                  f"sqlite3 sur les téléchargements {outil}", horodatage=_iso_z(ts),
                  acteur=compte, note=f"depuis {origine}" if origine else None)
-        for ts, url, titre in _lignes(cx, req.get("marque-page", ""), (limite,)) if req.get("marque-page") else []:
+        signets = _lignes(cx, req["marque-page"], (limite,)) if req.get("marque-page") else []
+        for ts, url, titre in signets:
             fait("navigation", "marque-page enregistré", url, source,
                  f"sqlite3 sur les marque-pages {outil}", horodatage=_iso_z(ts),
                  acteur=compte, note=(titre or None),
                  confiance="certaine")
+        _borne_atteinte(len(signets), limite, "marque-pages", source, compte,
+                        f"LIMIT {limite} sur les marque-pages {outil}")
         for ts, terme, url in _lignes(cx, req.get("recherche", ""), (limite,)) if req.get("recherche") else []:
             fait("navigation", "recherche saisie dans la barre d'adresse", terme, source,
                  f"sqlite3 sur keyword_search_terms {outil}", horodatage=_iso_z(ts),
-                 acteur=compte, note=f"a mené à {url}" if url else None)
+                 acteur=compte, confiance="forte",
+                 note=(f"a mené à {url}. " if url else "")
+                      + "la date est celle de la DERNIÈRE visite de la page atteinte, "
+                        "pas celle de la frappe : une recherche ancienne dont la page a "
+                        "été revue porte la date récente")
     if total and total > len(visites):
         fait("limite", "historique de navigation tronqué",
              f"{len(visites)} pages sur {total}", source,
@@ -1181,8 +1188,19 @@ REQ_FORMULAIRES_CHROME = [
 ]
 
 
+def _borne_atteinte(rendues, borne, quoi, source, compte, methode):
+    """Une requête qui rend exactement sa borne en cachait peut-être d'autres."""
+    if rendues >= borne:
+        fait("limite", f"{quoi} : la borne de lecture est atteinte", str(borne), source,
+             methode, acteur=compte, confiance="à vérifier",
+             note="il y en a peut-être davantage ; les plus anciens ne sont pas dans "
+                  "les faits")
+
+
 def _formulaires(source, compte, blob, req, outil):
     for _, lignes in _sqlite_lire(blob, req):
+        _borne_atteinte(len(lignes), 500, "saisies de formulaire", source, compte,
+                        f"LIMIT 500 sur l'historique de formulaires {outil}")
         for champ, valeur, combien, premier, dernier in lignes:
             fait("usage", "saisie dans un formulaire", str(valeur)[:200], source,
                  f"sqlite3 sur l'historique de formulaires {outil}",
@@ -1200,8 +1218,8 @@ def _marque_pages_chrome(source, compte, blob, req, outil):
     except (ValueError, AttributeError):
         return
     pile = [(v, k) for k, v in racines.items() if isinstance(v, dict)]
-    poses = 0
-    while pile and poses < 2000:
+    poses, borne = 0, 2000
+    while pile and poses < borne:
         noeud, dossier = pile.pop()
         for enfant in noeud.get("children", []) or []:
             if enfant.get("type") == "folder":
@@ -1213,6 +1231,8 @@ def _marque_pages_chrome(source, compte, blob, req, outil):
                      "lecture du fichier Bookmarks (JSON)", acteur=compte,
                      horodatage=_date_us(int(quand), True) if str(quand).isdigit() else None,
                      note=f"« {enfant.get('name', '')} », dans « {dossier} »")
+    _borne_atteinte(poses, borne, "marque-pages", source, compte,
+                    f"borne de {borne} marque-pages dans le fichier Bookmarks")
 
 
 # Le fichier, le navigateur, la requête, le traitement. C'est LA liste des
@@ -1338,7 +1358,7 @@ ARTEFACTS_LUS = ("_history", ".lesshst", ".wget-hsts", "known_hosts", ".viminfo"
 # le classique de la persistance, et ce qui mérite d'être lu en premier.
 LIEU_ANORMAL = re.compile(r'(/tmp/|/var/tmp/|/dev/shm/|/home/|/root/|curl\s|wget\s|base64|\bnc\s|/\.[\w.]+/)')
 RE_EXEC = re.compile(r'^\s*(?:ExecStart|ExecStartPre|Exec)\s*=\s*(.+)$', re.M)
-RE_RUN_UDEV = re.compile(r'RUN\+?=\s*"?([^"\n]+)"?')
+RE_RUN_UDEV = re.compile(r'^(?!\s*#).*?\bRUN(?:\{\w+\})?\s*\+?=\s*"?([^"\n]+?)"?\s*$', re.M)
 RE_HISTO_EPOCH = re.compile(r'^#(\d{9,11})$')
 RE_CLE_PACMAN = re.compile(r'^%([A-Z]+)%\n(.+)$', re.M)
 RE_HISTO_ZSH = re.compile(r'^: (\d{9,11}):\d+;(.*)$')
@@ -1353,14 +1373,16 @@ def _persistance_lance(c, t, nom, txt, vendeur):
     par une.
     """
     source = f"{c.rel(t)} → {nom}"
-    if nom.endswith((".service", ".timer", ".socket")):
-        pose_main = "/etc/systemd/system" in "/" + nom
-        for m in RE_EXEC.finditer(txt):
-            commande = m.group(1).strip()
+    if nom.endswith((".service", ".timer", ".socket", ".path")):
+        # tout ce qui vient de /etc a été posé à la main ou par un installeur —
+        # y compris les unités « user » ; les paquets écrivent dans /usr
+        pose_main = "/etc/systemd/" in "/" + nom
+        commandes = [m.group(1).strip() for m in RE_EXEC.finditer(txt)]
+        if not (pose_main or any(LIEU_ANORMAL.search(x) for x in commandes)):
+            vendeur[0] += 1                       # une unité, pas un ExecStart
+            return
+        for commande in commandes:
             anormal = LIEU_ANORMAL.search(commande)
-            if not (pose_main or anormal):
-                vendeur[0] += 1
-                continue
             fait("suspect" if anormal else "persistance",
                  "unité systemd lançant un programme depuis un endroit anormal"
                  if anormal else "unité systemd posée par l'administrateur",
@@ -1634,6 +1656,14 @@ FAMILLES_RECUP = {
 _TYPE_RECUP = {ext: fam for fam, exts in FAMILLES_RECUP.items() for ext in exts}
 
 
+def _taille(octets):
+    """Une taille qu'un lecteur comprend : « 975 Ko », pas « 0 Mo »."""
+    for unite, seuil in (("Go", 1 << 30), ("Mo", 1 << 20), ("Ko", 1 << 10)):
+        if octets >= seuil:
+            return f"{octets / seuil:.1f} {unite}".replace(".0 ", " ")
+    return f"{octets} octets"
+
+
 def supprimes(c):
     for d in ("SUPPRIMES", "PHOTOREC"):
         base = os.path.join(c.racine, d)
@@ -1653,7 +1683,7 @@ def supprimes(c):
             continue
         fait("recuperation", f"pièces récupérées dans {d}/", str(n), d + "/",
              "find | wc -l",
-             note=f"{octets // (1 << 20)} Mo ; xfs_undelete rend des blocs entiers, "
+             note=f"{_taille(octets)} ; xfs_undelete rend des blocs entiers, "
                   "photorec coupe juste mais ignore ce dont il n'a pas la signature")
         for fam, combien in par_type.most_common(15):
             fait("recuperation", f"pièces récupérées de type « {fam} »", str(combien),

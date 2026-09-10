@@ -77,11 +77,19 @@ def batir(base):
             fh.write(contenu.encode("utf-8") if isinstance(contenu, str) else contenu)
 
     def T(rel, membres):
+        """Un membre dont le contenu est un tuple ("lien", cible) est un LIEN
+        symbolique : c'est ce que /etc/apparmor.d/disable/ contient, et rien
+        d'autre — un test qui y mettrait un fichier ne testerait rien."""
         with tarfile.open(os.path.join(R, rel), "w:gz") as t:
             for nom, blob in membres.items():
-                blob = blob.encode("utf-8") if isinstance(blob, str) else blob
                 i = tarfile.TarInfo("./" + nom)
-                i.size, i.mtime = len(blob), epoch("2026-01-08T12:00:00")
+                i.mtime = epoch("2026-01-08T12:00:00")
+                if isinstance(blob, tuple):
+                    i.type, i.linkname, i.size = tarfile.SYMTYPE, blob[1], 0
+                    t.addfile(i)
+                    continue
+                blob = blob.encode("utf-8") if isinstance(blob, str) else blob
+                i.size = len(blob)
                 t.addfile(i, io.BytesIO(blob))
 
     # ── le système ────────────────────────────────────────────────────
@@ -121,8 +129,11 @@ def batir(base):
         "etc/sudoers": "%wheel ALL=(ALL) NOPASSWD: ALL\n",
         "etc/login.defs": "PASS_MAX_DAYS\t99999\n",
         "etc/pam.d/common-auth": "auth [success=1 default=ignore] pam_unix.so nullok\n",
-        "etc/pam.d/common-password": "password requisite pam_unix.so obscure yescrypt\n",
-        "etc/apparmor.d/disable/usr.bin.firefox": ""})
+        "etc/pam.d/common-password":
+            "# minlen ici serait un commentaire, pas une règle\n"
+            "password requisite pam_pwquality.so retry=3 minlen=6 difok=2\n"
+            "password [success=1 default=ignore] pam_unix.so obscure yescrypt\n",
+        "etc/apparmor.d/disable/usr.bin.firefox": ("lien", "/etc/apparmor.d/usr.bin.firefox")})
     w(f"COMPTES/{P}_jdupont_stat.txt",
       "  File: /mnt/i/home/jdupont\n  Size: 4096\nModify: 2026-01-06 22:31:00.000000000 +0100\n"
       " Birth: 2025-06-01 09:12:00.000000000 +0200\n")
@@ -267,8 +278,14 @@ def batir(base):
             "[Unit]\nDescription=maj\n[Service]\nExecStart=/tmp/.maj/agent\n",
         "usr/lib/systemd/system/cups.service": "[Service]\nExecStart=/usr/sbin/cupsd -l\n",
         "etc/xdg/autostart/verif.desktop": "[Desktop Entry]\nExec=/usr/bin/verif-maj\n",
+        "etc/systemd/system/multi-user.target.wants/x.service":
+            "[Service]\nExecStartPre=/opt/outil/prepare\nExecStart=/opt/outil/x\n",
+        "usr/lib/systemd/system/deux-exec.service":
+            "[Service]\nExecStartPre=/usr/bin/mkdir -p /run/x\nExecStart=/usr/sbin/x\n",
         "etc/udev/rules.d/99-usb.rules":
-            'ACTION=="add", SUBSYSTEM=="usb", RUN+="/usr/local/bin/note-usb.sh"\n'})
+            '# exemple : RUN+="/bin/faux"\n'
+            'ACTION=="add", SUBSYSTEM=="usb", RUN+="/usr/local/bin/note-usb.sh"\n'
+            'ACTION=="add", SUBSYSTEM=="block", RUN{builtin}+="kmod load x"\n'})
 
     # ── la timeline, en ISO, dans le fuseau qu'on note à côté ─────────
     w(f"TIMELINE/{P}_fuseau_timeline.txt", "UTC\n")
@@ -360,7 +377,7 @@ ATTENDUS_CONSTATS = [
     ("sudoers", "élévation sans mot de passe (sudo NOPASSWD)"),
     ("login.defs", "durée de vie des mots de passe très longue"),
     ("PAM : nullok", "PAM accepte un mot de passe vide (nullok)"),
-    ("PAM : robustesse", "aucune exigence de robustesse des mots de passe"),
+    ("PAM : minlen en argument", "longueur minimale de mot de passe faible"),
     ("PAM : blocage", "aucun blocage du compte après des échecs répétés"),
     ("AppArmor", "profil AppArmor désactivé"),
     ("sshd", "connexion directe en root autorisée par SSH"),

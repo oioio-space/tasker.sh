@@ -151,20 +151,28 @@ class Collecte:
         except OSError:
             return
 
-    def membres_tar(self, archive, garde=None):
+    def membres_tar(self, archive, garde=None, liens=False):
         """(nom, contenu) des fichiers d'un .tar.gz — ceux que garde(nom) accepte.
 
         Le filtre passe AVANT la lecture : une archive de profils porte des
         caches de centaines de Mo qu'aucun contrôle ne regarde.
+
+        Avec liens=True, les LIENS symboliques sont rendus eux aussi, leur
+        cible en guise de contenu. Certaines pièces ne sont QUE des liens :
+        /etc/apparmor.d/disable/ n'en contient pas d'autres, et sans cela le
+        contrôle ne trouvait jamais rien.
         """
         self.lus.add(archive)
         try:
             with tarfile.open(archive, "r:gz") as t:
                 for m in t:
-                    if not m.isfile():
+                    if not (m.isfile() or (liens and m.issym())):
                         continue
                     nom = m.name[2:] if m.name.startswith("./") else m.name
                     if garde and not garde(nom):
+                        continue
+                    if m.issym():
+                        yield nom, m.linkname.encode("utf-8", "replace")
                         continue
                     fh = t.extractfile(m)
                     if fh is not None:
@@ -186,6 +194,7 @@ PAM = [
      "la charte impose-t-elle un verrouillage après plusieurs échecs ?"),
 ]
 RE_NULLOK = re.compile(r'^\s*[^#\n]*\bnullok\b', re.M)
+RE_MINLEN = re.compile(r'\bminlen\s*=\s*(\d+)')
 
 
 def comptes(c):
@@ -221,7 +230,7 @@ def comptes(c):
         return locaux
     for nom, blob in c.membres_tar(d, lambda n: os.path.basename(n) in DROITS_LUS
                                    or "/sudoers.d/" in n or "/pam.d/" in n
-                                   or "/apparmor.d/disable/" in n):
+                                   or "/apparmor.d/disable/" in n, liens=True):
         txt = blob.decode("utf-8", "replace")
         base = os.path.basename(nom)
         modules_pam.update(m.group(0) for m in re.finditer(r'pam_\w+\.so', txt))
@@ -275,15 +284,21 @@ def comptes(c):
                         question="la charte exige-t-elle un mot de passe sur tout compte ?",
                         note="un compte au champ de mot de passe vide peut alors ouvrir "
                              "une session sans rien saisir")
-            for m in re.finditer(r'^\s*minlen\s*=?\s*(\d+)', txt, re.M):
-                if int(m.group(1)) < 8:
-                    constat("authentification", "longueur minimale de mot de passe faible",
-                            f"minlen {m.group(1)}", f"{c.rel(d)} → {nom}",
-                            "minlen dans la configuration de robustesse",
-                            question="la charte fixe-t-elle une longueur minimale ?")
+            # « minlen = 12 » dans pwquality.conf, « pam_pwquality.so minlen=6 »
+            # dans /etc/pam.d : c'est un ARGUMENT de module, pas un début de ligne
+            for l in txt.splitlines():
+                if l.lstrip().startswith("#"):
+                    continue
+                for m in RE_MINLEN.finditer(l):
+                    if int(m.group(1)) < 8:
+                        constat("authentification", "longueur minimale de mot de passe faible",
+                                f"minlen {m.group(1)}", f"{c.rel(d)} → {nom}",
+                                f"minlen dans « {l.strip()[:100]} »",
+                                question="la charte fixe-t-elle une longueur minimale ?")
         elif "/apparmor.d/disable/" in nom:
             constat("durcissement", "profil AppArmor désactivé", os.path.basename(nom),
-                    f"{c.rel(d)} → {nom}", "présence du lien dans apparmor.d/disable/",
+                    f"{c.rel(d)} → {nom}",
+                    "présence du lien dans apparmor.d/disable/ (un lien, pas un fichier)",
                     question="la charte impose-t-elle le maintien des protections du "
                              "système ?",
                     note="le profil existe mais ne s'applique pas ; qui l'a désactivé "
