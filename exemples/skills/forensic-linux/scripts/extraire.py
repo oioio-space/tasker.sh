@@ -2993,14 +2993,45 @@ def _blocs(nom, ouvrir, etat=None, bloc=1 << 20):
     document rendu par photorec, et il ne se paie que sur ces sources-là — et
     seulement si l'appelant va jusqu'au bout : le second passage n'est ouvert
     qu'une fois le premier épuisé.
+
+    AUCUN bloc « clair » ne dépasse la taille demandée, quelle que soit la
+    compression. C'est une garantie, pas un détail : un journal tourné se
+    comprime d'un facteur trois cents, et un bloc d'entrée d'un mégaoctet rendu
+    d'un seul tenant faisait un tampon de deux cents mégaoctets — que le
+    chercheur recopie, puis balaie une fois par motif. L'extraction paraissait
+    alors bloquée, et le plafond d'archive, lui, ne jouait jamais sur cette
+    voie : la garde contre les bombes de décompression ne couvrait pas la forme
+    comprimée la plus courante de toutes.
     """
     etat = {} if etat is None else etat
     dec = zlib.decompressobj(16 + zlib.MAX_WBITS) if nom.lower().endswith(".gz") else None
     comprime = dec is None and _comprimee(nom)
+    rendu = 0
     with contextlib.closing(ouvrir()) as fh:
         for brut in iter(lambda: fh.read(bloc), b""):
-            yield brut, (dec.decompress(brut) if dec else
-                         (b"" if comprime else brut))
+            if dec is None:
+                yield brut, (b"" if comprime else brut)
+                continue
+            if "tronque" in etat:
+                # Plafond atteint : on lit encore, mais seulement pour
+                # l'empreinte — qui doit porter sur le fichier ENTIER, sinon
+                # une empreinte recherchée ne correspondrait plus à rien.
+                yield brut, b""
+                continue
+            entree, premier = brut, brut
+            while True:
+                clair = dec.decompress(entree, bloc)
+                rendu += len(clair)
+                # « premier » ne sort qu'une fois : répéter les octets bruts
+                # les compterait deux fois dans l'empreinte.
+                yield premier, clair
+                premier = b""
+                if rendu > PLAFOND_ARCHIVE:
+                    etat["tronque"] = "plafond d'archive atteint"
+                    break
+                entree = dec.unconsumed_tail
+                if not entree:
+                    break
     if comprime:
         for morceau in _decomprime(nom, ouvrir, etat) or ():
             yield b"", morceau

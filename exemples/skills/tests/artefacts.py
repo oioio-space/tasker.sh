@@ -732,6 +732,50 @@ def lire(chemin, cle):
         return {json.loads(l)[cle] for l in fh if l.strip()}
 
 
+def blocs_bornes():
+    """Un .gz rend des blocs BORNÉS, et le plafond d'archive joue sur lui.
+
+    Un journal tourné se comprime d'un facteur trois cents : rendu d'un seul
+    tenant, un bloc d'entrée d'un mégaoctet en faisait deux cents en mémoire,
+    que le chercheur recopiait puis balayait une fois par motif — l'extraction
+    paraissait bloquée. Et le plafond, la garde contre les bombes de
+    décompression, ne couvrait pas la forme comprimée la PLUS courante.
+
+    Le piège synthétique est trop petit pour montrer ça : ce contrôle-ci
+    fabrique donc ses propres octets, et il vérifie les trois propriétés qui
+    doivent tenir ensemble — bornées, complètes, et l'empreinte du fichier
+    entier malgré la troncature.
+    """
+    import gzip, hashlib, io
+    sys.path.insert(0, os.path.join(SKILLS, "forensic-linux", "scripts"))
+    import extraire
+
+    ligne = b"Jan  8 14:02:11 pc01 systemd[1]: Started Session 4231 of jdupont.\n"
+    clair = ligne * (24 * 1024 * 1024 // len(ligne))
+    comp = gzip.compress(clair, 6)
+    etat, rendu, gros = {}, 0, 0
+    for _, c in extraire._blocs("syslog.2.gz", lambda: io.BytesIO(comp), etat):
+        rendu += len(c)
+        gros = max(gros, len(c))
+    yield ("gz : blocs bornés", gros <= (1 << 20),
+           f"plus gros bloc clair {gros / 1048576:.2f} Mo (max 1,00)")
+    yield ("gz : rien n'est perdu", rendu == len(clair),
+           f"{rendu} octets rendus sur {len(clair)}")
+
+    # Au-delà du plafond : on s'arrête, on le DIT, et l'empreinte reste celle
+    # du fichier entier — sans quoi une empreinte recherchée ne correspondrait
+    # plus à rien, en silence.
+    bombe = gzip.compress(b"A" * (extraire.PLAFOND_ARCHIVE + (8 << 20)), 6)
+    etat, h, rendu = {}, hashlib.sha256(), 0
+    for b, c in extraire._blocs("bombe.gz", lambda: io.BytesIO(bombe), etat):
+        h.update(b)
+        rendu += len(c)
+    yield ("gz : le plafond joue", "tronque" in etat and rendu <= extraire.PLAFOND_ARCHIVE + (1 << 20),
+           f"{rendu / 1048576:.0f} Mo rendus, etat={etat.get('tronque') or 'AUCUN'}")
+    yield ("gz : empreinte complète", h.hexdigest() == hashlib.sha256(comp := bombe).hexdigest(),
+           "sha256 du fichier entier malgré la troncature")
+
+
 def main():
     base = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "artefacts")
     shutil.rmtree(base, ignore_errors=True)
@@ -772,6 +816,11 @@ def main():
     # même fichier de faits qu'un passage d'un seul tenant. Sans cette
     # égalité, la reprise ne serait pas une reprise : ce serait une autre
     # analyse, avec d'autres identifiants.
+    print("\n── DÉCOMPRESSION BORNÉE ──")
+    for artefact, ok, detail in blocs_bornes():
+        manques += not ok
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {detail}")
+
     print("\n── REPRISE APRÈS PLANTAGE ──")
     journal = os.path.splitext(faits)[0] + "-reprise.jsonl"
     complet = open(faits, encoding="utf-8").read()
