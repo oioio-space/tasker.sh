@@ -30,23 +30,73 @@ nulle part.
 
 ## 2 · Poser le skill
 
+### Où Crush cherche vraiment
+
+Crush distingue deux dossiers, et ils ne portent pas le même nom. **Le second
+n'est pas un endroit où poser quoi que ce soit :**
+
+| dossier | ce que c'est | ce qu'on y met |
+|---|---|---|
+| `~/.config/crush/` | la **configuration** — `crush.json`, `skills/` | vos fichiers |
+| `~/.local/share/crush/` | l'**état** de Crush : sessions, cache | rien, jamais |
+
+Le piège est que Crush écrit dans le second un fichier qui s'appelle aussi
+`crush.json`. **Ce n'est pas votre configuration** : c'est son état interne, il
+le réécrit quand il veut. Une configuration posée là est ignorée, et un skill
+posé là n'est jamais trouvé — le dossier d'état ne figure dans aucune des
+listes ci-dessous.
+
+Si votre installation est sous `~/.local/`, c'est presque sûrement l'une de ces
+deux choses, et **aucune ne change quoi que ce soit à ce qui suit** :
+
+  - `~/.local/bin/crush` : le **binaire**, posé là par le script d'installation
+    quand il tourne sans les droits root. Où vit le programme n'a rien à voir
+    avec où il lit sa configuration ;
+  - `~/.local/share/crush/` : le dossier d'état ci-dessus.
+
+Pour les skills, Crush regarde d'office ces quatre dossiers — le premier venu
+suffit, il n'y a **rien à déclarer** dans `crush.json` :
+
+    ~/.config/crush/skills/     ~/.agents/skills/
+    ~/.config/agents/skills/    ~/.claude/skills/
+
+et, dans le dossier de travail courant, `.crush/skills/`, `.agents/skills/`,
+`.claude/skills/` et `.cursor/skills/`.
+
+Deux réglages déplacent tout ça, et c'est la seule raison pour laquelle votre
+machine pourrait différer : `XDG_CONFIG_HOME`, qui remplace `~/.config`, et
+`CRUSH_SKILLS_DIR`, qui **remplace les quatre dossiers d'un coup** par celui
+qu'il nomme. Vérifiez sur votre poste avant de copier quoi que ce soit :
+
+    echo "config : ${XDG_CONFIG_HOME:-$HOME/.config}/crush"
+    echo "skills  : ${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
+    ls -d ~/.config/crush ~/.local/share/crush ~/.claude/skills 2>/dev/null
+
+### Poser les skills
+
 Pour Crush, une fois pour toutes :
 
-    mkdir -p ~/.config/crush/skills
-    cp -r exemples/skills/forensic-linux exemples/skills/conformite-linux \
-          ~/.config/crush/skills/
-    cp exemples/skills/garde-scelles.sh ~/.config/crush/ && chmod +x ~/.config/crush/garde-scelles.sh
-    cp exemples/skills/crush.json ~/.config/crush/crush.json      # puis adaptez base_url
+    K="${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
+    C="${XDG_CONFIG_HOME:-$HOME/.config}/crush"
+    mkdir -p "$K" "$C"
+    cp -r exemples/skills/forensic-linux exemples/skills/conformite-linux "$K/"
+    cp exemples/skills/garde-scelles.sh "$C/" && chmod +x "$C/garde-scelles.sh"
+    cp exemples/skills/crush.json "$C/crush.json"          # puis adaptez base_url
 
-Ou seulement pour un dossier de travail — Crush cherche aussi dans
-`.crush/skills/`, `.agents/skills/` et `.claude/skills/` du projet courant :
+Ou seulement pour un dossier de travail — c'est le plus simple si vous voulez
+un jeu de skills par affaire :
 
     mkdir -p ~/analyse/.crush/skills
     cp -r exemples/skills/forensic-linux ~/analyse/.crush/skills/
 
+Dans les deux cas, Crush doit lister les deux skills au démarrage. S'il ne les
+voit pas, c'est le chemin, pas le skill : relancez les trois commandes de
+vérification ci-dessus.
+
 `crush.json` est une configuration complète et commentée pour Nemotron 3 Super
 servi sur le DGX — voir le §9. `garde-scelles.sh` est la ceinture décrite au
-§3.
+§3 ; le chemin par lequel `crush.json` l'appelle doit être celui où vous venez
+de le copier.
 
 ## 3 · Protéger les scellés
 
@@ -69,7 +119,7 @@ l'arborescence avant et après. Mais ne comptez pas là-dessus : montez en `ro`.
 Lancez l'extraction **vous-même**, hors de l'agent :
 
     C=/mnt/scelles/LINUX/PRJ/PC01_B13_SYCOBS_LINUX
-    K=~/.config/crush/skills
+    K="${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
     python3 $K/forensic-linux/scripts/extraire.py   "$C" -o ~/analyse/faits.jsonl
     python3 $K/conformite-linux/scripts/controles.py "$C" -o ~/analyse/constats.jsonl
 

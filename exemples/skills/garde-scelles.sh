@@ -17,10 +17,12 @@
 # qui explique au modèle pourquoi il ne peut pas.
 #
 # Réglage : les dossiers protégés, un par ligne, dans
-# ~/.config/crush/scelles.txt — à défaut, ou si la liste est vide, /mnt/scelles.
+# ~/.config/crush/scelles.txt — ou $XDG_CONFIG_HOME/crush/scelles.txt si cette
+# variable est posée, comme Crush lui-même. À défaut, ou si la liste est vide,
+# /mnt/scelles. CRUSH_SCELLES nomme directement un autre fichier.
 
 set -u
-liste="${CRUSH_SCELLES:-$HOME/.config/crush/scelles.txt}"
+liste="${CRUSH_SCELLES:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt}"
 proteges=()
 if [[ -r "$liste" ]]; then
     mapfile -t proteges < <(grep -vE '^[[:space:]]*(#|$)' "$liste")
