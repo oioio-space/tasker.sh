@@ -397,6 +397,23 @@ ATTENDUS_CONSTATS = [
 ]
 
 
+# Un libellé ne suffit pas toujours. « domaine présent dans une base de
+# navigateur » sort aussi bien de l'historique que d'un cookie ; or le cookie
+# et le mot de passe enregistré sont les deux pièces qui survivent au vidage de
+# l'historique, et ce sont celles qu'une extraction d'hôtes rate le plus
+# facilement (un domaine de cookie s'écrit « .netflix.com », avec un point de
+# tête). Ces attendus-là se vérifient donc sur le contenu du constat.
+ATTENDUS_PRECIS = [
+    ("règle : cookie", "constat", {"constat": "domaine présent dans une base de navigateur",
+                                   "source": "cookies.sqlite", "regle": "R1"}),
+    ("règle : mot de passe enregistré",
+     "constat", {"constat": "domaine présent dans une base de navigateur",
+                 "source": "logins.json"}),
+    ("règle : marque-page", "constat", {"constat": "domaine présent dans une base de navigateur",
+                                        "source": "Bookmarks"}),
+]
+
+
 def lire(chemin, cle):
     with open(chemin, encoding="utf-8") as fh:
         return {json.loads(l)[cle] for l in fh if l.strip()}
@@ -436,6 +453,14 @@ def main():
             ok = attendu in vus
             manques += not ok
             print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {attendu}")
+    print(f"\n── PIÈCES QUI SURVIVENT AU VIDAGE DE L'HISTORIQUE ──")
+    with open(constats, encoding="utf-8") as fh:
+        lus = [json.loads(l) for l in fh if l.strip()]
+    for artefact, _cle, exige in ATTENDUS_PRECIS:
+        ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus)
+        manques += not ok
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {exige['source']}")
+
     print(f"\n{base}")
     if manques:
         print(f"{manques} artefact(s) collecté(s) mais sans effet — voir ci-dessus.",

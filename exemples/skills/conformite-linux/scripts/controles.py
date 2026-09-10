@@ -481,8 +481,12 @@ def reseau(c):
 # navigateur entier : Firefox est dans ~/.mozilla, donc dans _profils ; Chrome
 # installé par paquet est dans ~/.config/google-chrome, donc dans _artefacts.
 
+# logins.json et « Login Data » portent les sites dont le compte a fait
+# enregistrer le mot de passe : un compte tenu sur ce site, pas une visite de
+# passage. Seuls les noms d'hôte en sont lus — jamais l'identifiant ni le secret.
 BASES_NAVIGATEUR = ("places.sqlite", "History", "cookies.sqlite", "Cookies",
-                    "Web Data", "Archived History", "Bookmarks", "formhistory.sqlite")
+                    "Web Data", "Archived History", "Bookmarks", "formhistory.sqlite",
+                    "logins.json", "Login Data")
 FICHIERS_SECRETS = {
     ".netrc": "identifiants d'accès enregistrés en clair (.netrc)",
     ".git-credentials": "identifiants git enregistrés en clair",
@@ -496,8 +500,14 @@ RE_LS_ISO = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # dpkg.log « 2026-01-04 18:30:00 », zypp « # 2026-01-05 21:10:00| », pacman
 # « [2026-01-06T20:00:01+0100] » : la date en tête, quel que soit le décor
 RE_DATE_LOG = re.compile(r'^[#\[\s]*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})')
+# Le « \.? » de tête n'est pas décoratif : un domaine de cookie s'écrit avec un
+# point devant (« .netflix.com », moz_cookies.host et Chrome cookies.host_key).
+# Sans lui, le regard-arrière voit ce point, refuse la position, et TOUS les
+# domaines de cookies sortent de l'analyse — l'artefact qui survit précisément
+# au vidage de l'historique. Le regard-arrière reste, lui : il garantit qu'un
+# hôte est pris entier (« www.exemple.fr », pas « exemple.fr » en plus).
 RE_HOTE = re.compile(
-    rb'(?<![a-z0-9.-])(?:[a-z][a-z0-9+.-]{1,10}://)?(?:[a-z0-9-]{1,63}\.)+[a-z]{2,24}'
+    rb'(?<![a-z0-9.-])\.?(?:[a-z][a-z0-9+.-]{1,10}://)?(?:[a-z0-9-]{1,63}\.)+[a-z]{2,24}'
     rb'(?:[/?#][^\x00\s"\'<>]{0,120})?', re.I)
 
 
@@ -525,8 +535,17 @@ class Balayage:
         self.motifs = [(ident, re.compile(brut)) for ident, brut in motifs]
 
     def compter(self, blob):
-        """{identifiant: Counter(trouvé en minuscules → occurrences dans la base)}"""
-        par = collections.defaultdict(collections.Counter)
+        """{identifiant: {trouvé en minuscules: (occurrences, hôtes où il l'est)}}
+
+        Le « trouvé » est le fragment que le motif de la règle a reconnu
+        (« netflix. »), et l'hôte est la suite d'octets où il l'a été. On rend
+        les deux : la règle se relit dans le premier, la pièce dans le second.
+        Ces octets viennent d'une base lue au niveau des octets, pas en SQL :
+        un hôte y arrive parfois collé à ce qui le suit. C'est visible, et
+        c'est plus honnête que de le rogner au jugé.
+        """
+        par = collections.defaultdict(lambda: collections.defaultdict(
+            lambda: [0, set()]))
         if not self.motifs:
             return par
         hotes = collections.Counter(m.group(0).lower().decode("latin-1")
@@ -534,7 +553,9 @@ class Balayage:
         for hote, n in hotes.items():
             for ident, rx in self.motifs:
                 for m in rx.finditer(hote):
-                    par[ident][m.group(0).lower()] += n
+                    trouve = par[ident][m.group(0).lower()]
+                    trouve[0] += n
+                    trouve[1].add(hote[:80])
         return par
 
 
@@ -1050,8 +1071,10 @@ def _chercher_domaine(pieces, motif, brut, ident):
     faits, visites = pieces["faits"], pieces["visites"]
     for compte, p in sorted(comptes_.items()):
         for source, comptages in p["navigateurs"]:
-            for v, n in sorted(comptages.get(ident, {}).items()):
-                date, note = None, f"{n} occurrence(s) dans la base"
+            for v, (n, hotes) in sorted(comptages.get(ident, {}).items()):
+                date = None
+                note = (f"{n} occurrence(s) dans la base, dans "
+                        + ", ".join("« %s »" % h for h in sorted(hotes)[:4]))
                 # les faits du skill forensic datent la visite — et
                 # distinguent une visite d'un téléchargement
                 liees = [f for f in visites.get(compte, ()) if v in f["_texte"]]
@@ -1067,8 +1090,9 @@ def _chercher_domaine(pieces, motif, brut, ident):
                                  + ") : plus qu'une consultation, à citer comme tel")
                 elif faits:
                     note += (" ; aucun fait daté ne cite ce domaine : il vient des "
-                             "cookies, d'un favori ou d'une page libérée — pas "
-                             "d'une visite datée")
+                             "cookies, d'un favori, d'un mot de passe enregistré "
+                             "ou d'une page libérée — pas d'une visite datée. "
+                             "Le fichier nommé en source dit lequel")
                 else:
                     note += " ; la date se lit avec --faits"
                 yield dict(quoi="domaine présent dans une base de navigateur",

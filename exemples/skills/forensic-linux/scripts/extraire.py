@@ -1821,8 +1821,15 @@ def timeline(c):
                  fichier, c.rel(chemin), f"chemins sous « {prefixe}/ » dans la timeline",
                  horodatage=_date_timeline(quand, fuseau), acteur=f.get("acteur"),
                  confirme=f["id"], genre=genre,
+                 # « écrit » et « lu » ne se commentent pas de la même phrase :
+                 # une création sous le point de montage est une copie VERS le
+                 # support, une lecture seule n'est pas une copie du tout.
                  note=_GENRES.get(genre.replace(".", "") or "", "dates du fichier")
-                      + " — c'est ainsi qu'une copie se montre")
+                      + (" — un fichier créé ou modifié sous le point de montage "
+                         "est une COPIE VERS le support" if ecrit else
+                         " — une lecture, pas une copie : si le fichier a été "
+                         "recopié vers le poste, c'est le même nom, ailleurs "
+                         "dans la timeline, qui le dira"))
 
 
 _GENRES = {

@@ -307,9 +307,17 @@ def main():
     par_compte = {}
     for x in sess:
         par_compte.setdefault(x["acteur"], []).append(x)
+    # « dernière écriture dans le dossier du compte » est une date, pas une
+    # nature : la mettre ici lui collait les dates de session du compte, qui ne
+    # sont pas les siennes. Elle est déjà dans le tableau qui suit, avec sa
+    # source. Ce tableau-ci répond à une seule question : quels comptes, de
+    # quelle sorte, et quand ont-ils ouvert une session.
+    NATURES = ("compte local ouvrant une session", "compte de service avec un shell",
+               "compte de domaine vu sur la machine", "compte sans mot de passe",
+               "adresse de courriel configurée")
     lignes, vus = [], set()
     for f in par.get("compte", []):
-        if "(nombre)" in f["fait"]:
+        if "(nombre)" in f["fait"] or f["fait"] not in NATURES:
             continue
         s = par_compte.get(f["valeur"], [])
         vus.add(f["valeur"])
@@ -427,8 +435,10 @@ def main():
         for h, n in sorted(visites.items(), key=lambda x: (-x[1], x[0])):
             d = sorted(x for x in dates_par_hote[h] if x)
             lignes.append((h, n, H.lire(d[0])[1] if d else "—", H.lire(d[-1])[1] if d else "—"))
-        S.append(f"**{len(pages)} pages** dans l'historique, {len(cookies)} domaines "
-                 f"à cookie, {len(charges)} téléchargements. Domaines les plus visités :\n")
+        S.append(f"**{len(pages)} page{'s' if len(pages) > 1 else ''}** dans l'historique, "
+                 f"{len(cookies)} domaine{'s' if len(cookies) > 1 else ''} "
+                 f"à cookie, {len(charges)} téléchargement{'s' if len(charges) > 1 else ''}. "
+                 "Domaines les plus visités :\n")
         S.append(tableau(["domaine", "visites", "première page", "dernière page"], lignes,
                          borne=min(borne, 25), quoi="domaines", fichier="faits.jsonl"))
         # le recoupement que le skill demande : un cookie sans page d'historique
@@ -488,9 +498,15 @@ def main():
         if not lignes:
             continue
         S.append(f"### Ce qui a été lu ou écrit sous {m['valeur']} ({m['id']})\n")
-        S.append(table(["date", "quoi", "fichier", "dates du fichier", "id"],
+        S.append(table(["date", "quoi", "fichier", "ce que disent ses dates", "id"],
                        [(quand(f), f["fait"].replace("fichier ", "").replace(" sur un support amovible", ""),
-                         f["valeur"], f.get("genre"), f["id"]) for f in lignes],
+                         f["valeur"],
+                         # « ...b » est le drapeau brut de mactime ; la note du
+                         # fait le dit en français. Un rapport se lit sans table
+                         # de correspondance : les deux, le mot d'abord.
+                         T("%s (%s)" % (f.get("note") or "—", f["genre"])
+                           if f.get("genre") else (f.get("note") or "—")),
+                         f["id"]) for f in lignes],
                        quoi="fichiers de ce support"))
     S.append(a_rediger("par support : branchement, numéro de série, modèle, "
                        "montage (le chemin /run/media/<compte>/ nomme le compte), "
