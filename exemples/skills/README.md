@@ -37,14 +37,27 @@ n'est pas un endroit où poser quoi que ce soit :**
 
 | dossier | ce que c'est | ce qu'on y met |
 |---|---|---|
-| `~/.config/crush/` | la **configuration** — `crushrc`, `skills/` | vos fichiers |
-| `~/.local/share/crush/` | l'**état** de Crush : sessions, cache | rien, jamais |
+| `~/.config/crush/` | la **configuration** — `crushrc`, `crush.json`, `skills/` | vos fichiers |
+| `~/.local/share/crush/` | l'**état** de Crush : sessions, cache, et un `crush.json` qu'il écrit lui-même | rien à la main |
 
 Le piège est que Crush écrit dans le second un fichier qui s'appelle aussi
-`crush.json`. **Ce n'est pas votre configuration** : c'est son état interne, il
-le réécrit quand il veut. Une configuration posée là est ignorée, et un skill
-posé là n'est jamais trouvé — le dossier d'état ne figure dans aucune des
-listes ci-dessous.
+`crush.json`. Il est **lu comme de la configuration** — `lookupConfigs` le place
+dans la liste — et, parce qu'il vient **après** `~/.config/crush/`, il **prime
+sur lui** : un réglage écrit dans le dossier d'état l'emporte silencieusement
+sur le même réglage écrit dans le dossier de configuration. L'ordre complet, du
+plus faible au plus fort :
+
+    config système  →  ~/.config/crush/crush.json  →  ~/.config/crush/crushrc
+                    →  ~/.local/share/crush/crush.json  →  configs du projet
+
+Ce n'est pas pour autant l'endroit où écrire : le README de Crush le dit
+« state and should not be edited by hand, nor should it be considered
+configuration », et Crush le réécrit tout seul — changer de modèle par `ctrl+l`
+y laisse une trace. **Si un réglage semble ignoré, c'est le premier fichier à
+regarder** : il écrase peut-être ce que vous venez d'éditer.
+
+Un skill posé dans le dossier d'état, en revanche, n'est jamais trouvé : ce
+dossier ne figure dans aucune des listes ci-dessous.
 
 Si votre installation est sous `~/.local/`, c'est presque sûrement l'une de ces
 deux choses, et **aucune ne change quoi que ce soit à ce qui suit** :

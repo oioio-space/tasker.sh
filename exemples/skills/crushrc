@@ -7,8 +7,10 @@
 # racine du dossier d'analyse (prioritaire). JAMAIS dans les scellés.
 #
 # Crush cherche, dans l'ordre : ./.crushrc, ./crushrc, ~/.config/crush/crushrc
-# — et ~/.config suit XDG_CONFIG_HOME. ~/.local/share/crush/ n'est PAS de la
-# configuration : c'est l'état de Crush, il n'y exécute aucun crushrc.
+# — et ~/.config suit XDG_CONFIG_HOME. Il n'exécute aucun crushrc depuis
+# ~/.local/share/crush/, mais il y LIT le crush.json qu'il écrit lui-même, et
+# celui-là prime sur ~/.config/crush/. Si un réglage d'ici semble sans effet,
+# regardez ~/.local/share/crush/crush.json avant toute chose.
 #
 # L'avantage sur le JSON n'est pas cosmétique : ceci est un shell, donc $HOME
 # et XDG_CONFIG_HOME y sont développés pour de vrai, partout. En crush.json,
@@ -36,7 +38,12 @@ provider add dgx \
     --discover-models false \
     --extra-body '{"chat_template_kwargs":{"enable_thinking":true}}'
 
-# context-window : 262144 est ce que DÉCLARE le checkpoint lui-même
+# context-window : mettez CE QUE VOTRE SERVEUR SERT, pas ce qu'annonce la carte
+# du modèle. Trop grand, Crush se croit au large, ne résume jamais à temps, et
+# c'est le serveur qui refuse en plein rapport. La valeur servie se lit par
+#     curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
+#
+# 262144 est ce que DÉCLARE le checkpoint lui-même
 # (max_position_embeddings dans config.json, identique en BF16 et en FP8,
 # rope_scaling null). Le million de jetons annoncé par NVIDIA est réel — RULER
 # @ 1M donne 91,75 — mais il ne s'obtient pas tout seul : il faut servir avec
@@ -48,7 +55,7 @@ provider add dgx \
 model add "$MODELE" \
     --name "Nemotron 3 Super 120B-A12B" \
     --context-window 262144 \
-    --default-max-tokens 32000 \
+    --default-max-tokens 16000 \
     --can-reason true \
     --supports-images false \
     --price-input 0 \
@@ -57,8 +64,14 @@ model add "$MODELE" \
 # Crush veut un modèle « large » et un « small » (résumés, sous-agents). Le
 # DGX n'en sert qu'un : small est le même, avec un budget de réponse plus
 # court. Si un second modèle est servi, c'est ici qu'il se déclare.
-model large "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 32000
-model small "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 16000
+# max-tokens 16000, et pas davantage : Crush déclenche son résumé automatique
+# quand il ne reste qu'une MARGE — 20000 jetons si context-window dépasse
+# 200000, et 20 % de context-window sinon (internal/agent/agent.go). Le résumé
+# arrive entre deux étapes : si max-tokens dépasse cette marge, la requête qui
+# le précède dépasse déjà, et le serveur répond « Bad Request » en plein
+# rapport. 16000 tient pour 131072 comme pour 262144 et au-delà.
+model large "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 16000
+model small "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 8000
 
 # ── les outils ────────────────────────────────────────────────────────
 # Lecture seule sans confirmation : c'est tout ce dont les skills ont besoin.
