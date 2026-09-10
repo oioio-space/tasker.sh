@@ -1,0 +1,91 @@
+# crushrc — configuration Crush pour les deux skills forensiques, avec
+# Nemotron 3 Super servi en local (vLLM, NIM ou TRT-LLM, tous compatibles
+# OpenAI). C'est le format COURANT de Crush : du Bash avec des builtins.
+# crush.json, à côté, fait la même chose dans le format déprécié.
+#
+# À copier dans ~/.config/crush/crushrc (global), ou dans ./crushrc à la
+# racine du dossier d'analyse (prioritaire). JAMAIS dans les scellés.
+#
+# Crush cherche, dans l'ordre : ./.crushrc, ./crushrc, ~/.config/crush/crushrc
+# — et ~/.config suit XDG_CONFIG_HOME. ~/.local/share/crush/ n'est PAS de la
+# configuration : c'est l'état de Crush, il n'y exécute aucun crushrc.
+#
+# L'avantage sur le JSON n'est pas cosmétique : ceci est un shell, donc $HOME
+# et XDG_CONFIG_HOME sont développés pour de vrai. Les chemins de hook et de
+# data-directory du crush.json, eux, doivent être écrits en absolu à la main —
+# un ~ n'y est pas développé, et un hook qui ne se résout pas ne bloque rien,
+# en silence.
+#
+# ATTENTION : un crushrc est du code exécuté au lancement, dans un shell
+# complet. Ne « source » jamais un fichier que vous n'avez pas lu.
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/crush"
+MODELE="dgx/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B"
+
+# ── le serveur d'inférence ────────────────────────────────────────────
+# Réglages tirés de la carte du modèle : temperature 1.0 et top_p 0.95 pour
+# toutes les tâches, raisonnement activé par chat_template_kwargs.
+# discover-models false : le poste est coupé d'Internet, le catalogue de
+# modèles ne doit pas être interrogé.
+provider add dgx \
+    --name "Nemotron 3 Super (DGX)" \
+    --type openai-compat \
+    --base-url "http://dgx.local:8000/v1" \
+    --api-key "sans-objet" \
+    --discover-models false \
+    --extra-body '{"chat_template_kwargs":{"enable_thinking":true}}'
+
+# context-window : c'est la valeur SERVIE qui fait foi, pas celle de la carte
+# du modèle. Le contexte natif est de 1 M, mais vLLM sert 262144 par défaut.
+# Lisez la vraie valeur avant de la recopier ici :
+#     curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
+model add "$MODELE" \
+    --name "Nemotron 3 Super 120B-A12B" \
+    --context-window 262144 \
+    --default-max-tokens 32000 \
+    --can-reason true \
+    --supports-images false \
+    --price-input 0 \
+    --price-output 0
+
+# Crush veut un modèle « large » et un « small » (résumés, sous-agents). Le
+# DGX n'en sert qu'un : small est le même, avec un budget de réponse plus
+# court. Si un second modèle est servi, c'est ici qu'il se déclare.
+model large "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 32000
+model small "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 16000
+
+# ── les outils ────────────────────────────────────────────────────────
+# Lecture seule sans confirmation : c'est tout ce dont les skills ont besoin.
+# edit, write, multiedit et bash restent soumis à confirmation, exprès.
+permissions allow view ls grep glob agent
+
+# Coupés net, et cachés du modèle. Les quatre touchent au réseau : sur un
+# poste d'analyse hors ligne ils ne peuvent qu'échouer bruyamment ou, pire,
+# réussir. « download » écrit en plus sur le disque.
+permissions deny fetch web_search sourcegraph download
+
+# ── les chemins ───────────────────────────────────────────────────────
+# skill-path n'est pas indispensable : $CONFIG/skills est déjà l'un des
+# dossiers que Crush regarde d'office, avec ~/.config/agents/skills,
+# ~/.agents/skills et ~/.claude/skills. Il est écrit pour que le chemin soit
+# visible, et parce que c'est le seul moyen d'en poser ailleurs.
+option skill-path "$CONFIG/skills"
+
+# L'état de session de Crush : dans le dossier d'analyse, jamais dans les
+# scellés, qui sont montés en lecture seule de toute façon.
+option data-directory "$HOME/analyse/.crush"
+
+# Poste hors ligne : ni mise à jour de catalogue, ni métriques.
+option provider-auto-update false
+option metrics false
+
+# ── la ceinture ───────────────────────────────────────────────────────
+# La seule garantie qui tienne reste « mount -o bind,ro » (README.md §3).
+# Ceci est une ceinture de plus, qui a le mérite d'EXPLIQUER au modèle
+# pourquoi il ne peut pas écrire. Le script refuse par un code 2, et son
+# message sur stderr devient le motif du refus.
+hook add PreToolUse \
+    --name "garde des scellés" \
+    --matcher '^(edit|write|multiedit|bash|download)$' \
+    --command "$CONFIG/garde-scelles.sh" \
+    --timeout 5

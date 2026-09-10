@@ -37,7 +37,7 @@ n'est pas un endroit où poser quoi que ce soit :**
 
 | dossier | ce que c'est | ce qu'on y met |
 |---|---|---|
-| `~/.config/crush/` | la **configuration** — `crush.json`, `skills/` | vos fichiers |
+| `~/.config/crush/` | la **configuration** — `crushrc`, `skills/` | vos fichiers |
 | `~/.local/share/crush/` | l'**état** de Crush : sessions, cache | rien, jamais |
 
 Le piège est que Crush écrit dans le second un fichier qui s'appelle aussi
@@ -81,7 +81,7 @@ Pour Crush, une fois pour toutes :
     mkdir -p "$K" "$C"
     cp -r exemples/skills/forensic-linux exemples/skills/conformite-linux "$K/"
     cp exemples/skills/garde-scelles.sh "$C/" && chmod +x "$C/garde-scelles.sh"
-    cp exemples/skills/crush.json "$C/crush.json"          # puis adaptez base_url
+    cp exemples/skills/crushrc    "$C/crushrc"             # puis adaptez base_url
 
 Ou seulement pour un dossier de travail — c'est le plus simple si vous voulez
 un jeu de skills par affaire :
@@ -93,10 +93,37 @@ Dans les deux cas, Crush doit lister les deux skills au démarrage. S'il ne les
 voit pas, c'est le chemin, pas le skill : relancez les trois commandes de
 vérification ci-dessus.
 
-`crush.json` est une configuration complète et commentée pour Nemotron 3 Super
-servi sur le DGX — voir le §9. `garde-scelles.sh` est la ceinture décrite au
-§3 ; le chemin par lequel `crush.json` l'appelle doit être celui où vous venez
-de le copier.
+### Deux formats, un seul à préférer
+
+Crush a changé de format de configuration. Le README de Crush est net :
+
+> What about the old JSON format? It's still supported, but it should be
+> considered deprecated.
+
+Le format courant est le **`crushrc`** — du Bash avec quelques builtins
+(`provider add`, `model large`, `permissions allow`, `hook add`, `option`),
+cherché dans `./.crushrc`, `./crushrc`, puis `~/.config/crush/crushrc`. Les
+deux fichiers sont fournis et font la même chose :
+
+| fichier | format | à préférer |
+|---|---|---|
+| `crushrc` | Bash, format courant | **oui** |
+| `crush.json` | JSON, déprécié mais toujours accepté | seulement si votre version de Crush est ancienne |
+
+Ce n'est pas qu'une question de mode : un `crushrc` est un shell, donc `$HOME`
+et `XDG_CONFIG_HOME` y sont **réellement développés**. Dans `crush.json`, ils ne
+le sont pas, et deux champs en souffrent — le chemin du hook et
+`data_directory` — qu'il faut y écrire en absolu, à la main. C'est pour ça que
+le `crush.json` fourni contient `/home/analyste/…` : **remplacez-le par votre
+vrai dossier personnel.**
+
+En revanche, `crushrc` est **du code exécuté au lancement**, dans un shell
+complet — et `crush.json` n'est pas inerte non plus : tout `$(...)` qui s'y
+trouve est exécuté au chargement. Ne lancez pas Crush dans un dossier dont vous
+n'avez pas lu la configuration.
+
+`garde-scelles.sh` est la ceinture décrite au §3 ; le §9 explique les réglages
+du modèle.
 
 ## 3 · Protéger les scellés
 
@@ -111,6 +138,25 @@ réglé, ni un modèle qui dérape — ne pourra écrire dans la collecte.
 L'extracteur, lui, ne modifie rien : il lit les archives en flux, sans les
 dépaqueter. C'est vérifié à chaque évolution en comparant l'empreinte de
 l'arborescence avant et après. Mais ne comptez pas là-dessus : montez en `ro`.
+
+### Vérifier que la ceinture mord
+
+`garde-scelles.sh` est une ceinture par-dessus le montage : elle a le mérite
+d'**expliquer** au modèle pourquoi il ne peut pas écrire, au lieu de le laisser
+buter sur un « permission denied ». Mais un hook dont le chemin ne se résout
+pas **ne bloque rien, et ne dit rien** — c'est le seul mode de panne dangereux,
+parce qu'il est silencieux. Alors on le vérifie, hors de Crush :
+
+    printf '{"tool_name":"write","tool_input":{"file_path":"/mnt/scelles/x"},"cwd":"/tmp"}' \
+        | ~/.config/crush/garde-scelles.sh ; echo "code $?"
+
+Le script doit écrire son refus et rendre **2**. Un code 0, ou « command not
+found », veut dire que la ceinture est absente : le chemin du hook est faux
+(dans `crush.json`, il doit être **absolu** — voir §2), ou le fichier n'est pas
+exécutable. Le montage en lecture seule, lui, tient toujours.
+
+Les dossiers protégés se listent un par ligne dans
+`~/.config/crush/scelles.txt` ; sans ce fichier, c'est `/mnt/scelles`.
 
 ## 4 · S'en servir
 
@@ -357,19 +403,22 @@ rester identique. Pour vérifier qu'ils n'ont pas dérivé :
 
 ## 9 · Crush et Nemotron 3 Super : la configuration, et pourquoi
 
-`crush.json` posé à côté est prêt à l'emploi. Ce qu'il règle, et d'où ça vient :
+`crushrc` (ou `crush.json`, déprécié — voir §2) posé à côté est prêt à
+l'emploi, **sauf trois valeurs qui dépendent de votre poste** : `base_url`, le
+dossier personnel dans les chemins du `crush.json`, et `context_window`. Le
+reste, et d'où ça vient :
 
 | réglage | valeur | pourquoi |
 |---|---|---|
 | `providers.dgx.type` | `openai-compat` | vLLM, NIM et TRT-LLM exposent tous l'API OpenAI |
 | `temperature`, `top_p` | `1.0`, `0.95` | ce que NVIDIA recommande pour ce modèle, **toutes tâches confondues** — raisonnement, appels d'outils, rédaction |
 | `extra_body.chat_template_kwargs.enable_thinking` | `true` | le raisonnement du modèle s'active par ce drapeau du gabarit de conversation ; `extra_body` n'existe que pour les fournisseurs compatibles OpenAI, et c'est le bon canal. `low_effort: true` allège le raisonnement, `reasoning_budget` le plafonne |
-| `context_window` | `262144` | le modèle accepte un million de jetons ; vLLM le sert à 256 k par défaut. Mettez ici ce que **votre** serveur accepte (`--max-model-len`) |
+| `context_window` | `262144` | le modèle accepte un million de jetons ; vLLM le sert à 256 k par défaut. C'est la valeur **servie** qui fait foi, pas celle de la carte du modèle : lisez-la sur le serveur (`curl -s http://dgx.local:8000/v1/models`, champ `max_model_len`) et recopiez-la ici |
 | `default_max_tokens` | `32000` | un brouillon se rédige passage par passage ; 32 k suffisent et bornent une réponse qui s'emballerait |
 | `permissions.allowed_tools` | `view ls grep glob agent` | lecture seule + sous-agents ; `edit` demande à chaque fois, `bash` n'est jamais accordé |
-| `options.disabled_tools` | `fetch web_search sourcegraph` | le poste est hors ligne : autant que le modèle ne voie pas ces outils, plutôt qu'il les essaie |
-| `options.data_directory` | `~/analyse/.crush` | la base de Crush (sessions, journaux) vit dans le dossier d'analyse, jamais dans les scellés |
-| `hooks.PreToolUse` | `garde-scelles.sh` | avant chaque `edit`, `write` ou `bash`, le script reçoit l'appel en JSON et **le bloque (code 2)** s'il nomme un chemin sous les scellés ; le motif du refus revient au modèle |
+| `options.disabled_tools` | `fetch web_search sourcegraph download` | le poste est hors ligne : autant que le modèle ne voie pas ces outils, plutôt qu'il les essaie. `download` s'y ajoute parce qu'il écrit en plus sur le disque |
+| `options.data_directory` | dossier d'analyse | la base de Crush (sessions, journaux) vit dans le dossier d'analyse, jamais dans les scellés. En `crush.json`, ce chemin doit être **absolu** : un `~` n'y est pas développé |
+| `hooks.PreToolUse` | `garde-scelles.sh` | avant chaque `edit`, `write`, `multiedit`, `bash` ou `download`, le script reçoit l'appel en JSON sur son entrée standard et **le bloque (code 2)** s'il nomme un chemin sous les scellés ; son message d'erreur devient le motif du refus rendu au modèle. `PreToolUse` est aujourd'hui le **seul** événement que Crush déclenche |
 
 Le modèle : 120 milliards de paramètres dont 12 actifs par jeton, hybride
 Mamba-2 / attention / experts. Ce qui compte pour ces skills : il est entraîné
@@ -379,10 +428,29 @@ appels d'outils malformés**. Le brouillon répond à la première (le plan est 
 disque, le modèle remplit un passage à la fois) ; la lecture seule répond à la
 seconde (un appel malformé ne peut rien casser).
 
+### Ce qui reste à confirmer sur votre poste
+
+Deux points n'ont pas pu être tranchés sans lancer Crush contre votre serveur,
+et il vaut mieux le dire que le laisser croire :
+
+  - **le nom du modèle dans `crushrc`.** Les builtins prennent la forme
+    `<provider>/<id>`, or l'identifiant Nemotron contient déjà une barre
+    oblique : `dgx/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B`. La découpe se
+    fait selon toute vraisemblance sur la **première** barre, mais vérifiez-le
+    d'un `crush models`, qui imprime la forme attendue ;
+  - **la tolérance de `_commentaire`** dans `crush.json`. Le schéma est en
+    `additionalProperties: false` ; Go ignore les clés inconnues, mais si votre
+    éditeur la souligne ou si Crush la refuse, supprimez le bloc : c'est de la
+    documentation, rien n'en dépend. N'y mettez **pas** de commentaires `//` :
+    Crush n'embarque pas de parseur JSONC, et la configuration entière serait
+    perdue.
+
 Sources, à relire si une version change : la carte du modèle sur NGC et
-`build.nvidia.com` (échantillonnage, `chat_template_kwargs`), le schéma
-`crush.json` de Crush (`extra_body`, `hooks`, `disabled_tools`,
-`data_directory`), et `docs/hooks/` du dépôt Crush (codes de sortie).
+`build.nvidia.com` (échantillonnage, `chat_template_kwargs`) ; le schéma
+`https://charm.land/crush.json` (`extra_body`, `hooks`, `disabled_tools`,
+`data_directory`, bornes de `temperature`, `top_p` et `max_tokens`) ; le README
+de Crush (formats de configuration, dossiers, dépréciation du JSON) ; et
+`docs/hooks/` du dépôt Crush (charge utile sur stdin, codes de sortie).
 
 ## Le skill de conformité, en deux mots
 

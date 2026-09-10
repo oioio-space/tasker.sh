@@ -1,6 +1,5 @@
 {
   "$schema": "https://charm.land/crush.json",
-
   "_commentaire": [
     "Configuration Crush pour les deux skills, avec Nemotron 3 Super servi en local",
     "(vLLM, NIM ou TRT-LLM, tous compatibles OpenAI). À copier dans ~/.config/crush/crush.json",
@@ -17,8 +16,26 @@
     "seul moyen de poser les skills ailleurs. Ce réglage AJOUTE un chemin, il n'en retire",
     "aucun — à la différence de la variable CRUSH_SKILLS_DIR, qui, elle, les remplace tous.",
     "",
-    "Le chemin de garde-scelles.sh doit être celui où vous l'avez réellement copié : un hook",
-    "introuvable ne bloque rien, et la ceinture ne sert plus à rien.",
+    "CE FORMAT EST DÉPRÉCIÉ. Le README de Crush : « What about the old JSON format? It's",
+    "still supported, but it should be considered deprecated. » Le format courant est le",
+    "crushrc, du Bash — voir crushrc à côté de ce fichier, qui fait exactement la même chose",
+    "et résout les deux pièges de chemin ci-dessous, puisque le shell développe $HOME.",
+    "",
+    "PIÈGE 1 — les chemins de hook. La doc des hooks, en IMPORTANT : « The command is",
+    "resolved relative to your current working directory — not relative to the config file.",
+    "For global config, you must use either an absolute path or an inline command. » Un ~",
+    "n'est PAS un chemin absolu. Et un hook qui ne se résout pas ne bloque rien, EN SILENCE :",
+    "la ceinture disparaît sans prévenir. Remplacez /home/analyste ci-dessous par votre",
+    "vrai dossier personnel, puis vérifiez que la garde mord — README.md §3.",
+    "",
+    "PIÈGE 2 — data_directory. Le schéma : les chemins relatifs sont résolus depuis le",
+    "dossier de travail, les absolus pris tels quels. Un ~ n'est ni l'un ni l'autre : Crush",
+    "risque de créer un dossier nommé « ~ » dans le dossier courant. Chemin absolu, donc.",
+    "",
+    "_commentaire n'est pas une clé du schéma (Config est en additionalProperties: false).",
+    "Go ignore les clés inconnues, et rien ici n'en dépend : si votre éditeur la souligne ou",
+    "si Crush la refuse un jour, supprimez ce bloc. N'y mettez pas de commentaires // : le",
+    "parseur de Crush n'est pas un parseur JSONC, la configuration entière serait perdue.",
     "",
     "Réglages tirés de la carte du modèle : temperature 1.0 et top_p 0.95 pour toutes les",
     "tâches ; le raisonnement s'active par chat_template_kwargs.enable_thinking ; contexte",
@@ -28,7 +45,6 @@
     "n'en sert qu'un : small est donc le même, avec un budget de réponse plus court. Si un",
     "second modèle est servi (un Nemotron Nano, par exemple), c'est ici qu'il se déclare."
   ],
-
   "providers": {
     "dgx": {
       "name": "Nemotron 3 Super (DGX)",
@@ -37,7 +53,9 @@
       "api_key": "sans-objet",
       "discover_models": false,
       "extra_body": {
-        "chat_template_kwargs": { "enable_thinking": true }
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        }
       },
       "models": [
         {
@@ -53,7 +71,6 @@
       ]
     }
   },
-
   "models": {
     "large": {
       "provider": "dgx",
@@ -70,25 +87,35 @@
       "max_tokens": 16000
     }
   },
-
   "permissions": {
-    "allowed_tools": ["view", "ls", "grep", "glob", "agent"]
+    "allowed_tools": [
+      "view",
+      "ls",
+      "grep",
+      "glob",
+      "agent"
+    ]
   },
-
   "options": {
-    "skills_paths": ["~/.config/crush/skills"],
-    "disabled_tools": ["fetch", "web_search", "sourcegraph"],
-    "data_directory": "~/analyse/.crush",
+    "skills_paths": [
+      "/home/analyste/.config/crush/skills"
+    ],
+    "disabled_tools": [
+      "fetch",
+      "web_search",
+      "sourcegraph",
+      "download"
+    ],
+    "data_directory": "/home/analyste/analyse/.crush",
     "disable_provider_auto_update": true,
     "disable_metrics": true
   },
-
   "hooks": {
     "PreToolUse": [
       {
         "name": "garde des scellés",
-        "matcher": "^(edit|write|multiedit|bash)$",
-        "command": "~/.config/crush/garde-scelles.sh",
+        "matcher": "^(edit|write|multiedit|bash|download)$",
+        "command": "/home/analyste/.config/crush/garde-scelles.sh",
         "timeout": 5
       }
     ]
