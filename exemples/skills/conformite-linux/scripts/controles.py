@@ -737,6 +737,11 @@ SECRETS = [
     (re.compile(r'curl\s+[^|]*-u\s+\S+:\S+'), "identifiant passé à curl"),
     (re.compile(r'\bmysql\s+.*-p\S+'), "mot de passe mysql sur la ligne de commande"),
     (re.compile(r'sshpass\s+-p'), "mot de passe SSH passé en argument"),
+    # Bornes VOLONTAIREMENT plus larges que celles du skill forensic (AKIA+16,
+    # gh?_+36, les longueurs exactes). Là-bas on balaie des gigaoctets d'octets
+    # bruts, où une borne lâche noierait le rapport de faux positifs ; ici on
+    # ne lit que des lignes de commande tapées par un humain, et un jeton
+    # tronqué ou coupé au collage doit quand même se voir.
     (re.compile(r'\b(gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{12,})'),
      "jeton d'accès en clair"),
 ]

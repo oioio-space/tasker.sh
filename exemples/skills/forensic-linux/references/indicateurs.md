@@ -117,11 +117,17 @@ temps de la recherche seulement :
 | `.gz` | en flux, sans jamais le charger — c'est le cas des chaînes de disque |
 | `.zip`, `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.epub`, `.jar`, `.apk` | un zip : chaque membre passe sous les motifs |
 | `.pdf` | les flux `FlateDecode` sont décomprimés. Le but n'est pas de rendre le PDF lisible — cela demanderait une bibliothèque — mais que ses octets décompressés passent sous les motifs. Un mot de passe écrit dans un PDF y devient visible ; sa mise en page, non |
-| `.bz2`, `.xz`, `.lzma` | en flux |
+| `.bz2`, `.xz`, `.lzma`, `.zst` | en flux. `zstd` demande Python 3.14 ou le paquet `zstandard` ; quand ni l'un ni l'autre n'est là, un fait `limite` le dit plutôt que de laisser le fichier passer pour illisible |
 
 C'est ce qui compte le plus pour `PHOTOREC/` : ce que photorec rend d'un
 traitement de texte est un `.docx`, et sans décompression les motifs n'y
 verraient rien alors que le texte est bien là.
+
+**La même lecture s'applique aux membres d'archive**, pas seulement aux fichiers
+posés sur le disque : un `syslog.2.gz` rangé dans `JOURNAUX/…_var_log.tar.gz`
+est décomprimé avant d'être soumis aux motifs. Sans cela, une chaîne présente
+dans un journal tourné ressortait **ABSENTE** de la collecte — et c'est là que
+`collecte-linux` range la plus grande partie des journaux.
 
 **L'empreinte porte sur le fichier tel qu'il est sur le disque**, jamais sur
 son contenu décompressé : un `sha256:` d'indicateur se compare bien au fichier
@@ -141,6 +147,12 @@ Le parcours des indicateurs est la partie longue de l'extraction : il lit
 chaque octet de la collecte, décompresse des gigaoctets de chaînes, ouvre
 chaque archive. Sur un gros dossier, c'est des heures.
 
+**Et il a lieu à chaque extraction**, même sans `--indicateurs` : la liste que
+l'outil cherche de lui-même suffit à le déclencher. C'est voulu — un secret qui
+traîne dans l'espace libre ne doit pas dépendre de ce que l'analyste a pensé à
+demander —, mais cela veut dire qu'une extraction coûte ce parcours, et c'est
+précisément ce que le journal ci-dessous amortit.
+
 Un journal `<sortie>-reprise.jsonl` note, **fichier par fichier**, ce qui a été
 parcouru et ce que cela a produit. Il est vidé sur le disque après chaque
 fichier : un plantage ne coûte que le fichier en cours.
@@ -155,9 +167,15 @@ compris** : le parcours est trié, donc les faits rejoués retombent sur les
 mêmes numéros. C'est vérifié par le test, qui coupe le journal en plein milieu
 d'une ligne — ce que fait un plantage réel — et compare les deux sorties.
 
-Le journal porte l'empreinte de la collecte et de la liste d'indicateurs :
-changer la liste l'invalide, puisque les faits d'avant répondaient à d'autres
-questions. `--sans-reprise` force un parcours complet.
+Le journal porte l'empreinte de la **provenance** : l'extracteur lui-même, la
+collecte, et les listes de recherche données. Changer l'un des trois l'invalide
+— les faits d'avant répondaient à d'autres questions, ou sortaient d'un autre
+code. `--sans-reprise` force un parcours complet.
+
+C'est la **même** valeur que le manifeste publie, sous `provenance_sha256`, et
+que l'annexe du rapport reprend avec l'empreinte de chaque liste : deux
+extractions qui portent la même provenance ont posé les mêmes questions au même
+outil sur la même collecte.
 
 
 ## Une simple liste de chaînes : `--textes`
@@ -190,15 +208,23 @@ lui donne, mais pas une copie qu'on aurait laissée ailleurs dans le dossier.
 
 ### Pourquoi une chaîne imbriquée dans une autre ressort quand même
 
-Les motifs sont cherchés en **une seule passe**, par une alternation. Une
-alternation ordinaire ne rend que des correspondances qui ne se chevauchent
-pas : le motif interne « mot de passe en clair », qui reconnaît
-`password = Bienvenue2025!`, avalerait `Bienvenue2025!`, et la chaîne demandée
-ressortirait **ABSENTE** — on annoncerait à l'analyste que sa preuve n'existe
-pas alors qu'elle est là.
+Les octets ne sont lus qu'**une fois**, mais chaque motif est cherché
+**séparément** sur ce qui défile. Regrouper les motifs en une seule alternation
+ne rendrait que des correspondances qui ne se chevauchent pas : le motif interne
+« mot de passe en clair », qui reconnaît `password = Bienvenue2025!`, avalerait
+`Bienvenue2025!`, et la chaîne demandée ressortirait **ABSENTE** — on
+annoncerait à l'analyste que sa preuve n'existe pas alors qu'elle est là.
 
-Chaque motif est donc enfermé dans un regard-avant, qui ne consomme rien : deux
-motifs peuvent reconnaître la même zone. Cela coûte environ un tiers de temps
-en plus (mesuré : 7,8 s contre 5,7 s pour 64 Mo sans correspondance), et c'est
-assumé — une recherche plus lente vaut mieux qu'une recherche qui ment, et le
-journal de reprise fait que ce temps n'est perdu qu'une fois.
+Des passes séparées ne peuvent pas se voler une correspondance : la question ne
+se pose plus. Et c'est aussi le plus rapide, à rebours de l'intuition, parce que
+`re` ne sait pas préfiltrer une alternation, dont le coût croît avec le nombre
+de branches. Mesuré sur 8 Mo de texte sans aucune correspondance :
+
+| motifs cherchés | passes séparées | une alternation |
+|---|---|---|
+| 11 (ceux de l'outil) | 1,0 s | 1,9 s |
+| 61 (+ un `--textes` de 50 lignes) | 2,7 s | 22,6 s |
+| 211 (+ un `--textes` de 200 lignes) | 7,9 s | 174 s |
+
+C'est le troisième cas qui compte : une liste de deux cents noms est exactement
+ce pour quoi `--textes` existe.

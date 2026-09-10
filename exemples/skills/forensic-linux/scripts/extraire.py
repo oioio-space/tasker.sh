@@ -15,6 +15,10 @@ import urllib.parse
 import sqlite3, struct, sys, tarfile, tempfile, zlib
 from datetime import datetime, timezone
 
+# Les colonnes de tête, dans l'ordre où on les lit. Les champs nommés en plus
+# par les faits (tty, vid, premiere, porte…) viennent ensuite, tout seuls : les
+# déclarer à la main faisait disparaître du CSV, sans un mot, tout ce qu'on
+# ajoutait ensuite au JSONL — et c'est justement là que sont les synthèses.
 COLONNES_CSV = ("id", "categorie", "fait", "valeur", "horodatage", "acteur", "confiance",
                 "source", "methode", "note")
 
@@ -677,15 +681,20 @@ MOTIFS_JOURNAL = [
     ("evenement", "changement d'utilisateur (su)", 'session opened',
      re.compile(r"\bsu(?:\[\d+\])?:.*session opened for user ([^\s(]+)(?:\(uid=\d+\))? by ([^\s(]+)"),
      lambda m: (m.group(2), f"est devenu {m.group(1)}", {"cible": m.group(1)})),
+    # « role » est un nom de MACHINE, que la synthèse et le brouillon peuvent
+    # reconnaître. Le libellé en français, lui, est du texte de rapport : le
+    # reformuler ne doit pas vider le tableau des supports sans un mot d'erreur,
+    # ce qui arrivait quand trois endroits sélectionnaient sur la phrase.
     ("support", "support amovible USB branché", 'New USB device',
      re.compile(r'usb\s+([\d.-]+):\s+New USB device found,\s*(.*)$'),
-     lambda m: (None, f"port {m.group(1)}, {m.group(2).strip()}")),
+     lambda m: (None, f"port {m.group(1)}, {m.group(2).strip()}",
+                {"role": "usb-branchement"})),
     # Le numéro de série est LA pièce d'identité du support : c'est lui qui
     # permet de dire que la même clé a servi sur une autre machine. Il ne doit
     # pas partager son étiquette avec le modèle.
     ("support", "numéro de série du support USB", 'SerialNumber',
      re.compile(r'usb\s+[\d.-]+:\s+SerialNumber:\s*(.+)$'),
-     lambda m: (None, m.group(1).strip())),
+     lambda m: (None, m.group(1).strip(), {"role": "usb-serie"})),
     ("support", "modèle du support USB", 'Product:',
      re.compile(r'usb\s+[\d.-]+:\s+Product:\s*(.+)$'),
      lambda m: (None, m.group(1).strip())),
@@ -706,7 +715,7 @@ MOTIFS_JOURNAL = [
     # existe pour un support amovible.
     ("support", "système de fichiers amovible monté", '/media/',
      re.compile(r'(?:mount|gvfs|udisks).*?((?:/run)?/media/([^/\s]+)/\S*)'),
-     lambda m: (m.group(2), m.group(1))),
+     lambda m: (m.group(2), m.group(1), {"role": "montage-amovible"})),
     ("support", "montage demandé par un compte", 'on behalf of',
      re.compile(r'on behalf of uid (\d+)'),
      lambda m: (None, f"uid {m.group(1)}")),
@@ -1813,7 +1822,7 @@ def _questions_timeline():
             nom = urllib.parse.unquote(str(f["valeur"])).rstrip("/").rsplit("/", 1)[-1]
             if len(nom) > 3:
                 fichiers.setdefault(nom.lower(), []).append(f)
-        elif f["fait"] == "système de fichiers amovible monté":
+        elif f.get("role") == "montage-amovible":
             montages.append((str(f["valeur"]).rstrip("/"), f))
     return fichiers, montages
 
@@ -1989,74 +1998,97 @@ def _sujet(texte):
     return None
 
 
-def documents(c):
-    """Les fichiers rendus sans nom, ouverts et caractérisés."""
-    rendus, tronque = 0, False
+def _apercu(chemin, taille=APERCU):
+    """Les premiers octets LISIBLES d'une pièce, sans la lire en entier.
+
+    Une pièce ordinaire se lit telle quelle ; une archive passe par sa
+    décompression. On ne passe pas par _blocs, qui sert le chercheur
+    d'indicateurs : lui a besoin des octets BRUTS pour calculer une empreinte,
+    et lirait donc un .docx de 200 Mo en entier — deux fois — pour rendre ici
+    quatre mille octets.
+    """
+    contenu = _decomprime(chemin, lambda: open(chemin, "rb"), {})
+    if contenu is None:
+        with open(chemin, "rb") as fh:
+            return fh.read(taille)
+    morceaux, vus = [], 0
+    for m in contenu:
+        if not m:
+            continue
+        morceaux.append(m)
+        vus += len(m)
+        if vus >= taille:
+            break
+    return b"".join(morceaux)[:taille]
+
+
+def _pieces_rendues(c):
+    """Les pièces des dossiers de récupération, dans un ordre stable."""
     for dossier in ("PHOTOREC", "SUPPRIMES"):
         base = os.path.join(c.racine, dossier)
         if not os.path.isdir(base):
-            # SUPPRIMES ne vient que de xfs_undelete, et xfs_undelete ne lit
-            # QUE de l'xfs. Son absence n'est donc pas un manque de collecte
-            # sur un poste en ext4 ou en btrfs : c'est qu'il n'existe pas
-            # d'équivalent. Le dire évite qu'un lecteur cherche une pièce qui
-            # ne peut pas exister — et évite qu'on la réclame à la collecte.
-            if dossier == "SUPPRIMES":
-                fait("limite", "aucune récupération par les inodes libérés",
-                     "SUPPRIMES/ absent", c.prefix,
-                     "présence du dossier produit par xfs_undelete",
-                     confiance="certaine",
-                     note="xfs_undelete ne lit QUE de l'xfs : sur ext4, btrfs ou "
-                          "tout autre système de fichiers, il n'y a pas "
-                          "d'équivalent, et les fichiers récupérés ne viennent "
-                          "que de photorec — donc sans inode, sans date, et "
-                          "seulement pour les types dont il a la signature. "
-                          "Absence normale si le volume n'est pas en xfs ; à "
-                          "reprendre s'il l'est")
             continue
-        for d, sous, fichiers in sorted(os.walk(base)):
+        for d, sous, noms in os.walk(base):
             sous.sort()
-            for f in sorted(fichiers):
-                if rendus >= DOCUMENTS_MAX:
-                    tronque = True
-                    continue
-                chemin = os.path.join(d, f)
-                etat = {}
-                morceaux, vus = [], 0
-                try:
-                    for _, clair in _blocs(chemin, etat):
-                        if not clair:
-                            continue
-                        morceaux.append(clair)
-                        vus += len(clair)
-                        if vus >= APERCU:
-                            break
-                except (OSError, zlib.error):
-                    continue
-                texte = _lisible(b"".join(morceaux)[:APERCU])
-                if not texte:
-                    continue
-                sujet = _sujet(texte)
-                porte = []
-                if RE_COURRIEL.search(texte) or RE_MAISON.search(texte) \
-                        or RE_TELEPHONE.search(texte) or RE_REDIGE.search(texte):
-                    porte.append("utilisateur")
-                if RE_SYSTEME.search(texte) or RE_IPV4.search(texte):
-                    porte.append("système")
-                octets = texte.encode("utf-8", "replace")
-                interessants = [nom for nom, motif, _ in INTERETS
-                                if re.search(motif.encode("utf-8"), octets, re.I)]
-                if interessants:
-                    porte.append("forensic")
-                rendus += 1
-                fait("document", "fichier rendu sans nom, et lisible",
-                     sujet or "(du texte, sans phrase identifiable)", c.rel(chemin),
-                     f"ouvert et lu sur ses {_taille(min(vus, APERCU))} premiers octets",
-                     confiance="forte", porte=" / ".join(porte) or "rien de remarquable",
-                     interet=" / ".join(interessants) or None,
-                     note="rendu par le carving : ni nom d'origine, ni date, ni compte. "
-                          "Ce qu'il contient est établi ; d'où il vient ne l'est pas"
-                          + (f". Motifs repérés dedans : {', '.join(interessants)}"
-                             if interessants else ""))
+            noms.sort()
+            for f in noms:
+                yield os.path.join(d, f)
+
+
+def documents(c):
+    """Les fichiers rendus sans nom, ouverts et caractérisés.
+
+    Ce que la pièce CONTIENT — de quoi ça parle, ce que ça porte. Les motifs
+    sensibles qui s'y trouvent ne sont pas cherchés ici : c'est le travail du
+    chercheur d'indicateurs, qui parcourt les mêmes dossiers avec la même
+    liste. Les chercher aux deux endroits donnait deux réponses différentes,
+    puisque l'un lit un aperçu et l'autre le fichier entier — et le rapport
+    montrait deux fois la même découverte sous deux intitulés.
+    """
+    # SUPPRIMES ne vient que de xfs_undelete, et xfs_undelete ne lit QUE de
+    # l'xfs. Son absence n'est donc pas un manque de collecte sur un poste en
+    # ext4 ou en btrfs : c'est qu'il n'existe pas d'équivalent. Le dire évite
+    # qu'un lecteur cherche une pièce qui ne peut pas exister — et évite qu'on
+    # la réclame à la collecte.
+    if not os.path.isdir(os.path.join(c.racine, "SUPPRIMES")):
+        fait("limite", "aucune récupération par les inodes libérés",
+             "SUPPRIMES/ absent", c.prefix,
+             "présence du dossier produit par xfs_undelete",
+             confiance="certaine",
+             note="xfs_undelete ne lit QUE de l'xfs : sur ext4, btrfs ou "
+                  "tout autre système de fichiers, il n'y a pas "
+                  "d'équivalent, et les fichiers récupérés ne viennent "
+                  "que de photorec — donc sans inode, sans date, et "
+                  "seulement pour les types dont il a la signature. "
+                  "Absence normale si le volume n'est pas en xfs ; à "
+                  "reprendre s'il l'est")
+    rendus, tronque = 0, False
+    for chemin in _pieces_rendues(c):
+        if rendus >= DOCUMENTS_MAX:
+            tronque = True
+            break
+        try:
+            octets = _apercu(chemin)
+        except (OSError, zlib.error):
+            continue
+        texte = _lisible(octets)
+        if not texte:
+            continue
+        porte = []
+        if RE_COURRIEL.search(texte) or RE_MAISON.search(texte) \
+                or RE_TELEPHONE.search(texte) or RE_REDIGE.search(texte):
+            porte.append("utilisateur")
+        if RE_SYSTEME.search(texte) or RE_IPV4.search(texte):
+            porte.append("système")
+        rendus += 1
+        fait("document", "fichier rendu sans nom, et lisible",
+             _sujet(texte) or "(du texte, sans phrase identifiable)", c.rel(chemin),
+             f"ouvert et lu sur ses {_taille(len(octets))} de tête",
+             confiance="forte", porte=" / ".join(porte) or "rien de remarquable",
+             note="rendu par le carving : ni nom d'origine, ni date, ni compte. "
+                  "Ce qu'il contient est établi ; d'où il vient ne l'est pas. "
+                  "Les motifs sensibles qu'il porterait sont posés à part, en "
+                  "faits « intérêt » sur la même pièce")
     if tronque:
         fait("limite", "documents rendus sans nom : seuls les premiers sont ouverts",
              str(DOCUMENTS_MAX), "PHOTOREC/, SUPPRIMES/",
@@ -2161,34 +2193,44 @@ def supports(c):
 
     Le rapprochement se fait sur le TEMPS, parce que c'est ce que le journal
     donne — le numéro de série suit son branchement de moins d'une minute. Un
-    numéro rattaché de cette façon est donc « forte », pas « certaine », et le
-    fait porte les identifiants des deux lignes pour qu'on puisse vérifier.
+    numéro rattaché de cette façon est donc « forte », pas « certaine », et la
+    note donne les identifiants des lignes rapprochées pour qu'on vérifie.
     """
-    branchements = [f for f in FAITS if f["fait"] == "support amovible USB branché"]
-    series = [f for f in FAITS if f["fait"] == "numéro de série du support USB"]
-    montages = [f for f in FAITS if f["fait"] == "système de fichiers amovible monté"]
+    # Un seul parcours des faits, et un seul appel à _horo par fait : la
+    # timeline en pose des centaines de milliers, et les relire trois fois puis
+    # reconvertir leur date à chaque comparaison coûtait des secondes pleines.
+    branchements, series, montages = [], [], []
+    par_role = {"usb-branchement": branchements, "usb-serie": series,
+                "montage-amovible": montages}
+    for f in FAITS:
+        cible = par_role.get(f.get("role"))
+        if cible is not None:
+            cible.append((_horo(f), f))
     if not branchements:
         return
     appareils = {}
-    for f in branchements:
+    for h, f in branchements:
         m = RE_VIDPID.search(f["valeur"] or "")
         cle = (m.group("vid").lower(), m.group("pid").lower()) if m else ("?", "?")
         a = appareils.setdefault(cle, {"vues": [], "series": {}, "montages": {}})
-        a["vues"].append(f)
-        h = _horo(f)
+        a["vues"].append((h, f))
+        if h is None:
+            continue
         # même seconde ou presque : le journal écrit les deux lignes d'affilée
-        for g in series:
-            hg = _horo(g)
-            if h and hg and abs((hg - h).total_seconds()) <= 60:
+        for hg, g in series:
+            if hg and abs((hg - h).total_seconds()) <= 60:
                 a["series"].setdefault(g["valeur"], g["id"])
-        for g in montages:
-            hg = _horo(g)
-            if h and hg and 0 <= (hg - h).total_seconds() <= 300:
+        for hg, g in montages:
+            if hg and 0 <= (hg - h).total_seconds() <= 300:
                 a["montages"].setdefault(g["valeur"], (g["id"], g.get("acteur")))
     for (vid, pid), a in sorted(appareils.items()):
-        vues = sorted(a["vues"], key=lambda f: _horo(f) or datetime.min)
+        vues = [f for _, f in sorted(a["vues"], key=lambda x: x[0] or datetime.min)]
         ids = ", ".join(f["id"] for f in vues[:8])
         comptes = sorted({c_ for _, c_ in a["montages"].values() if c_})
+        # Les identifiants des lignes rapprochées : c'est par eux qu'on refait
+        # à la main le rapprochement par le temps, qui n'est qu'« forte ».
+        rattaches = ", ".join(sorted({i for i in a["series"].values()}
+                                     | {i for i, _ in a["montages"].values()}))
         fait("appareil", "support amovible reconnu",
              " / ".join(a["series"]) or f"{vid}:{pid} (sans numéro de série lu)",
              vues[0]["source"], "branchements du journal regroupés par idVendor:idProduct",
@@ -2200,6 +2242,7 @@ def supports(c):
              acteur=comptes[0] if len(comptes) == 1 else None,
              note=f"idVendor={vid} idProduct={pid} ; {len(vues)} branchement(s) "
                   f"({ids})"
+                  + (f" ; rapproché par le temps de {rattaches}" if rattaches else "")
                   + (f" ; monté par {', '.join(comptes)}" if comptes else
                      " ; aucun montage relevé — branché sans être monté, ou montage "
                      "hors des journaux collectés")
@@ -2208,6 +2251,26 @@ def supports(c):
 
 
 # ── mise en ordre ─────────────────────────────────────────────────────
+def _zstd(fh):
+    """Un lecteur zstd posé sur un flux, ou None si le poste ne sait pas le lire.
+
+    zstd n'entre dans la bibliothèque standard qu'avec Python 3.14 ; avant, il
+    faut le paquet « zstandard », qui n'est pas toujours installé. Rendre None
+    plutôt que lever laisse l'appelant en faire un fait : un journal qu'on n'a
+    pas su ouvrir doit se dire, jamais passer pour un journal vide.
+    """
+    try:
+        from compression import zstd                    # Python 3.14+
+        return zstd.ZstdFile(fh)
+    except ImportError:
+        pass
+    try:
+        import zstandard                                # si le paquet est là
+        return zstandard.ZstdDecompressor().stream_reader(fh)
+    except ImportError:
+        return None
+
+
 def decomprimer(nom, blob):
     """Le contenu d'un journal tourné, quel que soit son compresseur.
 
@@ -2224,16 +2287,8 @@ def decomprimer(nom, blob):
         if nom.endswith(".bz2"):
             return bz2.decompress(blob)
         if nom.endswith(".zst"):
-            try:
-                from compression import zstd            # Python 3.14+
-                return zstd.decompress(blob)
-            except ImportError:
-                try:
-                    import zstandard                    # si le paquet est là
-                    return zstandard.ZstdDecompressor().stream_reader(
-                        io.BytesIO(blob)).read()
-                except ImportError:
-                    return None
+            fh = _zstd(io.BytesIO(blob))
+            return fh.read() if fh is not None else None
     except (OSError, EOFError, lzma.LZMAError, ValueError):
         return None
     return blob
@@ -2467,46 +2522,57 @@ def lire_textes(chemins):
     n'a qu'une liste — des noms, des références de dossier, des mots-clés
     d'affaire. Ici, une ligne est une chaîne, et c'est tout. Les lignes vides
     et celles qui commencent par « # » sont ignorées ; un « # » en fin de
-    ligne sert d'étiquette, comme dans le fichier d'indicateurs.
-
-    Cherchées à la lettre et sans tenir compte de la casse — jamais comme une
-    expression rationnelle : quelqu'un qui écrit « Dupont (RH) » veut ces
-    caractères-là, pas un groupe de capture.
+    ligne sert d'étiquette, comme dans le fichier d'indicateurs — c'est la même
+    lecture de ligne, et les chaînes sont cherchées à la lettre.
     """
     liste = []
     for chemin in chemins:
         vus = 0
         with open(chemin, encoding="utf-8") as fh:
             for ligne in fh:
-                nue = ligne.strip()
-                if not nue or nue.startswith("#"):
-                    continue
-                etiquette = None
-                coupe = re.search(r'\s+#\s*(.*)$', nue)
-                if coupe:
-                    etiquette, nue = coupe.group(1).strip() or None, nue[:coupe.start()].strip()
+                nue, etiquette = _ligne_liste(ligne)
                 if not nue:
                     continue
-                liste.append({"genre": "texte", "valeur": nue,
-                              "motif": re.compile(re.escape(nue.encode("utf-8")), re.I),
-                              "etiquette": etiquette})
+                liste.append(_a_la_lettre("texte", nue, etiquette))
                 vus += 1
         if not vus:
             sys.exit(f"{chemin} : aucune chaîne lisible")
     return liste
 
 
+def _ligne_liste(ligne):
+    """(la chaîne, son étiquette) d'une ligne de liste, ou (None, None).
+
+    La même règle pour les deux formats de liste : ligne vide ou commençant par
+    « # » ignorée, « # » en fin de ligne = étiquette. Les séparer laissait les
+    deux fichiers diverger sur un détail que l'analyste croit commun.
+    """
+    nue = ligne.strip()
+    if not nue or nue.startswith("#"):
+        return None, None
+    coupe = re.search(r'\s+#\s*(.*)$', nue)
+    if not coupe:
+        return nue, None
+    return nue[:coupe.start()].strip() or None, coupe.group(1).strip() or None
+
+
+def _a_la_lettre(genre, valeur, etiquette):
+    """Un indicateur cherché À LA LETTRE, sans tenir compte de la casse.
+
+    Jamais comme une expression rationnelle : quelqu'un qui écrit
+    « Dupont (RH) » veut ces caractères-là, pas un groupe de capture.
+    """
+    return {"genre": genre, "valeur": valeur, "etiquette": etiquette,
+            "motif": re.compile(re.escape(valeur.encode("utf-8")), re.I)}
+
+
 def lire_indicateurs(chemin):
     liste = []
     with open(chemin, encoding="utf-8") as fh:
         for num, ligne in enumerate(fh, 1):
-            nue = ligne.strip()
-            if not nue or nue.startswith("#"):
+            nue, etiquette = _ligne_liste(ligne)
+            if not nue:
                 continue
-            etiquette = None
-            coupe = re.search(r'\s+#\s*(.*)$', nue)
-            if coupe:
-                etiquette, nue = coupe.group(1).strip() or None, nue[:coupe.start()].strip()
             if ":" not in nue:
                 sys.exit(f"{chemin}:{num} : attendu « type: valeur » — {nue}")
             genre, valeur = (x.strip() for x in nue.split(":", 1))
@@ -2527,7 +2593,8 @@ def lire_indicateurs(chemin):
             elif genre == "fichier":
                 motif = None
             else:
-                motif = re.compile(re.escape(valeur.encode("utf-8")), re.I)
+                liste.append(_a_la_lettre(genre, valeur, etiquette))
+                continue
             liste.append({"genre": genre, "valeur": valeur, "motif": motif,
                           "etiquette": etiquette})
     if not liste:
@@ -2548,11 +2615,11 @@ _ZIP = (".zip", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub", ".ja
 RE_FLUX_PDF = re.compile(rb'stream\r?\n(.*?)endstream', re.S)
 
 
-def _membres_zip(chemin, etat):
+def _membres_zip(ouvrir, etat):
     import zipfile
     rendu = 0
     try:
-        with zipfile.ZipFile(chemin) as z:
+        with contextlib.closing(ouvrir()) as src, zipfile.ZipFile(src) as z:
             for info in z.infolist():
                 if info.is_dir():
                     continue
@@ -2561,7 +2628,10 @@ def _membres_zip(chemin, etat):
                     return
                 try:
                     with z.open(info) as fh:
-                        yield fh.read()
+                        # par blocs : un membre de 200 Mo ne devient jamais un
+                        # seul bloc d'octets en mémoire
+                        for m in iter(lambda: fh.read(1 << 20), b""):
+                            yield m
                 except (OSError, zipfile.BadZipFile, RuntimeError):
                     continue           # membre chiffré ou abîmé : les autres restent
                 rendu += info.file_size
@@ -2569,7 +2639,7 @@ def _membres_zip(chemin, etat):
         etat["illisible"] = "archive illisible"
 
 
-def _flux_pdf(chemin, etat):
+def _flux_pdf(ouvrir, etat, fenetre=1 << 24):
     """Les flux compressés d'un PDF, quand ils le sont en zlib.
 
     Un PDF n'est pas une archive : c'est un format à objets, dont le texte vit
@@ -2577,77 +2647,123 @@ def _flux_pdf(chemin, etat):
     rendre lisible — extraire un texte de PDF demande une bibliothèque —, on
     veut seulement que les octets DÉCOMPRESSÉS passent sous les motifs. Un
     mot de passe écrit dans un PDF y devient visible ; sa mise en page, non.
+
+    Lu par fenêtres : un PDF hostile de plusieurs centaines de mégaoctets
+    tiendrait sinon d'un seul bloc en mémoire, et le rapport n'en tire que
+    quelques milliers d'octets. Un flux à cheval sur deux fenêtres se voit
+    quand même — on garde ce qui suit la dernière balise fermante.
     """
+    rendu, reste = 0, b""
     try:
-        with open(chemin, "rb") as fh:
-            brut = fh.read(PLAFOND_ARCHIVE)
+        with contextlib.closing(ouvrir()) as fh:
+            for bloc in iter(lambda: fh.read(fenetre), b""):
+                brut, fin = reste + bloc, 0
+                for m in RE_FLUX_PDF.finditer(brut):
+                    fin = m.end()
+                    try:
+                        clair = zlib.decompress(m.group(1))
+                    except zlib.error:
+                        continue       # flux non comprimé, ou autre filtre
+                    rendu += len(clair)
+                    if rendu > PLAFOND_ARCHIVE:
+                        etat["tronque"] = "plafond d'archive atteint"
+                        return
+                    yield clair
+                reste = brut[fin:]
+                if len(reste) > fenetre:
+                    # un flux plus long qu'une fenêtre : on ne le reconstitue
+                    # pas, mais on ne le tait pas non plus
+                    etat["tronque"] = "flux PDF plus long qu'une fenêtre de lecture"
+                    reste = b""
     except OSError:
         return
+
+
+def _morceaux(lecteur, ouvrir, etat, bloc=1 << 20):
+    """Les blocs décomprimés d'un flux, jusqu'au plafond d'archive."""
+    try:
+        fh = lecteur(ouvrir())
+    except (OSError, EOFError, ValueError, lzma.LZMAError):
+        etat["illisible"] = "archive illisible"
+        return
+    if fh is None:
+        etat["illisible"] = "compresseur non pris en charge sur ce poste"
+        return
     rendu = 0
-    for m in RE_FLUX_PDF.finditer(brut):
-        try:
-            clair = zlib.decompress(m.group(1))
-        except zlib.error:
-            continue                   # flux non comprimé, ou autre filtre
-        rendu += len(clair)
-        if rendu > PLAFOND_ARCHIVE:
-            etat["tronque"] = "plafond d'archive atteint"
-            return
-        yield clair
+    try:
+        with contextlib.closing(fh):
+            for m in iter(lambda: fh.read(bloc), b""):
+                rendu += len(m)
+                if rendu > PLAFOND_ARCHIVE:
+                    etat["tronque"] = "plafond d'archive atteint"
+                    return
+                yield m
+    except (OSError, EOFError, ValueError, lzma.LZMAError, zlib.error):
+        etat["illisible"] = "archive illisible"
 
 
-def _decomprime(chemin, etat):
-    """Le contenu lisible d'un fichier comprimé, morceau par morceau, ou None.
+# Un couple (suffixe, lecteur de flux). La même table sert au journal tourné
+# rangé dans un tar et au fichier comprimé posé sur le disque : ajouter un
+# compresseur ici le rend lisible partout, et il n'y a pas d'endroit où un
+# .zst serait vu et un autre où il passerait pour du binaire.
+_FLUX = ((".bz2", bz2.BZ2File), (".xz", lzma.LZMAFile), (".lzma", lzma.LZMAFile),
+         (".zst", lambda fh: _zstd(fh)))
 
-    None veut dire « ce fichier est déjà son propre contenu » — et c'est ce qui
-    permet à _blocs de n'avoir qu'une forme de sortie pour tout le monde.
+
+def _decomprime(nom, ouvrir, etat):
+    """Le contenu lisible d'une source comprimée, morceau par morceau, ou None.
+
+    None veut dire « cette source est déjà son propre contenu » — et c'est ce
+    qui permet à _blocs de n'avoir qu'une forme de sortie pour tout le monde.
+
+    « ouvrir » rend un fichier binaire NEUF à chaque appel : un open() pour une
+    pièce posée sur le disque, un BytesIO pour un membre de tar déjà en
+    mémoire. La décompression ignore donc la provenance — et un journal tourné
+    vaut le même traitement qu'il soit sur le disque ou rangé dans une archive.
     """
-    bas = chemin.lower()
+    bas = nom.lower()
     if bas.endswith(_ZIP):
-        return _membres_zip(chemin, etat)
+        return _membres_zip(ouvrir, etat)
     if bas.endswith(".pdf"):
-        return _flux_pdf(chemin, etat)
-    for suffixe, ouvrir in ((".bz2", bz2.open), (".xz", lzma.open), (".lzma", lzma.open)):
+        return _flux_pdf(ouvrir, etat)
+    for suffixe, lecteur in _FLUX:
         if bas.endswith(suffixe):
-            def flux(ouvrir=ouvrir):
-                try:
-                    with ouvrir(chemin, "rb") as fh:
-                        rendu = 0
-                        for m in iter(lambda: fh.read(1 << 20), b""):
-                            rendu += len(m)
-                            if rendu > PLAFOND_ARCHIVE:
-                                etat["tronque"] = "plafond d'archive atteint"
-                                return
-                            yield m
-                except (OSError, EOFError, ValueError):
-                    etat["illisible"] = "archive illisible"
-            return flux()
+            return _morceaux(lecteur, ouvrir, etat)
     return None
 
 
-def _blocs(chemin, etat=None, bloc=1 << 20):
-    """Rend (brut, clair) : les octets du fichier, et son contenu lisible.
+def _blocs(nom, ouvrir, etat=None, bloc=1 << 20):
+    """Rend (brut, clair) : les octets de la source, et son contenu lisible.
 
     Le strings d'un disque pèse des gigaoctets : il ne peut être ni chargé en
     mémoire, ni lu deux fois. Tout passe donc en flux. L'empreinte se calcule
-    sur « brut », les motifs courent sur « clair » — pour un fichier ordinaire
+    sur « brut », les motifs courent sur « clair » — pour une source ordinaire
     les deux sont le même bloc, et rien n'est copié.
 
     Un .gz se décompresse au fil des blocs bruts, ce qui donne les deux en UNE
-    lecture. Une archive (zip, docx, pdf, bz2, xz) se lit deux fois : ses
+    lecture. Une archive (zip, docx, pdf, bz2, xz, zst) se lit deux fois : ses
     octets pour l'empreinte, puis son contenu. C'est le prix pour voir dans un
-    document rendu par photorec, et il ne se paie que sur ces fichiers-là.
+    document rendu par photorec, et il ne se paie que sur ces sources-là — et
+    seulement si l'appelant va jusqu'au bout : le second passage n'est ouvert
+    qu'une fois le premier épuisé.
     """
     etat = {} if etat is None else etat
-    dec = zlib.decompressobj(16 + zlib.MAX_WBITS) if chemin.endswith(".gz") else None
-    contenu = None if dec else _decomprime(chemin, etat)
-    with open(chemin, "rb") as fh:
+    dec = zlib.decompressobj(16 + zlib.MAX_WBITS) if nom.lower().endswith(".gz") else None
+    comprime = dec is None and _comprimee(nom)
+    with contextlib.closing(ouvrir()) as fh:
         for brut in iter(lambda: fh.read(bloc), b""):
             yield brut, (dec.decompress(brut) if dec else
-                         (b"" if contenu is not None else brut))
-    if contenu is not None:
-        for morceau in contenu:
+                         (b"" if comprime else brut))
+    if comprime:
+        for morceau in _decomprime(nom, ouvrir, etat) or ():
             yield b"", morceau
+
+
+def _comprimee(nom):
+    """Vrai si _decomprime saura tirer un contenu de cette source."""
+    bas = nom.lower()
+    return bas.endswith(_ZIP) or bas.endswith(".pdf") \
+        or any(bas.endswith(s) for s, _ in _FLUX)
 
 
 class Reprise:
@@ -2692,12 +2808,17 @@ class Reprise:
             self.connus = {}
         return len(self.connus)
 
-    def ouvrir(self):
+    def __enter__(self):
         self.fh = open(self.chemin, "w", encoding="utf-8")
         self.fh.write(json.dumps({"signature": self.signature},
                                  ensure_ascii=False) + "\n")
         self.fh.flush()
         return self
+
+    def __exit__(self, *_):
+        if self.fh:
+            self.fh.close()
+            self.fh = None
 
     def reutilisable(self, rel, chemin):
         e = self.connus.get(rel)
@@ -2723,11 +2844,6 @@ class Reprise:
              "trouves": sorted(trouves)}, ensure_ascii=False) + "\n")
         self.fh.flush()          # après CHAQUE fichier, sinon ce n'est pas une reprise
 
-    def fermer(self):
-        if self.fh:
-            self.fh.close()
-            self.fh = None
-
 
 def _rejouer(f):
     """Repose un fait du journal, avec un identifiant neuf.
@@ -2739,37 +2855,32 @@ def _rejouer(f):
     FAITS.append({"id": f"F{len(FAITS) + 1:04d}", **f})
 
 
-def indicateurs(c, liste, fichier=None, reprise=None, aussi=()):
-    """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier.
+def indicateurs(c, liste, reprise=None, fichiers=()):
+    """Cherche chaque indicateur dans TOUTE la collecte, source par source.
 
-    Une seule alternative pour tous les motifs : un membre de 200 Mo n'est
-    balayé qu'une fois. Les empreintes se calculent en flux. Et quand seuls des
-    noms sont demandés, rien n'est lu.
+    Une seule lecture par source, quel que soit le nombre de motifs : les
+    octets défilent une fois et chaque motif les regarde passer. Les empreintes
+    se calculent au fil de l'eau. Et quand seuls des noms sont demandés, rien
+    n'est lu.
+
+    « fichiers » sont les listes de recherche elles-mêmes : posées DANS la
+    collecte, elles s'y trouveraient, puisque chaque chaîne y figure.
     """
     empreintes = {g: {x["valeur"]: x for x in liste if x["genre"] == g}
                   for g in ("sha256", "sha1", "md5")}
     empreintes = {g: d for g, d in empreintes.items() if d}
     noms = [x for x in liste if x["genre"] == "fichier"]
     motifs = [x for x in liste if x["motif"] is not None]
-    # Chaque motif est enfermé dans un REGARD-AVANT. Sans cela, l'alternation ne
-    # rend que des correspondances qui ne se chevauchent pas : le motif interne
-    # « password = ... » avale « Bienvenue2025! », et la chaîne que l'analyste a
-    # demandée sort « ABSENTE » alors qu'elle est là, sous les yeux, dans le
-    # même fichier. Un faux négatif sur une recherche demandée est la pire
-    # erreur que ce script puisse commettre : on lui fait dire qu'une preuve
-    # n'existe pas.
-    #
-    # Le regard-avant ne consomme rien, donc deux motifs peuvent reconnaître la
-    # même zone. Les positions se lisent alors sur le GROUPE, pas sur la
-    # correspondance, qui est de largeur nulle.
-    #
-    # Ça coûte : mesuré à 7,8 s contre 5,7 s pour 64 Mo de texte sans aucune
-    # correspondance, soit environ un tiers de temps en plus. C'est assumé — une
-    # recherche plus lente vaut mieux qu'une recherche qui ment, et le journal
-    # de reprise fait que ce temps n'est perdu qu'une fois.
-    alternative = re.compile(b"|".join(b"(?=(?P<i%d>%s))" % (i, x["motif"].pattern)
-                                       for i, x in enumerate(motifs))) if motifs else None
     lire = bool(empreintes or motifs)
+    soi = {c.rel(os.path.abspath(x)) for x in fichiers}
+    par_valeur = {x["valeur"]: x for x in liste}
+    nouveaux = []      # les valeurs trouvées, dans l'ordre, pour le journal
+
+    def trouve(x):
+        """Note qu'un indicateur vient d'être vu — une fois, à sa découverte."""
+        if not x.get("trouve"):
+            x["trouve"] = True
+            nouveaux.append(x["valeur"])
 
     def examiner(source, nom, blocs=None, chevauche=1 << 12):
         """Le nom, l'empreinte et les motifs, en UNE lecture.
@@ -2781,6 +2892,22 @@ def indicateurs(c, liste, fichier=None, reprise=None, aussi=()):
         — la première victime étant le contrôle des NOMS, qui n'a rien à voir
         avec la taille du fichier.
 
+        Chaque motif est cherché SÉPARÉMENT sur le même tampon, et c'est le
+        point important. Une alternative unique ne rend que des correspondances
+        qui ne se CHEVAUCHENT PAS : le motif interne « password = ... » avale
+        « Bienvenue2025! », et la chaîne que l'analyste a demandée sort
+        « ABSENTE » alors qu'elle est là, dans le même fichier. Un faux négatif
+        sur une recherche demandée est la pire erreur que ce script puisse
+        commettre — on lui fait dire qu'une preuve n'existe pas. Des passes
+        séparées ne peuvent pas se voler une correspondance : la question ne se
+        pose plus.
+
+        C'est aussi le plus rapide, à rebours de l'intuition : re ne sait pas
+        préfiltrer une alternative, dont le coût croît avec le nombre de
+        branches. Mesuré sur 8 Mo de texte sans aucune correspondance — 1,0 s
+        contre 1,9 s à 11 motifs, 2,7 s contre 22,6 s à 61, 7,9 s contre 174 s
+        à 211, soit vingt-deux fois plus dès qu'un fichier --textes s'en mêle.
+
         Le chevauchement n'est pas un détail : une chaîne à cheval sur deux
         blocs serait invisible sans lui. On garde donc la queue du bloc
         précédent, et on ignore ce qui tombe entièrement dedans, sinon la même
@@ -2789,7 +2916,7 @@ def indicateurs(c, liste, fichier=None, reprise=None, aussi=()):
         base = os.path.basename(nom)
         for x in noms:
             if fnmatch.fnmatch(base, x["valeur"]) or fnmatch.fnmatch(nom, x["valeur"]):
-                x["trouve"] = True
+                trouve(x)
                 fait(x.get("categorie", "indicateur"), "fichier au nom recherché",
                      nom, source, f"nom comparé au motif « {x['valeur']} »",
                      note=x["etiquette"])
@@ -2801,32 +2928,31 @@ def indicateurs(c, liste, fichier=None, reprise=None, aussi=()):
         for brut, clair in blocs:
             for h in hs.values():
                 h.update(brut)
-            if not alternative:
+            if not clair or not motifs:
                 continue
             tampon = reste + clair
-            for m in alternative.finditer(tampon):
-                nom = m.lastgroup
-                debut, fin = m.span(nom)      # le groupe, pas la correspondance
-                if fin <= len(reste):
-                    continue                       # déjà compté au tour d'avant
-                i = int(nom[1:])
-                comptes_[i] = comptes_.get(i, 0) + 1
-                if i not in contextes:
-                    d, f = max(0, debut - 60), min(len(tampon), fin + 60)
-                    contextes[i] = (tampon[d:f].decode("utf-8", "replace")
-                                    .replace("\n", " "), depart + debut)
+            for i, x in enumerate(motifs):
+                for m in x["motif"].finditer(tampon):
+                    debut, fin = m.span()
+                    if fin <= len(reste):
+                        continue                   # déjà compté au tour d'avant
+                    comptes_[i] = comptes_.get(i, 0) + 1
+                    if i not in contextes:
+                        d, f = max(0, debut - 60), min(len(tampon), fin + 60)
+                        contextes[i] = (tampon[d:f].decode("utf-8", "replace")
+                                        .replace("\n", " "), depart + debut)
             reste = tampon[-chevauche:]
             depart += len(tampon) - len(reste)
         for g, attendus in empreintes.items():
             h = hs[g].hexdigest()
             if h in attendus:
-                attendus[h]["trouve"] = True
+                trouve(attendus[h])
                 fait(attendus[h].get("categorie", "indicateur"),
                      f"fichier à l'empreinte {g} recherchée", nom, source,
                      f"{g} du fichier = {h}", note=attendus[h]["etiquette"])
         for i, n in sorted(comptes_.items()):
             x = motifs[i]
-            x["trouve"] = True
+            trouve(x)
             contexte, octet = contextes[i]
             interet = x.get("categorie") == "interet"
             fait(x.get("categorie", "indicateur"),
@@ -2845,22 +2971,63 @@ def indicateurs(c, liste, fichier=None, reprise=None, aussi=()):
                          "venir d'un paquet d'installation autant que d'un fichier du "
                          "compte. À confirmer sur la pièce citée" if interet else ""))
 
-    # le fichier d'indicateurs posé DANS la collecte se trouverait lui-même :
-    # chaque chaîne y figure, par construction
-    par_valeur = {x["valeur"]: x for x in liste}
-    # Un fichier de recherche posé DANS la collecte s'y trouverait lui-même :
-    # chaque chaîne y figure, par construction.
-    soi = {os.path.abspath(x) for x in ([fichier] if fichier else []) + list(aussi or ())}
-    # os.walk n'a pas d'ordre garanti : sans tri, la reprise rejouerait les
-    # faits dans un autre ordre que la première fois, et les identifiants
-    # changeraient. Le tri est donc ici une exigence, pas un confort.
-    for d, sous, fichiers in sorted(os.walk(c.racine)):
+    def lire_source(source, nom, ouvrir):
+        """Une source soumise aux motifs, et ce qu'on n'a pas su en lire.
+
+        Une seule voie pour tout le monde : _blocs décide seul s'il faut
+        décompresser, et rend toujours des blocs. Un .gz — le strings d'un
+        disque — n'est donc ni chargé d'un coup, ni cherché dans ses octets
+        comprimés, où rien ne pourrait correspondre ; et un journal tourné
+        rangé dans un tar est lu comme s'il était posé sur le disque, faute de
+        quoi il sortirait « ABSENT » de ses propres lignes.
+        """
+        etat = {}
+        try:
+            examiner(source, nom, _blocs(nom, ouvrir, etat))
+        except (OSError, zlib.error):
+            pass
+        # Une archive tronquée ou illisible se DIT : sans ça, un document qu'on
+        # n'a pas su ouvrir ressemblerait à un document sans rien dedans, ce
+        # qui n'est pas la même chose du tout.
+        for cle, quoi in (("tronque", "archive lue en partie"),
+                          ("illisible", "archive non lisible")):
+            if cle in etat:
+                fait("limite", quoi, source, source,
+                     "décompression pour y chercher les motifs",
+                     note=etat[cle] + f" ; plafond {_taille(PLAFOND_ARCHIVE)}. "
+                          "Le contenu non lu n'a été soumis à aucun motif")
+
+    def parcourir(chemin, rel):
+        """Ce qu'on lit d'une pièce : un tar membre par membre, sinon la pièce."""
+        if chemin.endswith(".tar.gz"):
+            for nom, blob in c.membres_tar(chemin, None if lire else lambda n: False):
+                if blob is None:
+                    examiner(f"{rel} → {nom}", nom)
+                else:
+                    lire_source(f"{rel} → {nom}", nom, lambda b=blob: io.BytesIO(b))
+            if not lire:
+                for nom in c.mtimes.get(chemin, {}):
+                    examiner(f"{rel} → {nom}", nom)
+        elif not lire:
+            examiner(rel, rel)
+        else:
+            c.lus.add(chemin)
+            lire_source(rel, rel, lambda: open(chemin, "rb"))
+
+    for d, sous, noms_fichiers in os.walk(c.racine):
+        # os.walk n'a pas d'ordre garanti : sans ces deux tris, la reprise
+        # rejouerait les faits dans un autre ordre que la première fois, et les
+        # identifiants changeraient. Le tri est donc ici une exigence, pas un
+        # confort. Trier les sous-dossiers EN PLACE suffit — os.walk relit la
+        # liste pour descendre —, et rien n'oblige à énumérer tout l'arbre avant
+        # d'ouvrir le premier fichier : une collecte porte des centaines de
+        # milliers de fichiers rendus par le carving.
         sous.sort()
-        for f in sorted(fichiers):
-            chemin = os.path.join(d, f)
-            if os.path.abspath(chemin) in soi:
+        noms_fichiers.sort()
+        for f in noms_fichiers:
+            chemin, rel = os.path.join(d, f), c.rel(os.path.join(d, f))
+            if rel in soi:
                 continue
-            rel = c.rel(chemin)
             deja = reprise.reutilisable(rel, chemin) if reprise else None
             if deja is not None:
                 for x in deja.get("trouves", ()):
@@ -2869,52 +3036,14 @@ def indicateurs(c, liste, fichier=None, reprise=None, aussi=()):
                 for fa in deja["faits"]:
                     _rejouer(fa)
                 continue
-            depart, trouves_avant = len(FAITS), {x["valeur"] for x in liste
-                                                 if x.get("trouve")}
-            if chemin.endswith(".tar.gz"):
-                for nom, blob in c.membres_tar(chemin, None if lire else lambda n: False):
-                    examiner(f"{c.rel(chemin)} → {nom}", nom,
-                             [(blob, blob)] if blob is not None else None)
-                if not lire:
-                    for nom in c.mtimes.get(chemin, {}):
-                        examiner(f"{c.rel(chemin)} → {nom}", nom)
-                if reprise:
-                    reprise.noter(rel, chemin, FAITS[depart:],
-                                  {x["valeur"] for x in liste if x.get("trouve")}
-                                  - trouves_avant)
-                continue
-            if not lire:
-                examiner(c.rel(chemin), c.rel(chemin))
-                if reprise:
-                    reprise.noter(rel, chemin, FAITS[depart:],
-                                  {x["valeur"] for x in liste if x.get("trouve")}
-                                  - trouves_avant)
-                continue
-            c.lus.add(chemin)
-            # Une seule voie : _blocs décide seul s'il faut décompresser, et
-            # rend toujours des blocs. Un .gz — le strings d'un disque — n'est
-            # donc ni chargé d'un coup, ni cherché dans ses octets compressés,
-            # où rien ne pourrait correspondre ; et un .txt de plusieurs
-            # centaines de mégaoctets ne l'est pas davantage.
-            etat = {}
-            try:
-                examiner(c.rel(chemin), c.rel(chemin), _blocs(chemin, etat))
-            except (OSError, zlib.error):
-                pass
-            # Une archive tronquée ou illisible se DIT : sans ça, un document
-            # qu'on n'a pas su ouvrir ressemblerait à un document sans rien
-            # dedans, ce qui n'est pas la même chose du tout.
-            for cle, quoi in (("tronque", "archive lue en partie"),
-                              ("illisible", "archive non lisible")):
-                if cle in etat:
-                    fait("limite", quoi, c.rel(chemin), c.rel(chemin),
-                         "décompression pour y chercher les motifs",
-                         note=etat[cle] + f" ; plafond {_taille(PLAFOND_ARCHIVE)}. "
-                              "Le contenu non lu n'a été soumis à aucun motif")
+            # Un seul endroit qui note au journal : une pièce lue et non notée
+            # serait relue à chaque reprise, et une branche ajoutée plus tard
+            # sauterait le journal sans que rien ne le signale.
+            debut_faits, debut_trouves = len(FAITS), len(nouveaux)
+            parcourir(chemin, rel)
             if reprise:
-                reprise.noter(rel, chemin, FAITS[depart:],
-                              {x["valeur"] for x in liste if x.get("trouve")}
-                              - trouves_avant)
+                reprise.noter(rel, chemin, FAITS[debut_faits:],
+                              nouveaux[debut_trouves:])
     for x in liste:
         if x.get("absent") is False:
             continue          # l'absence d'un motif de l'outil n'est pas un fait
@@ -2933,6 +3062,17 @@ def _csv_sain(v):
         return ""
     t = str(v).replace("\r", " ").replace("\n", " ")
     return "'" + t if t[:1] in ("=", "+", "-", "@", "\t", "|") else t
+
+
+def colonnes_csv(faits):
+    """Les colonnes de tête, puis tout champ qu'un fait porte en plus.
+
+    Dérivées et non déclarées : le CSV dit alors le MÊME contenu que le .jsonl,
+    ce que sa promesse annonce, et un champ ajouté à un fait apparaît sans que
+    personne ait à penser à cette liste.
+    """
+    return COLONNES_CSV + tuple(sorted({k for f in faits for k in f}
+                                       - set(COLONNES_CSV)))
 
 
 def ecrire_csv(chemin, lignes, colonnes):
@@ -2954,14 +3094,45 @@ def empreinte(chemin, taille_bloc=1 << 20):
     return h.hexdigest()
 
 
-def manifeste(c, sortie, argv):
-    """Ce qui prouve QUELS octets ont été analysés, et par quel outil.
+def provenance(collecte, questions, listes):
+    """Ce qui décide des faits : l'outil, la collecte, et les questions posées.
 
-    Le manifeste porte une date : il décrit l'exécution, pas les pièces. Les
-    faits, eux, ne dépendent que de la collecte — deux extractions de la même
-    collecte rendent le même fichier de faits, à l'octet près.
+    Une seule valeur pour deux usages qui sont la même question — « quelle
+    exécution a produit ces faits ? ». Le journal de reprise s'en sert pour
+    refuser un journal établi autrement ; le manifeste la publie, pour qu'un
+    lecteur puisse dire par quelle version de l'outil et sur quelles questions
+    les faits ont été tirés.
+
+    Les tenir séparés, comme avant, coupait la preuve en deux moitiés qui se
+    manquaient l'une l'autre : le journal se rejouait après une modification du
+    code, et le manifeste taisait ce qu'on avait cherché.
     """
     moi = os.path.abspath(__file__)
+    detail = {
+        "extracteur": {"fichier": os.path.basename(moi), "sha256": empreinte(moi)},
+        "collecte": os.path.abspath(collecte),
+        # Dans l'ORDRE des arguments : les mêmes listes données dans l'autre
+        # sens ne posent pas les questions dans le même ordre, donc ne rangent
+        # pas les faits sous les mêmes numéros.
+        "listes_de_recherche": [{"fichier": x, "sha256": empreinte(x)}
+                                for x in listes if os.path.isfile(x)],
+        # Le contenu des listes est couvert par leur empreinte, et celui de la
+        # liste interne par l'empreinte de l'extracteur : le compte suffit ici.
+        "questions": len(questions),
+    }
+    return detail, hashlib.sha256(
+        json.dumps(detail, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def manifeste(c, sortie, argv, prov, signature):
+    """Ce qui prouve QUELS octets ont été analysés, par quel outil, et pour
+    répondre à quelles questions.
+
+    Le manifeste porte une date : il décrit l'exécution, pas les pièces. Les
+    faits, eux, ne dépendent que de la collecte et des questions — deux
+    extractions de même provenance rendent le même fichier de faits, à l'octet
+    près.
+    """
     pieces = {}
     for chemin in sorted(c.lus):
         try:
@@ -2973,8 +3144,8 @@ def manifeste(c, sortie, argv):
     return {
         "collecte": c.prefix,
         "chemin_analyse": c.racine,
-        "extracteur": {"fichier": os.path.basename(moi),
-                       "sha256": empreinte(moi)},
+        **prov,
+        "provenance_sha256": signature,
         "commande": " ".join(argv),
         "extrait_le": datetime.now().astimezone().isoformat(),
         "faits": {"total": len(FAITS), "par_categorie": dict(sorted(par_cat.items()))},
@@ -3026,13 +3197,11 @@ def main():
     demandes = lire_indicateurs(args.indicateurs) if args.indicateurs else []
     demandes += lire_textes(args.textes)
     tous = interets() + demandes
-    # La signature couvre la collecte ET les questions posées : reprendre un
-    # journal établi pour d'autres indicateurs rendrait des réponses à des
-    # questions qu'on ne pose plus.
-    signature = hashlib.sha256(
-        json.dumps([os.path.abspath(args.collecte)]
-                   + sorted(f"{x['genre']}:{x['valeur']}" for x in tous)).encode()
-    ).hexdigest()
+    listes = ([args.indicateurs] if args.indicateurs else []) + list(args.textes)
+    # La provenance couvre l'outil, la collecte ET les questions posées :
+    # reprendre un journal établi autrement rendrait des réponses à des
+    # questions qu'on ne pose plus, ou tirées d'un code qu'on n'a plus.
+    prov, signature = provenance(args.collecte, tous, listes)
     journal = os.path.splitext(args.sortie)[0] + "-reprise.jsonl"
     rep = Reprise(journal, signature)
     if args.sans_reprise:
@@ -3041,21 +3210,19 @@ def main():
     elif rep.charger():
         print(f"  reprise : {len(rep.connus)} fichiers déjà parcourus, relus depuis "
               f"{os.path.basename(journal)}", file=sys.stderr)
-    try:
-        indicateurs(c, tous, args.indicateurs, rep.ouvrir(), args.textes)
-    finally:
-        rep.fermer()
+    with rep:
+        indicateurs(c, tous, rep, listes)
     print(f"  {'indicateurs et intérêts':22s} {len(FAITS) - avant:5d} faits",
           file=sys.stderr)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:
         for f in FAITS:
             fh.write(json.dumps(f, ensure_ascii=False) + "\n")
-    ecrire_csv(os.path.splitext(args.sortie)[0] + ".csv", FAITS, COLONNES_CSV)
+    ecrire_csv(os.path.splitext(args.sortie)[0] + ".csv", FAITS, colonnes_csv(FAITS))
 
     chemin_man = os.path.splitext(args.sortie)[0] + "-manifeste.json"
     with open(chemin_man, "w", encoding="utf-8") as fh:
-        man = manifeste(c, args.sortie, sys.argv)
+        man = manifeste(c, args.sortie, sys.argv, prov, signature)
         json.dump(man, fh, ensure_ascii=False, indent=2, sort_keys=False)
         fh.write("\n")
 

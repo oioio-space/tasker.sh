@@ -254,9 +254,18 @@ def batir(base):
       "/run/media/jdupont/SANDISK32 on behalf of uid 1000\n"
       "2026-01-05T18:40:00+0100 pc42 su: pam_unix(su:session): session opened for user "
       "mrobert(uid=1001) by jdupont(uid=1000)\n")
-    T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/auth.log":
-                                       "Jan  5 09:00:01 pc42 sshd[7]: Accepted publickey for "
-                                       "mrobert from 10.1.2.3 port 5000 ssh2\n"})
+    # Le journal TOURNÉ, comprimé, RANGÉ DANS LE TAR : c'est la forme la plus
+    # courante de tout /var/log, et le seul endroit où vit la chaîne ci-dessous.
+    # Si les membres d'archive ne sont pas décomprimés avant d'être soumis aux
+    # motifs, elle ressort « ABSENTE » — le pire mensonge que l'outil puisse
+    # faire — alors qu'elle est là.
+    T(f"JOURNAUX/{P}_var_log.tar.gz", {
+        "var/log/auth.log":
+            "Jan  5 09:00:01 pc42 sshd[7]: Accepted publickey for "
+            "mrobert from 10.1.2.3 port 5000 ssh2\n",
+        "var/log/auth.log.2.gz": gzip.compress(
+            b"Jan  2 08:14:55 pc42 sudo: jdupont : "
+            b"COMMAND=/usr/bin/journal-tourne-et-comprime-dans-le-tar\n")})
     T(f"RESEAU/{P}_reseau.tar.gz", {
         "etc/NetworkManager/system-connections/Bureau.nmconnection":
             "[connection]\nid=Bureau\nuuid=11111111-1111-1111-1111-111111111111\ntype=wifi\n"
@@ -397,7 +406,11 @@ def batir(base):
                  # ordinaire, le motif interne l'avale et elle ressort
                  # « ABSENTE » — on annonce à l'analyste que sa preuve n'existe
                  # pas. C'est le pire faux négatif possible : le test l'interdit.
-                 "texte: Bienvenue2025!\n")
+                 "texte: Bienvenue2025!\n"
+                 # Celle-ci n'existe que dans un .gz RANGÉ DANS UN TAR. Le
+                 # membre était soumis aux motifs sous sa forme comprimée, où
+                 # rien ne peut correspondre : elle sortait « ABSENTE ».
+                 "texte: journal-tourne-et-comprime-dans-le-tar\n")
     return R
 
 
@@ -507,18 +520,19 @@ ATTENDUS_PRECIS = [
 # Le regroupement des supports doit rendre le vid:pid ET le numéro de série
 # rattaché par le temps : c'est tout l'intérêt du tableau, et c'est le
 # rapprochement le plus fragile du lot.
+#
+# Une SEULE liste : trois listes séparées recollées à la main dans la boucle
+# d'en bas voulaient dire qu'une quatrième serait écrite et jamais lue.
 ATTENDUS_CHAMPS = [
     ("support : vid:pid + série", {"fait": "support amovible reconnu",
                                    "valeur": "4C530001230405112233",
                                    "vid": "0781", "pid": "5583",
                                    "montages": "/run/media/jdupont/SANDISK32",
                                    "acteur": "jdupont"}),
-]
 
-# L'outil doit regarder DANS les chaînes du disque et DANS ce que photorec a
-# rendu — deux endroits où rien d'autre dans le rapport ne va. Les trois appâts
-# n'existent qu'à ces endroits-là.
-ATTENDUS_INTERETS = [
+    # L'outil doit regarder DANS les chaînes du disque et DANS ce que photorec
+    # a rendu — deux endroits où rien d'autre dans le rapport ne va. Les appâts
+    # n'existent qu'à ces endroits-là.
     ("intérêt : photorec lisible", {"fait": "repéré dans les octets d'un fichier",
                                     "valeur": "clé privée",
                                     "source": "PHOTOREC/recup_1/f0002.txt"}),
@@ -529,25 +543,34 @@ ATTENDUS_INTERETS = [
     ("intérêt : docx décompressé", {"valeur": "mot de passe en clair",
                                     "source": "PHOTOREC/recup_1/f0008.docx"}),
     # Le document doit être CARACTÉRISÉ, pas seulement fouillé : son sujet lu
-    # dans le XML du .docx, et ce qu'il porte.
+    # dans le XML du .docx, et ce qu'il porte. « porte » ne dit QUE le contenu
+    # (utilisateur, système) : les motifs sensibles sont des faits « intérêt »
+    # sur la même source, et c'est là-dessus que le rapport recolle les deux.
+    # Les chercher aussi ici, c'était un second moteur qui se contredisait.
     ("document : sujet du docx", {"fait": "fichier rendu sans nom, et lisible",
                                   "valeur": "Compte rendu",
                                   "source": "PHOTOREC/recup_1/f0008.docx",
-                                  "porte": "utilisateur / forensic"}),
+                                  "porte": "utilisateur"}),
     ("document : remplissage écarté", {"fait": "fichier rendu sans nom, et lisible",
-                                       "source": "f0007.txt", "porte": "forensic"}),
+                                       "source": "f0007.txt"}),
     ("document : xfs_undelete", {"fait": "fichier rendu sans nom, et lisible",
                                  "source": "SUPPRIMES/racine/",
                                  "porte": "utilisateur"}),
-]
 
-ATTENDUS_INDICATEURS = [
     ("chaîne imbriquée dans un motif", {"fait": "texte recherché présent dans un fichier",
                                         "valeur": "Bienvenue2025!",
                                         "source": "PHOTOREC/recup_1/f0007.txt"}),
     ("indicateur dans le .gz", {"fait": "texte recherché présent dans un fichier",
                                 "valeur": "chaine-effacee-que-rien-d-autre-ne-porte",
                                 "source": ".txt.gz"}),
+    ("indicateur dans un .gz du tar", {"fait": "texte recherché présent dans un fichier",
+                                       "valeur": "journal-tourne-et-comprime-dans-le-tar",
+                                       "source": "_var_log.tar.gz → var/log/auth.log.2.gz"}),
+
+    # Un seul moteur de motifs : le fait « document » ne porte plus de champ
+    # « interet ». S'il en reparaissait un, c'est qu'une seconde recherche a
+    # été rajoutée dans documents(), et les deux se contrediraient.
+    ("un seul moteur de motifs", {"__absent__": "interet"}),
 ]
 
 
@@ -655,11 +678,19 @@ def main():
     print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")
     with open(faits, encoding="utf-8") as fh:
         lus_f = [json.loads(l) for l in fh if l.strip()]
-    for artefact, exige in ATTENDUS_CHAMPS + ATTENDUS_INTERETS + ATTENDUS_INDICATEURS:
-        ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
+    for artefact, exige in ATTENDUS_CHAMPS:
+        # « __absent__ » : aucun fait ne doit porter ce champ. C'est l'inverse
+        # du reste, et c'est ce qui permet de tester qu'un mécanisme a bien
+        # DISPARU — un test qui ne sait dire que « présent » laisse revenir en
+        # silence ce qu'on vient de retirer.
+        interdit = exige.get("__absent__")
+        if interdit:
+            ok = not any(interdit in d for d in lus_f)
+        else:
+            ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} "
-              f"{exige.get('valeur') or exige.get('source')}")
+              f"{exige.get('valeur') or exige.get('source') or interdit}")
 
     print(f"\n── PIÈCES QUI SURVIVENT AU VIDAGE DE L'HISTORIQUE ──")
     with open(constats, encoding="utf-8") as fh:

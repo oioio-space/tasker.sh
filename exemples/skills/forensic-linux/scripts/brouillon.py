@@ -271,6 +271,14 @@ def main():
     H = Horloge(args.fuseau or fuseau_des_faits(faits))
     quand, T = H.quand, H.texte
 
+    def date_nue(iso):
+        """L'heure du poste pour un horodatage NU — « premiere », « derniere ».
+
+        H.quand attend un fait entier ; ces champs-là n'en sont pas. Leur en
+        fabriquer un pour l'occasion se lisait comme une bizarrerie.
+        """
+        return H.lire(iso)[1] if iso else None
+
     def table(colonnes, lignes, **kw):
         return tableau(colonnes, lignes, borne=borne, fichier="faits.jsonl", **kw)
 
@@ -285,7 +293,6 @@ def main():
          "> Ce rapport désigne des **comptes** — des identités numériques. Il "
          "n'établit pas qui tenait le clavier : une collecte ne le dit jamais.\n"]
 
-    # ── 0 ──
     S.append("## En bref\n")
     S.append(a_rediger("cinq phrases pour quelqu'un qui ne lira que ceci : quelle machine, "
                        "quels comptes l'ont fait vivre et quand, ce qui attire l'œil (une "
@@ -293,7 +300,6 @@ def main():
                        "permet pas de dire, et ce qu'il faudrait pour trancher. Pas de "
                        "jargon : le lexique en fin de rapport est là pour le reste."))
 
-    # ── 1 ──
     S.append("## 1 · La machine\n")
     S.append(table(["", "", "id", "source"],
                    [(f["fait"], f["valeur"], f["id"], f["source"]) for f in par.get("machine", [])]))
@@ -301,7 +307,6 @@ def main():
                        "existe, quand elle a servi pour la dernière fois. Signalez "
                        "une horloge matérielle en heure locale si le fait le dit."))
 
-    # ── 2 ──
     S.append("## 2 · Les comptes\n")
     sess = sessions(faits, H)
     par_compte = {}
@@ -346,14 +351,12 @@ def main():
                        "existe. Un compte sans session n'est pas un compte inutilisé "
                        "si wtmp a été tourné : voir les limites."))
 
-    # ── 3 ──
     S.append("## 3 · Le domaine\n")
     S.append(table(["", "", "id", "source"],
                    [(f["fait"], f["valeur"], f["id"], f["source"]) for f in par.get("domaine", [])]))
     S.append(a_rediger("l'appartenance au domaine est-elle prouvée (keytab, cache "
                        "sss) ou seulement configurée ?"))
 
-    # ── 4 ──
     S.append("## 4 · Le réseau\n")
     S.append(table(["", "valeur", "compte", "date", "id"],
                    [(f["fait"], f["valeur"], f.get("acteur"), quand(f), f["id"])
@@ -361,15 +364,23 @@ def main():
     S.append(a_rediger("une phrase : où cette machine vivait (réseau, DNS, "
                        "passerelle), et si elle a connu d'autres réseaux."))
 
-    # ── 5 ──
-    if par.get("periode"):
-        S.append("## 5 · Quand le poste a laissé des traces\n")
+    # Cette section sort TOUJOURS, même sans un seul fait daté. La rendre
+    # conditionnelle faisait sauter le rapport de 4 à 6, et un renvoi « voir le
+    # §10 » ne désignait plus la même section d'une collecte à l'autre — sans
+    # compter qu'une collecte sans aucune date est justement ce qu'il faut dire.
+    S.append("## 5 · Quand le poste a laissé des traces\n")
+    if not par.get("periode"):
+        S.append("La collecte ne porte pas assez de faits datés pour situer une "
+                 "période d'usage. **Ce n'est pas un constat sur le poste** : c'est "
+                 "un constat sur les pièces. Dites-le au §10 et cherchez pourquoi — "
+                 "`wtmp` tourné, journaux purgés, pièces manquantes.\n")
+    else:
         bornes = [f for f in par["periode"] if not f.get("jours")]
         trous = [f for f in par["periode"] if f.get("jours")]
         if bornes:
-            S.append(table(["borne", "date", "source", "id"],
-                           [(f["fait"], f["valeur"], f["source"], f["id"])
-                            for f in bornes]))
+            S.append(table(["borne", "date", "tirée du fait", "source", "id"],
+                           [(f["fait"], f["valeur"], f.get("depuis"), f["source"],
+                             f["id"]) for f in bornes]))
         if trous:
             S.append("\n**Les périodes sans aucune trace**, toutes pièces confondues :\n")
             S.append(table(["durée", "période", "bornée par", "id"],
@@ -432,7 +443,6 @@ def main():
                        "en disant ce que vous retirez. Une ligne « ? (session "
                        "simultanée) » ne s'attribue à personne sans une autre trace."))
 
-    # ── 6 ──
     S.append("## 7 · La navigation et les téléchargements\n")
     # les saisies de formulaire sont dans « usage » : un compte dont l'historique
     # a été vidé mais dont les frappes restent doit garder sa section
@@ -513,7 +523,6 @@ def main():
                        "se recoupe avec l'apparition du fichier dans la timeline ; "
                        "citez les deux ou dites que le second manque."))
 
-    # ── 7 ──
     S.append("## 8 · Les supports amovibles\n")
     if par.get("appareil"):
         S.append("Un support par ligne, recollé depuis les lignes éparses du journal. "
@@ -523,14 +532,16 @@ def main():
         S.append(table(["support", "vid:pid", "branchements", "première", "dernière",
                         "monté sur", "compte", "id"],
                        [(f["valeur"], f"{f.get('vid')}:{f.get('pid')}",
-                         f.get("branchements"), quand({"horodatage": f.get("premiere")}),
-                         quand({"horodatage": f.get("derniere")}), f.get("montages"),
+                         f.get("branchements"), date_nue(f.get("premiere")),
+                         date_nue(f.get("derniere")), f.get("montages"),
                          f.get("acteur"), f["id"]) for f in par["appareil"]]))
         S.append("\n**Le détail, ligne à ligne :**\n")
     S.append(table(["date", "fait", "valeur", "compte", "id"],
                    [(quand(f), f["fait"], f["valeur"], f.get("acteur"), f["id"])
                     for f in H.tri(par.get("support", []))]))
-    montages = [f for f in par.get("support", []) if f["fait"] == "système de fichiers amovible monté"]
+    # « role » est le nom de machine posé par l'extracteur ; le libellé en
+    # français, lui, est du texte de rapport et peut être reformulé.
+    montages = [f for f in par.get("support", []) if f.get("role") == "montage-amovible"]
     for m in montages:
         lignes = H.tri(confirme.get(m["id"], []))
         if not lignes:
@@ -554,7 +565,6 @@ def main():
                        "vers le support ; un fichier seulement « lu » (a) est une lecture. "
                        "Sans ligne de timeline : « ce qui y a été copié n'est pas établi »."))
 
-    # ── 8 ──
     S.append("## 9 · Ce qui attire l'œil\n")
     S.append(table(["date", "constat", "valeur", "compte", "confiance", "id", "à vérifier"],
                    [(quand(f), f["fait"], f["valeur"], f.get("acteur"), f.get("confiance"),
@@ -626,9 +636,17 @@ def main():
                  "rendu par le carving n'a ni auteur, ni date, ni compte : il peut "
                  "venir d'un paquet d'installation autant que du dossier personnel. "
                  "Ouvrez la pièce avant d'attribuer quoi que ce soit.\n")
+        # Les motifs viennent des faits « intérêt » posés sur la MÊME pièce, et
+        # non d'une seconde recherche : deux chercheurs sur les mêmes fichiers
+        # se contredisaient — l'un lit un aperçu, l'autre le fichier entier —
+        # et le rapport montrait deux fois la même découverte.
+        motifs = {}
+        for f in par.get("interet", []):
+            motifs.setdefault(f["source"], []).append(f"{f['valeur']} ({f['id']})")
         S.append(table(["pièce", "de quoi ça parle", "porte", "motifs repérés", "id"],
                        [(f["source"], T(f["valeur"]), f.get("porte"),
-                         f.get("interet"), f["id"]) for f in par["document"]],
+                         ", ".join(motifs.get(f["source"], [])) or None, f["id"])
+                        for f in par["document"]],
                        quoi="documents lisibles"))
         S.append(a_rediger("les documents qui comptent, et pourquoi. Un compte rendu "
                            "de réunion n'a pas la même valeur qu'un fichier de "
@@ -664,7 +682,6 @@ def main():
                        "vraie ou fausse. N'affirmez pas une compromission. Retirez "
                        "ce qui est banal en le disant."))
 
-    # ── 9 ──
     S.append("## 10 · Les limites\n")
     S.append(table(["limite", "valeur", "note", "id"],
                    [(f["fait"], f["valeur"], T(f.get("note")), f["id"]) for f in par.get("limite", [])]))
@@ -689,13 +706,21 @@ def main():
                        "dernière date de chaque source. Ce que la mémoire vive et "
                        "le réseau auraient dit."))
 
-    # ── 10 ──
     S.append("## 11 · Annexe : méthode\n")
-    outil = man.get("outil") or {}
+    outil = man.get("extracteur") or {}
+    # Les listes de recherche avec leur empreinte : sans elles, le rapport dit
+    # par quel outil les faits ont été tirés, mais pas à quelles QUESTIONS il
+    # répondait — et une réponse « ABSENT » ne veut rien dire sans la question.
+    listes = man.get("listes_de_recherche") or []
     S.append(tableau(["", ""], [
         ("commande", f"`{man.get('commande')}`" if man.get("commande") else None),
         ("extracteur", outil.get("fichier")),
         ("empreinte de l'extracteur", outil.get("sha256")),
+        ("listes de recherche", " ; ".join(
+            f"{os.path.basename(x.get('fichier', ''))} ({str(x.get('sha256'))[:12]}…)"
+            for x in listes) or "aucune — seuls les motifs de l'outil"),
+        ("questions posées", man.get("questions")),
+        ("empreinte de la provenance", man.get("provenance_sha256")),
         ("empreinte des faits", man.get("faits_sha256")),
         ("faits", len(faits)),
         ("pièces lues", len(man.get("pieces_lues") or {})),
@@ -709,7 +734,6 @@ def main():
     S.append(a_rediger("une ligne par fait cité dans le rapport : id, source, "
                        "méthode — recopiés de faits.jsonl, jamais réécrits."))
 
-    # ── 11 ──
     restants = dict(LEXIQUE)
     for morceau in S:
         bas = morceau.lower()
