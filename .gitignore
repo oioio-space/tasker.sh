@@ -5,9 +5,12 @@
 __pycache__/
 *.pyc
 
-# Sorties des tests des skills (tests/artefacts.py, tests/matrice.py).
-exemples/skills/artefacts/
-exemples/skills/matrice/
+# Sorties des tests des skills (tests/artefacts.py, tests/matrice.py). Sans
+# barre oblique de tête, la règle vaut à N'IMPORTE QUEL niveau : les deux tests
+# écrivent dans un dossier RELATIF au répertoire courant, donc à la racine du
+# dépôt quand on les lance de là — ce que la règle ancrée ne rattrapait pas.
+artefacts/
+matrice/
 
 # Journal de reprise de extraire.py : il se refait tout seul.
 *-reprise.jsonl
