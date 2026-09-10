@@ -20,102 +20,68 @@ Format **Agent Skills** (`SKILL.md`), lu tel quel par Claude Code et par Crush.
 
 ## 1 · Ce qu'il faut installer
 
-**`python3` et sa bibliothèque standard. Rien d'autre.**
+**`python3` et sa bibliothèque standard** pour les scripts — pas de `pip`, pas
+de MCP, pas de réseau. Le module `sqlite3` livré avec Python lit les
+historiques Firefox et Chrome.
 
-Pas de `pip`, pas de MCP, pas de réseau. Le module `sqlite3` livré avec Python
-lit les historiques Firefox et Chrome. Le skill fonctionne sur une machine
-coupée d'Internet — c'est même pour ça qu'il embarque `references/artefacts.md`,
-qui explique ce qu'est chaque pièce : le modèle ne peut aller le chercher
-nulle part.
+**`ripgrep` pour l'agent**, et celui-là n'est pas optionnel : sans lui, l'outil
+`grep` de Crush se bloque sans rendre la main sur une grosse collecte (§2).
+
+Tout fonctionne ensuite coupé d'Internet — c'est même pour ça que le skill
+embarque `references/artefacts.md`, qui explique ce qu'est chaque pièce : le
+modèle ne peut aller le chercher nulle part.
 
 ## 2 · Poser le skill
 
 ### Où Crush cherche vraiment
 
-Crush distingue deux dossiers, et ils ne portent pas le même nom. **Le second
-n'est pas un endroit où poser quoi que ce soit :**
+Inutile de deviner, Crush le dit lui-même :
+
+    crush dirs        # première ligne : la configuration ; seconde : l'état
 
 | dossier | ce que c'est | ce qu'on y met |
 |---|---|---|
 | `~/.config/crush/` | la **configuration** — `crushrc`, `crush.json`, `skills/` | vos fichiers |
-| `~/.local/share/crush/` | l'**état** de Crush : sessions, cache, et un `crush.json` qu'il écrit lui-même | rien à la main |
+| `~/.local/share/crush/` | l'**état** : sessions, cache, et un `crush.json` qu'il écrit seul | rien à la main |
 
-Le piège est que Crush écrit dans le second un fichier qui s'appelle aussi
-`crush.json`. Il est **lu comme de la configuration** — `lookupConfigs` le place
-dans la liste — et, parce qu'il vient **après** `~/.config/crush/`, il **prime
-sur lui** : un réglage écrit dans le dossier d'état l'emporte silencieusement
-sur le même réglage écrit dans le dossier de configuration. L'ordre complet, du
-plus faible au plus fort :
+**Deux pièges, et le second coûte des heures.** Un skill posé dans le dossier
+d'état n'est jamais trouvé. Et le `crush.json` qui s'y trouve est bien **lu
+comme de la configuration**, après celui de `~/.config/` — donc il **prime sur
+lui**. Un réglage qui semble ignoré vient presque toujours de là. N'y écrivez
+pas pour autant : Crush le réécrit seul, changer de modèle par `ctrl+l` y
+laisse une trace. L'ordre, du plus faible au plus fort :
 
-    config système  →  ~/.config/crush/crush.json  →  ~/.config/crush/crushrc
-                    →  ~/.local/share/crush/crush.json  →  configs du projet
+    config système → ~/.config/crush/crush.json → ~/.config/crush/crushrc
+                   → ~/.local/share/crush/crush.json → configs du projet
 
-Ce n'est pas pour autant l'endroit où écrire : le README de Crush le dit
-« state and should not be edited by hand, nor should it be considered
-configuration », et Crush le réécrit tout seul — changer de modèle par `ctrl+l`
-y laisse une trace. **Si un réglage semble ignoré, c'est le premier fichier à
-regarder** : il écrase peut-être ce que vous venez d'éditer.
-
-Un skill posé dans le dossier d'état, en revanche, n'est jamais trouvé : ce
-dossier ne figure dans aucune des listes ci-dessous.
-
-Si votre installation est sous `~/.local/`, c'est presque sûrement l'une de ces
-deux choses, et **aucune ne change quoi que ce soit à ce qui suit** :
-
-  - `~/.local/bin/crush` : le **binaire**, posé là par le script d'installation
-    quand il tourne sans les droits root. Où vit le programme n'a rien à voir
-    avec où il lit sa configuration ;
-  - `~/.local/share/crush/` : le dossier d'état ci-dessus.
-
-Pour les skills, Crush regarde d'office ces quatre dossiers — le premier venu
-suffit, il n'y a **rien à déclarer** dans `crush.json` :
+Pour les skills, quatre dossiers sont regardés d'office — le premier venu
+suffit, **rien à déclarer** :
 
     ~/.config/crush/skills/     ~/.agents/skills/
     ~/.config/agents/skills/    ~/.claude/skills/
 
-et, dans le dossier de travail courant, `.crush/skills/`, `.agents/skills/`,
-`.claude/skills/` et `.cursor/skills/`.
+et dans le dossier courant `.crush/skills/`, `.agents/skills/`,
+`.claude/skills/`, `.cursor/skills/` — ainsi qu'à la **racine du dépôt git**,
+s'il y en a un : un jeu de skills posé là sert tous les sous-dossiers.
 
-Dans un dépôt git, Crush regarde en plus ces quatre dossiers **à la racine du
-dépôt**, pas seulement dans le dossier courant : un jeu de skills posé à la
-racine sert donc à tous les sous-dossiers.
-
-Deux réglages déplacent tout ça, et c'est la seule raison pour laquelle votre
-machine pourrait différer : `XDG_CONFIG_HOME`, qui remplace `~/.config`, et
-`CRUSH_SKILLS_DIR`, qui **remplace les quatre dossiers d'un coup** par celui
-qu'il nomme.
-
-Inutile de deviner : Crush sait le dire lui-même.
-
-    crush dirs        # « Show config and data directories »
-
-La première ligne est le dossier de **configuration** (les skills vont dans son
-sous-dossier `skills/`), la seconde celui d'**état**. Pour compléter :
-
-    echo "skills : ${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
-    ls -d ~/.config/crush ~/.local/share/crush ~/.claude/skills 2>/dev/null
+Deux variables déplacent tout : `XDG_CONFIG_HOME` remplace `~/.config`, et
+`CRUSH_SKILLS_DIR` **remplace les quatre dossiers d'un coup**.
 
 ### Une dépendance à ne pas oublier : ripgrep
-
-Installez `ripgrep` sur le poste d'analyse **avant** de couper le réseau :
 
     command -v rg || sudo apt install ripgrep     # ou dnf/pacman/zypper
 
 Ce n'est pas un confort. L'outil `grep` de Crush appelle `rg` quand il le
-trouve, et se rabat sinon sur un parcours en Go — `searchFilesWithRegex`, dans
-`internal/agent/tools/grep.go`. Or ce repli est appelé **sans le contexte** :
+trouve, et se rabat sinon sur un parcours en Go appelé **sans le contexte**
+(`internal/agent/tools/grep.go:197`) : le délai de garde de cinq secondes posé
+juste au-dessus ne peut donc pas l'interrompre. Sur une collecte forensique, ce
+parcours lit chaque fichier texte ligne à ligne et **l'interface reste sur
+« Waiting for tool response… » sans jamais rendre la main**.
 
-    matches, err = searchFilesWithRegex(pattern, rootPath, include)
-
-Le délai de garde de cinq secondes que Crush pose juste au-dessus ne peut donc
-pas l'interrompre. Sur une collecte forensique — une timeline de plusieurs
-gigaoctets, un `faits.jsonl` de centaines de mégaoctets —, le parcours lit
-chaque fichier texte ligne à ligne, et **l'interface reste sur « Waiting for
-tool response… » sans jamais rendre la main**. Aucune permission n'est
-demandée, et il n'y en a pas à donner : `grep` n'en réclame aucune.
-
-Si ça vous arrive : `esc` annule. Puis vérifiez `command -v rg`, et restreignez
-la recherche à un sous-dossier plutôt qu'à la racine de la collecte.
+Aucune permission n'est en cause — `grep` n'en réclame aucune, il n'y a donc
+pas d'« allow » à donner. Si ça arrive : `esc` annule. Prenez `rg` **avant** de
+couper le réseau, et restreignez une recherche à un sous-dossier plutôt qu'à la
+racine de la collecte.
 
 ### Poser les skills
 
@@ -141,75 +107,56 @@ vérification ci-dessus.
 ### Ce que le format garantit, et ce qu'il coûte en contexte
 
 Les deux skills suivent le standard ouvert [Agent Skills](https://agentskills.io),
-celui que Crush revendique. Ça se vérifie, et c'est vérifié :
+celui que Crush revendique : `name` en minuscules égal au nom du dossier,
+`description` sous 1024 **octets** (Crush compte en octets, un accent en vaut
+deux), corps du `SKILL.md` sous 5 000 jetons et 500 lignes, `scripts/` et
+`references/` en chemins relatifs d'un seul niveau, `compatibility` déclaré.
+**Ces bornes sont vérifiées par `tests/artefacts.py`** plutôt que recopiées
+ici, où elles rouilleraient.
 
-| règle de la spec | ici |
-|---|---|
-| `name` : 1-64 car., minuscules, chiffres et tirets, égal au nom du dossier | `forensic-linux` (14 o), `conformite-linux` (16 o) |
-| `description` : 1-1024 caractères | 580 et 632 **octets** — Crush compte en octets, et un accent en vaut deux |
-| corps du `SKILL.md` : < 5000 jetons, < 500 lignes | 4 334 jetons / 330 lignes, et 3 090 / 243 |
-| `scripts/`, `references/`, `assets/` | `scripts/` et `references/`, chemins relatifs, un seul niveau |
-| `compatibility` si le skill a des exigences | déclaré : python3, bibliothèque standard, hors ligne |
-
-Ça compte, parce que Crush ne charge pas un skill d'un bloc — c'est la
+Elles comptent, parce que Crush ne charge pas un skill d'un bloc — c'est la
 **divulgation progressive**, en trois temps :
 
-1. **au démarrage**, seuls `name`, `description` et le **chemin** du `SKILL.md`
-   entrent dans l'invite système. Pour les deux skills réunis : **≈ 333
-   jetons**, et rien d'autre ;
-2. **à l'activation**, le modèle lit le `SKILL.md` — d'où la borne des 5 000
-   jetons, et d'où le fait que le modèle a besoin de l'outil `view` ;
-3. **à la demande**, et seulement là, les fichiers de `references/`.
+1. **au démarrage** : seuls `name`, `description` et le *chemin* du `SKILL.md`
+   entrent dans l'invite. Pour les deux skills réunis, ≈ 333 jetons ;
+2. **à l'activation** : le modèle lit le `SKILL.md` — d'où la borne des 5 000
+   jetons, et d'où son besoin de l'outil `view` ;
+3. **à la demande** seulement : les fichiers de `references/`.
 
-C'est pour ça que `artefacts.md` peut peser 5 500 jetons sans gêner : il n'est
-lu que si la question s'y prête. Si vous ajoutez un skill, gardez la même
-discipline — le `SKILL.md` mince, le détail dans `references/`.
-
-Pour contrôler un skill que vous écririez vous-même, le standard fournit un
-validateur (`skills-ref validate ./mon-skill`) — à récupérer avant de couper le
-réseau.
+C'est pourquoi `artefacts.md` peut peser 5 500 jetons sans gêner. Si vous
+ajoutez un skill, gardez la discipline : le `SKILL.md` mince, le détail dans
+`references/`. Le standard fournit un validateur — `skills-ref validate
+./mon-skill` —, à récupérer avant de couper le réseau.
 
 ### Deux formats, un seul à préférer
 
-Crush a changé de format de configuration. Le README de Crush est net :
-
-> What about the old JSON format? It's still supported, but it should be
-> considered deprecated.
-
-Le format courant est le **`crushrc`** — du Bash avec quelques builtins
-(`provider add`, `model large`, `permissions allow`, `hook add`, `option`),
-cherché dans `./.crushrc`, `./crushrc`, puis `~/.config/crush/crushrc`. Les
-deux fichiers sont fournis et font la même chose :
-
-| fichier | format | à préférer |
-|---|---|---|
-| `crushrc` | Bash, format courant | **oui** |
-| `crush.json` | JSON, déprécié mais toujours accepté | seulement si votre version de Crush est ancienne |
+Le README de Crush est net : « What about the old JSON format? It's still
+supported, but it should be considered deprecated. » Le format courant est le
+**`crushrc`** — du Bash avec quelques builtins (`provider add`, `model large`,
+`permissions allow`, `hook add`, `option`), cherché dans `./.crushrc`,
+`./crushrc`, puis `~/.config/crush/crushrc`. Les deux fichiers sont fournis et
+font la même chose ; préférez le `crushrc`, gardez le `crush.json` si votre
+version de Crush est ancienne.
 
 Ce n'est pas qu'une question de mode : un `crushrc` est un shell, donc `$HOME`
-et `XDG_CONFIG_HOME` y sont **réellement développés, partout**. En `crush.json`,
-le `~` n'est développé que dans certains champs — et il fallait lire le code de
-Crush pour savoir lesquels :
+et `XDG_CONFIG_HOME` y sont **réellement développés, partout**. En
+`crush.json`, le `~` n'est développé que dans certains champs — et il fallait
+lire le code de Crush pour savoir lesquels :
 
 | champ de `crush.json` | le `~` marche ? | pourquoi |
 |---|---|---|
-| `hooks[].command` | **oui** | la commande passe par le shell POSIX embarqué (`shell.Run`), qui développe le `~` comme n'importe quel shell |
-| `options.data_directory` | **non** | `SmartJoin` ne teste que `filepath.IsAbs` : Crush crée un dossier nommé `~` dans le dossier courant |
-| `options.skills_paths` | **non** | le chemin part tel quel dans `fastwalk.Walk`, sans expansion — même si le schéma en donne un en exemple |
+| `hooks[].command` | **oui** | la commande passe par le shell POSIX embarqué (`shell.Run`) |
+| `options.data_directory` | **non** | `SmartJoin` ne teste que `filepath.IsAbs` : Crush crée un dossier nommé `~` |
+| `options.skills_paths` | **non** | le chemin part tel quel dans `fastwalk.Walk` — même si le schéma en donne un en exemple |
 | `api_key`, `base_url`, `env` | non, mais… | `$VAR`, `${VAR:-defaut}` et `$(cmd)` y sont développés |
 
-C'est pour ça que le `crush.json` fourni écrit `/home/analyste/…` pour
-`data_directory` et `skills_paths` — **remplacez-le par votre vrai dossier
-personnel** — et garde le `~` pour le hook, où il fonctionne.
+D'où les chemins absolus du `crush.json` fourni pour `data_directory` et
+`skills_paths` — **remplacez `/home/analyste` par votre dossier personnel** —
+et le `~` conservé pour le hook, où il fonctionne.
 
-La consigne « chemin absolu » de `docs/hooks/` ne parle pas du `~` : elle vise
-les chemins **relatifs** (`./mon-hook.sh`), résolus depuis le dossier de
-travail et non depuis la configuration.
-
-En revanche, `crushrc` est **du code exécuté au lancement**, dans un shell
-complet — et `crush.json` n'est pas inerte non plus : tout `$(...)` qui s'y
-trouve est exécuté au chargement. Ne lancez pas Crush dans un dossier dont vous
-n'avez pas lu la configuration.
+Dans les deux cas, c'est **du code exécuté au lancement** : un `crushrc` est un
+shell complet, et tout `$(...)` d'un `crush.json` s'exécute au chargement. Ne
+lancez pas Crush dans un dossier dont vous n'avez pas lu la configuration.
 
 `garde-scelles.sh` est la ceinture décrite au §3 ; le §9 explique les réglages
 du modèle.
@@ -257,6 +204,19 @@ Lancez l'extraction **vous-même**, hors de l'agent :
     K="${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
     python3 $K/forensic-linux/scripts/extraire.py   "$C" -o ~/analyse/faits.jsonl
     python3 $K/conformite-linux/scripts/controles.py "$C" -o ~/analyse/constats.jsonl
+
+Les options de `extraire.py`, toutes facultatives :
+
+| option | à quoi ça sert |
+|---|---|
+| `--textes fichier` | des chaînes à chercher, **une par ligne, sans syntaxe** — noms, références, mots-clés. Répétable |
+| `--indicateurs fichier` | le format riche : `sha256:`, `ip:`, `domaine:`, `regex:`, `fichier:`… (`references/indicateurs.md`) |
+| `--visites N` | pages retenues par historique de navigateur (5 000 par défaut) ; au-delà, un fait « limite » le dit |
+| `--sans-reprise` | ignorer le journal de progression et tout reparcourir |
+
+Une extraction qui plante se relance **avec la même commande** : elle reprend
+là où elle s'était arrêtée, et rend le même fichier de faits, identifiants
+compris.
 
 Si vos règles sont déjà écrites dans un fichier `.regles`, donnez-le, avec les
 faits — ce sont eux qui portent les dates et le fuseau du poste :
@@ -320,6 +280,8 @@ puis donnez-lui le dossier de collecte — celui qui porte le PREFIX et contient
     faits.jsonl              un fait par ligne — pour un SIEM, pour grep
     faits.csv                les mêmes faits, pour un tableur, donc pour un humain
     faits-manifeste.json     les empreintes de ce qui a été lu
+    faits-reprise.jsonl      le journal de progression : relancez la même
+                             commande après un plantage, elle reprend là
     rapport-forensic-….md    le brouillon : tableaux remplis, prose à écrire
 
 Le CSV est écrit avec `;` et un BOM — Excel et LibreOffice l'ouvrent sans
@@ -378,9 +340,11 @@ Découpez par catégorie plutôt que tout charger :
     grep '"categorie":"suspect"'        faits.jsonl > suspects.jsonl
     grep '"categorie":"telechargement"' faits.jsonl > telechargements.jsonl
 
-Les catégories : `machine`, `compte`, `domaine`, `evenement`, `support`,
-`reseau`, `navigation`, `telechargement`, `usage`, `persistance`, `suspect`,
-`paquet`, `timeline`, `recuperation`, `limite`.
+Les catégories : `machine`, `compte`, `domaine`, `evenement`, `periode`,
+`support`, `appareil`, `reseau`, `navigation`, `telechargement`, `usage`,
+`persistance`, `suspect`, `paquet`, `timeline`, `chaines`, `document`,
+`recuperation`, `indicateur`, `interet`, `limite`. **L'extraction les récapitule
+en fin de course** — c'est cette ligne qui fait foi, pas celle-ci.
 
 ### Les sous-agents de Crush
 
@@ -517,29 +481,6 @@ appels d'outils malformés**. Le brouillon répond à la première (le plan est 
 disque, le modèle remplit un passage à la fois) ; la lecture seule répond à la
 seconde (un appel malformé ne peut rien casser).
 
-### Le contexte : 256 k par défaut, 1 M sur demande
-
-Le million de jetons annoncé par NVIDIA n'est pas une figure de style — RULER
-@ 1M donne **91,75**, ce qui est très bon — mais il **ne s'obtient pas tout
-seul**. La carte du modèle est explicite :
-
-> Please note that the model supports up to a 1M context size, although the
-> default context size in the Hugging Face configuration is 256k due to higher
-> VRAM requirements.
-
-Autrement dit, ce n'est pas vLLM qui rogne un modèle à 1 M : c'est le
-checkpoint lui-même qui déclare 262144. Pour aller au-delà :
-
-    VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 vllm serve … --max-model-len 1048576
-    # SGLang : SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 --context-length 1048576
-
-Si vous le faites, **portez la même valeur dans `context_window`**, sinon Crush
-se croira borné à 256 k. Pour ces skills, ça change quelque chose : une
-timeline mactime et un `faits.jsonl` de gros dossier tiennent plus large. Dans
-le doute, la valeur servie fait foi et se lit sur le serveur :
-
-    curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
-
 ### Servir le modèle : trois options sans lesquelles les skills ne marchent pas
 
 Les deux skills fonctionnent **entièrement par appels d'outils**. Trois options
@@ -570,31 +511,28 @@ réclament un parseur de raisonnement **à télécharger séparément**. Prenez-
 Pour mémoire : 8× H100-80GB au minimum, et 2 GPU suffisent en BF16 sur B200 ou
 B300 (`--tensor-parallel-size 2`, sans `--enable-expert-parallel`).
 
-### Régler les tailles : la contrainte, pas des nombres magiques
+### Régler les tailles : une contrainte, pas trois nombres
 
-Trois valeurs se tiennent, et les régler indépendamment fait échouer la session
-en plein rapport. Avec **S** = ce que sert `--max-model-len` et **M** = la marge
-de résumé de Crush (20 000 si `context_window` dépasse 200 000, sinon 20 % de
+Trois valeurs se tiennent, et les régler séparément fait échouer la session en
+plein rapport. Avec **S** = ce que sert `--max-model-len` et **M** = la marge de
+résumé de Crush (20 000 si `context_window` dépasse 200 000, sinon 20 % de
 `context_window`) :
 
     (context_window − M) + plus gros résultat d'outil + max_tokens  ≤  S
 
-Trois choses à en retenir :
+**`context_window` reste sous S, jamais égal** — c'est la leçon de ceux qui ont
+branché un agent sur vLLM avant nous : annoncer le maximum théorique fait
+empaqueter des invites que le serveur refuse ensuite, en pleine session. Égal à
+S, ça dépasse même avec un `max_tokens` modeste, parce que le contrôle de Crush
+n'a lieu qu'**entre deux étapes**. Le plus gros résultat d'outil, ici, c'est
+relire le rapport en cours : 20 à 30 k jetons pour 1 500 lignes.
 
-1. **`context_window` reste sous S, jamais égal.** C'est la leçon de ceux qui
-   ont branché un agent sur vLLM avant nous : annoncer le maximum théorique
-   fait empaqueter des invites que le serveur refuse ensuite, en pleine
-   session. Un `context_window` égal à S dépasse même avec un `max_tokens`
-   modeste, parce que le contrôle de Crush n'a lieu qu'**entre deux étapes**.
-2. **Le plus gros résultat d'outil, ici, c'est relire le rapport en cours** :
-   20 à 30 k jetons pour 1 500 lignes. C'est lui qui impose la marge.
-3. **`max_tokens` a un plancher autant qu'un plafond.** Le raisonnement est
-   émis **avant** l'appel d'outil et se compte sur `max_tokens` : trop petit,
-   la réponse est tronquée (`finish_reason: "length"`) avant même que l'outil
-   soit appelé. 16 000 est large pour une section de rapport et laisse de la
-   marge sous le plafond.
+**`max_tokens` a un plancher autant qu'un plafond** : le raisonnement est émis
+*avant* l'appel d'outil et se compte dessus, donc trop petit, la réponse est
+tronquée (`finish_reason: "length"`) avant même que l'outil parte. 16 000 tient
+les deux bouts.
 
-Ce qui donne, pour `max_tokens` 16 000 et un pic d'outil de 25 000 :
+Pour `max_tokens` 16 000 et un pic d'outil de 25 000 :
 
 | servi (`--max-model-len`) | `context_window` | pire cas | verdict |
 |---|---|---|---|
@@ -603,10 +541,18 @@ Ce qui donne, pour `max_tokens` 16 000 et un pic d'outil de 25 000 :
 | 262 144 | 262 144 | 283 144 | dépasse de 21 000 |
 | 262 144 | **240 000** | 261 000 | tient — c'est le réglage livré |
 
-Servir plus large ne fait pas que repousser l'erreur : à 131 072, Crush résume
-dès 105 000 jetons, et **chaque résumé perd du détail** — ce qu'on ne veut pas
-dans un rapport où chaque fait cite sa source. À 240 000, le premier résumé
-n'arrive qu'à 220 000.
+**Servir plus large vaut mieux que de bien régler.** À 131 072, Crush résume dès
+105 000 jetons, et chaque résumé perd du détail — ce qu'on ne veut pas dans un
+rapport où chaque fait cite sa source ; à 240 000, le premier résumé n'arrive
+qu'à 220 000. Le checkpoint déclare 262144, et le million annoncé par NVIDIA est
+réel (RULER @ 1M : 91,75) mais se demande :
+
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 vllm serve … --max-model-len 1048576
+    # SGLang : SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 --context-length 1048576
+
+Dans le doute, la valeur servie fait foi et se lit sur le serveur :
+
+    curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
 
 ### Ce qui reste à confirmer sur votre poste
 
