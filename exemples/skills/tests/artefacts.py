@@ -70,7 +70,8 @@ def utmp(entrees):
 def batir(base):
     R = os.path.join(base, P)
     for d in ("SYSTEME", "COMPTES", "PAQUETS", "RESEAU", "JOURNAUX", "CONNEXIONS",
-              "PERSISTANCE", "TIMELINE", "MACHINES", "PHOTOREC/recup_1", "STRINGS"):
+              "PERSISTANCE", "TIMELINE", "MACHINES", "PHOTOREC/recup_1", "STRINGS",
+              "SUPPRIMES/racine"):
         os.makedirs(os.path.join(R, d), exist_ok=True)
 
     def w(rel, contenu):
@@ -337,6 +338,13 @@ def batir(base):
                    "<w:t>Compte rendu</w:t>"
                    "<w:t>acces admin : password = SecretDansUnDocx!</w:t>")
     w("PHOTOREC/recup_1/f0008.docx", tampon.getvalue())
+    # SUPPRIMES ne vient que de xfs_undelete, donc que d'un volume xfs : le
+    # chemin existe dans le code depuis le début mais n'était jamais exercé.
+    # Le nom que rend xfs_undelete porte la date de suppression et l'inode.
+    w("SUPPRIMES/racine/2026-01-04_10-22-31_131074.txt",
+      "Objet : reunion du 4 janvier\n"
+      "Cordialement, jdupont@entreprise.fr\n"
+      "acces au partage : //serveur/partage\n")
 
     # ── STRINGS : les chaînes des périphériques, deux volumes ─────────
     # DEUX volumes, sinon rien ne prouve que la collecte n'oublie pas le /home
@@ -383,7 +391,13 @@ def batir(base):
                  # décompresse pas en flux, elle sort « ABSENTE » et le test
                  # tombe. C'est le seul moyen de prouver que le strings du
                  # disque est réellement fouillé.
-                 "texte: chaine-effacee-que-rien-d-autre-ne-porte\n")
+                 "texte: chaine-effacee-que-rien-d-autre-ne-porte\n"
+                 # Cette chaîne est IMBRIQUÉE dans ce que reconnaît un motif de
+                 # l'outil (« password = Bienvenue2025! »). Avec une alternation
+                 # ordinaire, le motif interne l'avale et elle ressort
+                 # « ABSENTE » — on annonce à l'analyste que sa preuve n'existe
+                 # pas. C'est le pire faux négatif possible : le test l'interdit.
+                 "texte: Bienvenue2025!\n")
     return R
 
 
@@ -522,9 +536,15 @@ ATTENDUS_INTERETS = [
                                   "porte": "utilisateur / forensic"}),
     ("document : remplissage écarté", {"fait": "fichier rendu sans nom, et lisible",
                                        "source": "f0007.txt", "porte": "forensic"}),
+    ("document : xfs_undelete", {"fait": "fichier rendu sans nom, et lisible",
+                                 "source": "SUPPRIMES/racine/",
+                                 "porte": "utilisateur"}),
 ]
 
 ATTENDUS_INDICATEURS = [
+    ("chaîne imbriquée dans un motif", {"fait": "texte recherché présent dans un fichier",
+                                        "valeur": "Bienvenue2025!",
+                                        "source": "PHOTOREC/recup_1/f0007.txt"}),
     ("indicateur dans le .gz", {"fait": "texte recherché présent dans un fichier",
                                 "valeur": "chaine-effacee-que-rien-d-autre-ne-porte",
                                 "source": ".txt.gz"}),

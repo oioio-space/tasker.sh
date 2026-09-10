@@ -1995,6 +1995,23 @@ def documents(c):
     for dossier in ("PHOTOREC", "SUPPRIMES"):
         base = os.path.join(c.racine, dossier)
         if not os.path.isdir(base):
+            # SUPPRIMES ne vient que de xfs_undelete, et xfs_undelete ne lit
+            # QUE de l'xfs. Son absence n'est donc pas un manque de collecte
+            # sur un poste en ext4 ou en btrfs : c'est qu'il n'existe pas
+            # d'équivalent. Le dire évite qu'un lecteur cherche une pièce qui
+            # ne peut pas exister — et évite qu'on la réclame à la collecte.
+            if dossier == "SUPPRIMES":
+                fait("limite", "aucune récupération par les inodes libérés",
+                     "SUPPRIMES/ absent", c.prefix,
+                     "présence du dossier produit par xfs_undelete",
+                     confiance="certaine",
+                     note="xfs_undelete ne lit QUE de l'xfs : sur ext4, btrfs ou "
+                          "tout autre système de fichiers, il n'y a pas "
+                          "d'équivalent, et les fichiers récupérés ne viennent "
+                          "que de photorec — donc sans inode, sans date, et "
+                          "seulement pour les types dont il a la signature. "
+                          "Absence normale si le volume n'est pas en xfs ; à "
+                          "reprendre s'il l'est")
             continue
         for d, sous, fichiers in sorted(os.walk(base)):
             sous.sort()
@@ -2442,6 +2459,43 @@ def interets():
             for nom, m, quoi in INTERETS]
 
 
+def lire_textes(chemins):
+    """Des chaînes à chercher, une par ligne, sans aucune syntaxe.
+
+    Le fichier d'indicateurs demande « type: valeur » et refuse le reste : très
+    bien pour mêler empreintes, adresses et expressions, mais lourd quand on
+    n'a qu'une liste — des noms, des références de dossier, des mots-clés
+    d'affaire. Ici, une ligne est une chaîne, et c'est tout. Les lignes vides
+    et celles qui commencent par « # » sont ignorées ; un « # » en fin de
+    ligne sert d'étiquette, comme dans le fichier d'indicateurs.
+
+    Cherchées à la lettre et sans tenir compte de la casse — jamais comme une
+    expression rationnelle : quelqu'un qui écrit « Dupont (RH) » veut ces
+    caractères-là, pas un groupe de capture.
+    """
+    liste = []
+    for chemin in chemins:
+        vus = 0
+        with open(chemin, encoding="utf-8") as fh:
+            for ligne in fh:
+                nue = ligne.strip()
+                if not nue or nue.startswith("#"):
+                    continue
+                etiquette = None
+                coupe = re.search(r'\s+#\s*(.*)$', nue)
+                if coupe:
+                    etiquette, nue = coupe.group(1).strip() or None, nue[:coupe.start()].strip()
+                if not nue:
+                    continue
+                liste.append({"genre": "texte", "valeur": nue,
+                              "motif": re.compile(re.escape(nue.encode("utf-8")), re.I),
+                              "etiquette": etiquette})
+                vus += 1
+        if not vus:
+            sys.exit(f"{chemin} : aucune chaîne lisible")
+    return liste
+
+
 def lire_indicateurs(chemin):
     liste = []
     with open(chemin, encoding="utf-8") as fh:
@@ -2685,7 +2739,7 @@ def _rejouer(f):
     FAITS.append({"id": f"F{len(FAITS) + 1:04d}", **f})
 
 
-def indicateurs(c, liste, fichier=None, reprise=None):
+def indicateurs(c, liste, fichier=None, reprise=None, aussi=()):
     """Cherche chaque indicateur dans TOUTE la collecte, fichier par fichier.
 
     Une seule alternative pour tous les motifs : un membre de 200 Mo n'est
@@ -2697,7 +2751,23 @@ def indicateurs(c, liste, fichier=None, reprise=None):
     empreintes = {g: d for g, d in empreintes.items() if d}
     noms = [x for x in liste if x["genre"] == "fichier"]
     motifs = [x for x in liste if x["motif"] is not None]
-    alternative = re.compile(b"|".join(b"(?P<i%d>%s)" % (i, x["motif"].pattern)
+    # Chaque motif est enfermé dans un REGARD-AVANT. Sans cela, l'alternation ne
+    # rend que des correspondances qui ne se chevauchent pas : le motif interne
+    # « password = ... » avale « Bienvenue2025! », et la chaîne que l'analyste a
+    # demandée sort « ABSENTE » alors qu'elle est là, sous les yeux, dans le
+    # même fichier. Un faux négatif sur une recherche demandée est la pire
+    # erreur que ce script puisse commettre : on lui fait dire qu'une preuve
+    # n'existe pas.
+    #
+    # Le regard-avant ne consomme rien, donc deux motifs peuvent reconnaître la
+    # même zone. Les positions se lisent alors sur le GROUPE, pas sur la
+    # correspondance, qui est de largeur nulle.
+    #
+    # Ça coûte : mesuré à 7,8 s contre 5,7 s pour 64 Mo de texte sans aucune
+    # correspondance, soit environ un tiers de temps en plus. C'est assumé — une
+    # recherche plus lente vaut mieux qu'une recherche qui ment, et le journal
+    # de reprise fait que ce temps n'est perdu qu'une fois.
+    alternative = re.compile(b"|".join(b"(?=(?P<i%d>%s))" % (i, x["motif"].pattern)
                                        for i, x in enumerate(motifs))) if motifs else None
     lire = bool(empreintes or motifs)
 
@@ -2735,14 +2805,16 @@ def indicateurs(c, liste, fichier=None, reprise=None):
                 continue
             tampon = reste + clair
             for m in alternative.finditer(tampon):
-                if m.end() <= len(reste):
+                nom = m.lastgroup
+                debut, fin = m.span(nom)      # le groupe, pas la correspondance
+                if fin <= len(reste):
                     continue                       # déjà compté au tour d'avant
-                i = int(m.lastgroup[1:])
+                i = int(nom[1:])
                 comptes_[i] = comptes_.get(i, 0) + 1
                 if i not in contextes:
-                    d, f = max(0, m.start() - 60), min(len(tampon), m.end() + 60)
+                    d, f = max(0, debut - 60), min(len(tampon), fin + 60)
                     contextes[i] = (tampon[d:f].decode("utf-8", "replace")
-                                    .replace("\n", " "), depart + m.start())
+                                    .replace("\n", " "), depart + debut)
             reste = tampon[-chevauche:]
             depart += len(tampon) - len(reste)
         for g, attendus in empreintes.items():
@@ -2776,7 +2848,9 @@ def indicateurs(c, liste, fichier=None, reprise=None):
     # le fichier d'indicateurs posé DANS la collecte se trouverait lui-même :
     # chaque chaîne y figure, par construction
     par_valeur = {x["valeur"]: x for x in liste}
-    soi = os.path.abspath(fichier) if fichier else None
+    # Un fichier de recherche posé DANS la collecte s'y trouverait lui-même :
+    # chaque chaîne y figure, par construction.
+    soi = {os.path.abspath(x) for x in ([fichier] if fichier else []) + list(aussi or ())}
     # os.walk n'a pas d'ordre garanti : sans tri, la reprise rejouerait les
     # faits dans un autre ordre que la première fois, et les identifiants
     # changeraient. Le tri est donc ici une exigence, pas un confort.
@@ -2784,7 +2858,7 @@ def indicateurs(c, liste, fichier=None, reprise=None):
         sous.sort()
         for f in sorted(fichiers):
             chemin = os.path.join(d, f)
-            if os.path.abspath(chemin) == soi:
+            if os.path.abspath(chemin) in soi:
                 continue
             rel = c.rel(chemin)
             deja = reprise.reutilisable(rel, chemin) if reprise else None
@@ -2921,6 +2995,10 @@ def main():
     ap.add_argument("--indicateurs", metavar="FICHIER",
                     help="chaînes, empreintes, adresses à chercher dans toute la "
                          "collecte, une par ligne : voir references/indicateurs.md")
+    ap.add_argument("--textes", metavar="FICHIER", action="append", default=[],
+                    help="chaînes à chercher, UNE PAR LIGNE et sans syntaxe : des "
+                         "noms, des références, des mots-clés. Répétable. Cherchées "
+                         "à la lettre, sans tenir compte de la casse")
     ap.add_argument("--sans-reprise", action="store_true",
                     help="ignorer le journal de reprise et reparcourir toute la "
                          "collecte, même ce qui a déjà été lu")
@@ -2946,6 +3024,7 @@ def main():
     # cherchée à chaque fois, et celle de l'analyste quand il en donne une.
     avant = len(FAITS)
     demandes = lire_indicateurs(args.indicateurs) if args.indicateurs else []
+    demandes += lire_textes(args.textes)
     tous = interets() + demandes
     # La signature couvre la collecte ET les questions posées : reprendre un
     # journal établi pour d'autres indicateurs rendrait des réponses à des
@@ -2963,7 +3042,7 @@ def main():
         print(f"  reprise : {len(rep.connus)} fichiers déjà parcourus, relus depuis "
               f"{os.path.basename(journal)}", file=sys.stderr)
     try:
-        indicateurs(c, tous, args.indicateurs, rep.ouvrir())
+        indicateurs(c, tous, args.indicateurs, rep.ouvrir(), args.textes)
     finally:
         rep.fermer()
     print(f"  {'indicateurs et intérêts':22s} {len(FAITS) - avant:5d} faits",

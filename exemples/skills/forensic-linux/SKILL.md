@@ -79,53 +79,45 @@ Deux fiches à lire, dans cet ordre :
   système d'origine, l'étape à rejouer, et comment distinguer « le système ne
   l'avait pas » de « la collecte l'a ratée ».
 
-### Les chaînes du disque
+### Les pièces qui n'ont ni date ni auteur
 
-`STRINGS/` porte les chaînes lisibles de chaque périphérique. **Une chaîne
-trouvée là n'est ni datée, ni imputable à un compte** : « l'adresse figure dans
-les octets du volume racine » se dit, « le compte a visité ce site » ne se dit
-pas. Lisez les quatre extraits ; **n'ouvrez pas le `.txt.gz`** — pour y chercher
-une valeur, `--indicateurs`. Détail : `references/artefacts.md`.
+Trois sources disent ce qu'il y a **sans dire quand ni par qui** : les chaînes
+des disques (`STRINGS/`), les fichiers rendus sans nom par photorec et
+`xfs_undelete`, et les motifs que l'outil repère seul (catégorie `interet` —
+clé privée, mot de passe en clair, jeton d'API).
+
+**La règle est la même pour les trois, et elle ne souffre pas d'exception :**
+le contenu est établi, la provenance ne l'est pas. « L'adresse figure dans les
+octets du volume racine » se dit ; « le compte a visité ce site » ne se dit
+pas, sauf si une pièce datée le porte. **Ouvrez la pièce citée avant d'en
+écrire un mot**, et rayez le reste en disant pourquoi.
+
+`SUPPRIMES/` n'existe que pour un volume **xfs** : ailleurs, `xfs_undelete` n'a
+pas d'équivalent, et les fichiers rendus viennent seulement de photorec. Un
+fait le dit quand le dossier manque — ce n'est pas une collecte incomplète.
+
+Pour chercher : `--textes fichier` prend **une chaîne par ligne, sans syntaxe**
+(noms, références, mots-clés) ; `--indicateurs` mêle empreintes, adresses et
+expressions. Les deux fouillent aussi les `.gz`, les `.docx` et les PDF.
+Détail : `references/indicateurs.md` et `references/artefacts.md`.
 
 ### Trois synthèses, et ce qu'elles valent
 
-L'extracteur produit trois tableaux qui ne lisent aucune pièce : ils relisent
-les faits déjà établis. Chaque ligne cite les identifiants dont elle sort, donc
-tout s'y remonte.
+Trois tableaux ne lisent aucune pièce : ils relisent les faits établis, et
+chaque ligne cite les identifiants dont elle sort.
 
 - **Les comptes**, avec première et dernière session, et la pièce qui le dit.
-  Un compte à zéro session n'est **pas** un compte inutilisé : c'est un compte
-  dont `wtmp` ne porte pas de session. Dites-le ainsi.
+  Un compte à zéro session n'est **pas** inutilisé : c'est un compte dont
+  `wtmp` ne porte pas de session. Dites-le ainsi.
 - **Les périodes sans trace.** `wtmp` est tourné, les journaux sont purgés, un
   usage qui n'écrit rien ne laisse rien. **N'écrivez jamais « le poste n'a pas
-  servi »** : écrivez « la collecte ne porte aucune trace entre le X et le Y »,
-  et confrontez-le aux limites.
-- **Les supports amovibles**, un par ligne, avec `idVendor:idProduct` et le
-  numéro de série — rattaché au branchement **par le temps**, d'où une
-  confiance « forte ». Sans numéro de série lu, deux supports du même modèle
-  ne se distinguent pas : le fait le dit, reprenez-le.
+  servi »** : écrivez « la collecte ne porte aucune trace entre le X et le Y ».
+- **Les supports amovibles**, un par ligne, `idVendor:idProduct` et numéro de
+  série — rattaché au branchement **par le temps**, d'où « forte ». Sans
+  numéro de série, deux supports du même modèle ne se distinguent pas.
 
-### Ce que l'outil remarque de lui-même
-
-Une courte liste de motifs — clé privée, mot de passe en clair, jeton d'API,
-adresse en `.onion` — est cherchée dans toute la collecte, **y compris dans les
-chaînes des disques et dans ce que photorec a rendu**, où rien d'autre ne va.
-Catégorie `interet` ; détail dans `references/indicateurs.md`.
-
-**Ces lignes sont « à vérifier », sans exception** : un secret trouvé dans les
-octets n'est ni daté ni imputable, et vient aussi bien d'un paquet
-d'installation ou d'un fichier de test que du compte. **Ouvrez la pièce citée
-avant d'en écrire un mot**, rayez le reste en disant pourquoi.
-
-Les fichiers rendus **sans nom** par photorec et `xfs_undelete` sont ouverts
-quand ils sont lisibles : le rapport donne leur chemin, la phrase qui les
-identifie, et s'ils portent des données d'utilisateur, de système ou d'intérêt
-forensique. **Le contenu y est établi, la provenance non** — ces fichiers n'ont
-ni auteur ni date.
-
-Les archives sont ouvertes pour cette recherche — un `.docx` est un zip de XML,
-et sans le décompresser les motifs n'y verraient rien. **Si l'extraction
-plante, relancez la même commande** : elle reprend où elle s'était arrêtée.
+**Si l'extraction plante, relancez la même commande** : elle reprend où elle
+s'était arrêtée.
 
 ### 2 · Vérifier avant d'écrire
 

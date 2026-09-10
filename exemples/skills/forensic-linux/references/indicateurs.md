@@ -158,3 +158,47 @@ d'une ligne — ce que fait un plantage réel — et compare les deux sorties.
 Le journal porte l'empreinte de la collecte et de la liste d'indicateurs :
 changer la liste l'invalide, puisque les faits d'avant répondaient à d'autres
 questions. `--sans-reprise` force un parcours complet.
+
+
+## Une simple liste de chaînes : `--textes`
+
+Le fichier d'indicateurs demande `type: valeur` et refuse le reste. C'est bien
+pour mêler empreintes, adresses et expressions, mais lourd quand on n'a qu'une
+liste — des noms, des références de dossier, des mots-clés d'affaire.
+
+    python3 extraire.py <collecte> -o faits.jsonl --textes mots-cles.txt
+
+Une ligne, une chaîne. Rien d'autre :
+
+    # mots-clés de l'affaire
+    Dupont (RH)
+    DOSSIER-2026-114
+    Bienvenue2025!        # le mot de passe du brouillon
+
+Les lignes vides et celles qui commencent par `#` sont ignorées ; un `#` en fin
+de ligne sert d'étiquette, comme dans le fichier d'indicateurs. L'option est
+répétable, et se combine avec `--indicateurs`.
+
+Les chaînes sont cherchées **à la lettre**, sans tenir compte de la casse, et
+**jamais** comme une expression rationnelle : qui écrit `Dupont (RH)` veut ces
+caractères-là, pas un groupe de capture. Pour une expression, utilisez
+`regex:` dans un fichier d'indicateurs.
+
+**Ne posez pas ce fichier dans la collecte** : il s'y trouverait lui-même,
+chaque chaîne y figurant par construction. L'extracteur écarte le fichier qu'on
+lui donne, mais pas une copie qu'on aurait laissée ailleurs dans le dossier.
+
+### Pourquoi une chaîne imbriquée dans une autre ressort quand même
+
+Les motifs sont cherchés en **une seule passe**, par une alternation. Une
+alternation ordinaire ne rend que des correspondances qui ne se chevauchent
+pas : le motif interne « mot de passe en clair », qui reconnaît
+`password = Bienvenue2025!`, avalerait `Bienvenue2025!`, et la chaîne demandée
+ressortirait **ABSENTE** — on annoncerait à l'analyste que sa preuve n'existe
+pas alors qu'elle est là.
+
+Chaque motif est donc enfermé dans un regard-avant, qui ne consomme rien : deux
+motifs peuvent reconnaître la même zone. Cela coûte environ un tiers de temps
+en plus (mesuré : 7,8 s contre 5,7 s pour 64 Mo sans correspondance), et c'est
+assumé — une recherche plus lente vaut mieux qu'une recherche qui ment, et le
+journal de reprise fait que ce temps n'est perdu qu'une fois.
