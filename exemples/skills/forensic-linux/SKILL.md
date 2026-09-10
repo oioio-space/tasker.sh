@@ -82,13 +82,10 @@ Deux fiches à lire, dans cet ordre :
 ### Les chaînes du disque
 
 `STRINGS/` porte les chaînes lisibles de chaque périphérique. **Une chaîne
-trouvée là n'est ni datée, ni imputable à un compte** : elle établit une
-existence sur le volume, rien de plus. « L'adresse figure dans les octets du
-volume racine » se dit ; « le compte a visité ce site » ne se dit pas, sauf si
-une pièce datée le porte. Lisez les quatre extraits `_urls`, `_courriels`,
-`_ip`, `_chemins` ; **n'ouvrez pas le `.txt.gz`**, qui pèse des gigaoctets —
-pour y chercher une valeur, passez-la en `--indicateurs`. Le détail est dans
-`references/artefacts.md`.
+trouvée là n'est ni datée, ni imputable à un compte** : « l'adresse figure dans
+les octets du volume racine » se dit, « le compte a visité ce site » ne se dit
+pas. Lisez les quatre extraits ; **n'ouvrez pas le `.txt.gz`** — pour y chercher
+une valeur, `--indicateurs`. Détail : `references/artefacts.md`.
 
 ### Trois synthèses, et ce qu'elles valent
 
@@ -99,11 +96,10 @@ tout s'y remonte.
 - **Les comptes**, avec première et dernière session, et la pièce qui le dit.
   Un compte à zéro session n'est **pas** un compte inutilisé : c'est un compte
   dont `wtmp` ne porte pas de session. Dites-le ainsi.
-- **Les périodes sans trace.** Un trou de plusieurs semaines est posé comme une
-  question, jamais comme un constat d'inutilisation — `wtmp` est tourné, les
-  journaux sont purgés, un usage qui n'écrit rien ne laisse rien. **N'écrivez
-  jamais « le poste n'a pas servi »** : écrivez « la collecte ne porte aucune
-  trace entre le X et le Y », et confrontez-le aux limites.
+- **Les périodes sans trace.** `wtmp` est tourné, les journaux sont purgés, un
+  usage qui n'écrit rien ne laisse rien. **N'écrivez jamais « le poste n'a pas
+  servi »** : écrivez « la collecte ne porte aucune trace entre le X et le Y »,
+  et confrontez-le aux limites.
 - **Les supports amovibles**, un par ligne, avec `idVendor:idProduct` et le
   numéro de série — rattaché au branchement **par le temps**, d'où une
   confiance « forte ». Sans numéro de série lu, deux supports du même modèle
@@ -120,6 +116,12 @@ Catégorie `interet` ; détail dans `references/indicateurs.md`.
 octets n'est ni daté ni imputable, et vient aussi bien d'un paquet
 d'installation ou d'un fichier de test que du compte. **Ouvrez la pièce citée
 avant d'en écrire un mot**, rayez le reste en disant pourquoi.
+
+Les fichiers rendus **sans nom** par photorec et `xfs_undelete` sont ouverts
+quand ils sont lisibles : le rapport donne leur chemin, la phrase qui les
+identifie, et s'ils portent des données d'utilisateur, de système ou d'intérêt
+forensique. **Le contenu y est établi, la provenance non** — ces fichiers n'ont
+ni auteur ni date.
 
 Les archives sont ouvertes pour cette recherche — un `.docx` est un zip de XML,
 et sans le décompresser les motifs n'y verraient rien. **Si l'extraction

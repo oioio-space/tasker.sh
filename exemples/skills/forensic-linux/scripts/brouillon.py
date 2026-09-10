@@ -616,6 +616,24 @@ def main():
                            "existence sur le disque, sans date. Dites pour chacune si "
                            "une autre pièce la date — et quand aucune ne le fait, "
                            "écrivez-le plutôt que de laisser le lecteur le supposer."))
+    if par.get("document"):
+        S.append("### Ce que contiennent les fichiers rendus sans nom\n")
+        S.append("photorec et `xfs_undelete` rendent du contenu **sans nom ni date**. "
+                 "Les compter par type ne dit rien ; les ouvrir dit tout. Voici ceux "
+                 "que l'extracteur a su lire, avec la première phrase qui les "
+                 "identifie et ce qu'ils portent.\n")
+        S.append("> **Le contenu est établi, la provenance ne l'est pas.** Un fichier "
+                 "rendu par le carving n'a ni auteur, ni date, ni compte : il peut "
+                 "venir d'un paquet d'installation autant que du dossier personnel. "
+                 "Ouvrez la pièce avant d'attribuer quoi que ce soit.\n")
+        S.append(table(["pièce", "de quoi ça parle", "porte", "motifs repérés", "id"],
+                       [(f["source"], T(f["valeur"]), f.get("porte"),
+                         f.get("interet"), f["id"]) for f in par["document"]],
+                       quoi="documents lisibles"))
+        S.append(a_rediger("les documents qui comptent, et pourquoi. Un compte rendu "
+                           "de réunion n'a pas la même valeur qu'un fichier de "
+                           "configuration : dites laquelle. Et rappelez pour chacun "
+                           "qu'aucune date ne s'y attache."))
     if par.get("interet"):
         S.append("### Ce que l'outil a remarqué de lui-même\n")
         S.append("Une courte liste de motifs est cherchée dans **toute** la collecte à "

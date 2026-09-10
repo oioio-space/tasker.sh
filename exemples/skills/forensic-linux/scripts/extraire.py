@@ -1927,6 +1927,128 @@ _GENRES = {
 }
 
 
+# ── 9 bis · ce que contiennent les fichiers rendus sans nom ───────────
+# photorec et xfs_undelete rendent du contenu SANS NOM NI DATE. Les compter
+# par type ne dit rien ; les ouvrir dit tout. Cette fonction répond à trois
+# questions pour chacun de ceux qu'on sait lire : comment il s'appelle dans la
+# collecte, de quoi il parle, et s'il porte quelque chose d'utile.
+#
+# Elle ne conclut rien. Un document rendu par le carving n'a ni auteur ni date,
+# et peut aussi bien venir d'un paquet d'installation que du dossier du compte.
+# Elle dit ce qu'il y a dedans et laisse l'analyste ouvrir la pièce.
+
+# Ces motifs-là courent sur le TEXTE décodé, pas sur les octets : un littéral
+# d'octets ne peut pas porter d'accent, et « réunion » ou « procédure » sont
+# précisément les mots qui disent qu'un document a été rédigé par quelqu'un.
+RE_COURRIEL = re.compile(r'[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{2,63}\.[A-Za-z]{2,12}')
+RE_MAISON = re.compile(r'/(?:home|root)/[A-Za-z0-9._-]{2,32}/')
+RE_IPV4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+RE_TELEPHONE = re.compile(r'\b0[1-9](?:[ .-]?\d{2}){4}\b')
+RE_REDIGE = re.compile(r'\b(bonjour|madame|monsieur|cordialement|compte[ -]rendu|'
+                       r'objet\s*:|réunion|facture|devis|contrat|procédure|'
+                       r'note de service)\b', re.I)
+RE_SYSTEME = re.compile(r'(/etc/[a-z0-9._/-]{2,}|\bsystemd\b|\b(?:apt|dnf|yum|pacman|'
+                        r'zypper)\b|^#!\s*/|\bListen\b|\bServerName\b)', re.I | re.M)
+
+# Le contenu d'un document ne se lit pas en entier : on veut savoir de quoi il
+# parle, pas le recopier. Le début suffit, et il borne le coût.
+APERCU = 4000
+DOCUMENTS_MAX = 40
+
+
+def _lisible(blob):
+    """Le texte d'un blob, s'il en est un. None sinon.
+
+    Un fichier rendu par le carving n'a pas d'extension fiable : on regarde ce
+    qu'il contient. Un octet nul, ou plus d'un dixième d'octets non
+    imprimables, et ce n'est pas du texte — c'est une image ou un binaire, et
+    l'aperçu n'aurait aucun sens.
+    """
+    if not blob or b"\x00" in blob[:4096]:
+        return None
+    echantillon = blob[:4096]
+    imprimables = sum(1 for o in echantillon if 32 <= o < 127 or o in (9, 10, 13) or o >= 160)
+    if imprimables < len(echantillon) * 0.9:
+        return None
+    # Une plage d'un seul octet répété passe tous les tests d'imprimabilité et
+    # n'est pourtant pas du texte : c'est du remplissage, ou la fin d'un bloc.
+    # Un disque en produit beaucoup, et un rapport qui les présente comme des
+    # documents lisibles fait perdre du temps à celui qui le lit.
+    if len(set(echantillon)) < 12:
+        return None
+    return blob.decode("utf-8", "replace")
+
+
+def _sujet(texte):
+    """De quoi ça parle, en une ligne : la première qui dise quelque chose."""
+    for ligne in texte.splitlines():
+        nue = re.sub(r'<[^>]{1,200}>', " ", ligne)       # balises XML d'un .docx
+        nue = " ".join(nue.split())
+        if len(nue) >= 12 and not nue.startswith(("#!", "<?xml", "%PDF")):
+            return nue[:160]
+    return None
+
+
+def documents(c):
+    """Les fichiers rendus sans nom, ouverts et caractérisés."""
+    rendus, tronque = 0, False
+    for dossier in ("PHOTOREC", "SUPPRIMES"):
+        base = os.path.join(c.racine, dossier)
+        if not os.path.isdir(base):
+            continue
+        for d, sous, fichiers in sorted(os.walk(base)):
+            sous.sort()
+            for f in sorted(fichiers):
+                if rendus >= DOCUMENTS_MAX:
+                    tronque = True
+                    continue
+                chemin = os.path.join(d, f)
+                etat = {}
+                morceaux, vus = [], 0
+                try:
+                    for _, clair in _blocs(chemin, etat):
+                        if not clair:
+                            continue
+                        morceaux.append(clair)
+                        vus += len(clair)
+                        if vus >= APERCU:
+                            break
+                except (OSError, zlib.error):
+                    continue
+                texte = _lisible(b"".join(morceaux)[:APERCU])
+                if not texte:
+                    continue
+                sujet = _sujet(texte)
+                porte = []
+                if RE_COURRIEL.search(texte) or RE_MAISON.search(texte) \
+                        or RE_TELEPHONE.search(texte) or RE_REDIGE.search(texte):
+                    porte.append("utilisateur")
+                if RE_SYSTEME.search(texte) or RE_IPV4.search(texte):
+                    porte.append("système")
+                octets = texte.encode("utf-8", "replace")
+                interessants = [nom for nom, motif, _ in INTERETS
+                                if re.search(motif.encode("utf-8"), octets, re.I)]
+                if interessants:
+                    porte.append("forensic")
+                rendus += 1
+                fait("document", "fichier rendu sans nom, et lisible",
+                     sujet or "(du texte, sans phrase identifiable)", c.rel(chemin),
+                     f"ouvert et lu sur ses {_taille(min(vus, APERCU))} premiers octets",
+                     confiance="forte", porte=" / ".join(porte) or "rien de remarquable",
+                     interet=" / ".join(interessants) or None,
+                     note="rendu par le carving : ni nom d'origine, ni date, ni compte. "
+                          "Ce qu'il contient est établi ; d'où il vient ne l'est pas"
+                          + (f". Motifs repérés dedans : {', '.join(interessants)}"
+                             if interessants else ""))
+    if tronque:
+        fait("limite", "documents rendus sans nom : seuls les premiers sont ouverts",
+             str(DOCUMENTS_MAX), "PHOTOREC/, SUPPRIMES/",
+             f"les {DOCUMENTS_MAX} premiers dans l'ordre des dossiers",
+             note="les autres sont comptés par type dans la section des pièces "
+                  "récupérées ; pour en ouvrir un précis, cherchez-y avec "
+                  "--indicateurs")
+
+
 # ── 10 · les synthèses ────────────────────────────────────────────────
 # Ces deux-là ne lisent aucune pièce : elles relisent les FAITS déjà établis.
 # C'est voulu. Un tableau de synthèse qui irait rechercher ses propres données
@@ -2811,7 +2933,8 @@ def main():
                       ("réseau", reseau), ("navigation", navigation),
                       ("historique des paquets", historique_paquets),
                       ("persistance", persistance), ("supprimés", supprimes),
-                      ("chaînes des disques", chaines), ("timeline", timeline),
+                      ("chaînes des disques", chaines),
+                      ("documents rendus", documents), ("timeline", timeline),
                       ("périodes", periodes), ("supports amovibles", supports)):
         avant = len(FAITS)
         try:

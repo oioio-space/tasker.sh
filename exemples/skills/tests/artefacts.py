@@ -514,6 +514,14 @@ ATTENDUS_INTERETS = [
                                      "source": "_strings_racine.txt.gz"}),
     ("intérêt : docx décompressé", {"valeur": "mot de passe en clair",
                                     "source": "PHOTOREC/recup_1/f0008.docx"}),
+    # Le document doit être CARACTÉRISÉ, pas seulement fouillé : son sujet lu
+    # dans le XML du .docx, et ce qu'il porte.
+    ("document : sujet du docx", {"fait": "fichier rendu sans nom, et lisible",
+                                  "valeur": "Compte rendu",
+                                  "source": "PHOTOREC/recup_1/f0008.docx",
+                                  "porte": "utilisateur / forensic"}),
+    ("document : remplissage écarté", {"fait": "fichier rendu sans nom, et lisible",
+                                       "source": "f0007.txt", "porte": "forensic"}),
 ]
 
 ATTENDUS_INDICATEURS = [
@@ -630,7 +638,8 @@ def main():
     for artefact, exige in ATTENDUS_CHAMPS + ATTENDUS_INTERETS + ATTENDUS_INDICATEURS:
         ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
         manques += not ok
-        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {exige['valeur']}")
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} "
+              f"{exige.get('valeur') or exige.get('source')}")
 
     print(f"\n── PIÈCES QUI SURVIVENT AU VIDAGE DE L'HISTORIQUE ──")
     with open(constats, encoding="utf-8") as fh:
