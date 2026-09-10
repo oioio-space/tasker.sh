@@ -417,9 +417,10 @@ photorec : aucun volume ne peut être oublié, aucun n'est nommé à la main.
     PREFIX_strings_<volume>_urls.txt      les adresses web, comptées
     PREFIX_strings_<volume>_courriels.txt les adresses de courriel
     PREFIX_strings_<volume>_ip.txt        les adresses IP
+    PREFIX_strings_<volume>_mac.txt       les adresses MAC
     PREFIX_strings_<volume>_chemins.txt   les chemins sous /home, /root, /media…
 
-Les quatre extraits sont au format `compte décalage valeur` : le nombre
+Les cinq extraits sont au format `compte décalage valeur` : le nombre
 d'occurrences, le décalage en octets de la **première** d'entre elles, puis la
 chaîne. Le décalage permet de citer un emplacement précis, et de le retrouver
 dans le `.gz` sans le parcourir en entier.
@@ -430,6 +431,14 @@ sur les fichiers. Il lit donc les octets du volume tels qu'ils sont : ce qui a
 bloc, le swap, les pages libérées d'une base de navigateur. C'est la seule
 pièce de la collecte qui répond à « cela a-t-il jamais existé sur ce disque ? »
 quand l'historique a été vidé et les fichiers supprimés.
+
+C'est vrai en particulier des **adresses MAC** : une machine du réseau local,
+un point d'accès associé une seule fois, une interface qui n'est plus dans
+aucune configuration y laissent leur adresse. Une MAC lue ici n'est jamais
+mieux qu'« à vérifier » — elle n'a ni date, ni fichier d'origine —, mais c'est
+souvent la seule pièce qui garde la trace d'un matériel dont le système ne
+parle plus. La synthèse des adresses la rapproche de celles qui, elles, ont
+une provenance.
 
 **Ce qu'elle ne dit pas, et il faut le répéter dans le rapport :** ni quand, ni
 dans quel fichier, ni par quel compte. Une chaîne n'y est pas datée et n'est

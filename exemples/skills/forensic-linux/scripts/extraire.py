@@ -1713,6 +1713,7 @@ _GENRE_CHAINE = {
     "urls": "adresse web",
     "courriels": "adresse de courriel",
     "ip": "adresse IP",
+    "mac": "adresse MAC",
     "chemins": "chemin personnel",
 }
 _SANS_DATE = ("lu sur les OCTETS du disque : ni date, ni fichier d'origine, ni "
@@ -2178,6 +2179,207 @@ def periodes(c):
                   "CE N'EST PAS UNE PREUVE DE NON-USAGE : wtmp est tourné, les "
                   "journaux sont purgés, et un usage qui n'écrit rien ne laisse "
                   "rien. À confronter aux limites de collecte du rapport")
+
+
+# L'hôte d'une URL, l'adresse MAC, l'IPv4. Les bornes de RE_MAC écartent ce qui
+# est NOYÉ dans une suite hexadécimale plus longue : une empreinte SSH
+# « SHA256:aa:bb:… », une IPv6, une clé écrite en hexadécimal. Sans elles,
+# n'importe quelle empreinte rendrait six adresses MAC.
+RE_URL_HOTE = re.compile(r'\b(?:https?|ftp)://(?:[^\s/@:]{1,64}(?::[^\s/@]{0,64})?@)?'
+                         r'([A-Za-z0-9._-]{1,253})')
+RE_MAC = re.compile(r'(?<![0-9A-Za-z:])(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(?![0-9A-Za-z:])')
+
+# Les champs d'un fait où une adresse est une DONNÉE, et si le champ est une
+# FENÊTRE découpée dans quelque chose de plus long. « note » n'y est pas :
+# elle explique, et ses exemples — « 203.0.113.42 jamais vue ici » —
+# deviendraient des adresses trouvées sur le poste.
+CHAMPS_ADRESSE = (("valeur", False), ("contexte", True))
+ADRESSES_MAX = 80
+
+# D'où vient une adresse, en français. C'est TOUT l'intérêt de la synthèse :
+# la même IP dans un profil réseau, dans une ligne de journal et dans les
+# octets bruts du disque ne raconte pas la même chose.
+OU_ADRESSE = {
+    "reseau": "configuration réseau", "machine": "configuration système",
+    "navigation": "navigation", "telechargement": "téléchargement",
+    "chaines": "chaînes du disque", "evenement": "journal",
+    "connexion": "journal de connexion", "document": "fichier rendu sans nom",
+    # « fenêtre » et non « octets bruts » : l'adresse était dans les soixante
+    # octets qui entourent un AUTRE motif repéré. Elle est bien là, mais c'est
+    # un voisinage, pas une trouvaille — le dire évite de le lire pour plus.
+    "interet": "fenêtre d'un motif repéré", "indicateur": "fenêtre d'un motif repéré",
+    "persistance": "persistance", "usage": "usage", "suspect": "point d'attention",
+}
+# Ces dossiers ne portent pas des FICHIERS mais des octets récupérés : ni date,
+# ni chemin d'origine, ni compte. Une adresse qui n'en sort que n'est jamais
+# mieux qu'« à vérifier », quelle que soit la confiance du fait qui la porte —
+# celui-ci est sûr de l'avoir LUE, pas de ce qu'elle signifie.
+#
+# C'est le DOSSIER qui décide, et non la catégorie du fait : un indicateur
+# demandé par l'analyste et trouvé dans un strings de disque n'est pas mieux
+# daté qu'une chaîne quelconque, alors que la même recherche dans un profil
+# réseau, elle, désigne une configuration.
+DOSSIERS_SANS_PROVENANCE = ("STRINGS/", "PHOTOREC/", "SUPPRIMES/")
+RANG_CONFIANCE = ("à vérifier", "forte", "certaine")
+
+
+def _ipv4(v):
+    """L'adresse si c'est bien une IPv4 routable, None sinon.
+
+    RE_IPV4 ne valide pas les octets : « 2024.1.300.5 » lui convient, et un
+    disque est plein de numéros de version. On vérifie donc, et on écarte ce
+    qui ne désigne aucune machine — bouclage, adresse nulle, diffusion.
+    """
+    parties = v.split(".")
+    if len(parties) != 4 or any(not p.isdigit() or int(p) > 255 for p in parties):
+        return None
+    if v.startswith("127.") or v in ("0.0.0.0", "255.255.255.255"):
+        return None
+    return v
+
+
+def _portee_ip(v):
+    """Privée, publique, ou autre — ce qui décide si c'est un contact dehors."""
+    a, b = (int(x) for x in v.split(".")[:2])
+    if a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168):
+        return "privée"
+    if a == 169 and b == 254:
+        return "auto-attribuée (aucun DHCP n'a répondu)"
+    if 224 <= a <= 239:
+        return "multidiffusion"
+    return "publique"
+
+
+def _portee_mac(v):
+    """Le bit « administrée localement » du premier octet.
+
+    Une adresse MAC qui le porte n'a pas été attribuée par un constructeur :
+    c'est une adresse tirée au hasard. Les téléphones et les portables le font
+    par défaut pour le Wi-Fi, ce qui est banal — mais cela veut dire que la
+    même machine porte une adresse différente à chaque réseau, et qu'on ne peut
+    PAS la suivre par là.
+    """
+    if v.lower() in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
+        return None
+    return ("administrée localement (tirée au hasard)"
+            if int(v[:2], 16) & 0b10 else f"constructeur {v[:8].upper()}")
+
+
+def _adresses_du_fait(f):
+    """(genre, valeur, portée) de chaque adresse écrite dans un fait.
+
+    Une adresse COLLÉE AU BORD d'une fenêtre est écartée. Le contexte d'un
+    motif est découpé à soixante octets de part et d'autre, sans égard pour ce
+    qu'il coupe : « …/torrent/999 https://www.yggtor » y rend un hôte qui
+    n'existe pas, et « 192.168.0.55 » coupé d'un octet rend « 192.168.0.5 »,
+    qui est une AUTRE machine. Inventer une adresse est plus grave que d'en
+    manquer une — celle-là figure de toute façon en entier dans la pièce d'où
+    la fenêtre est tirée.
+    """
+    for champ, fenetre in CHAMPS_ADRESSE:
+        texte = f.get(champ)
+        if not isinstance(texte, str):
+            continue
+
+        def entier(m, texte=texte, fenetre=fenetre):
+            return not fenetre or (m.start() > 0 and m.end() < len(texte))
+
+        for m in RE_MAC.finditer(texte):
+            portee = _portee_mac(m.group(0))
+            if portee and entier(m):
+                yield "MAC", m.group(0).lower(), portee
+        for m in RE_IPV4.finditer(texte):
+            if _ipv4(m.group(0)) and entier(m):
+                yield "IP", m.group(0), _portee_ip(m.group(0))
+        for m in RE_URL_HOTE.finditer(texte):
+            hote = m.group(1).rstrip(".").lower()
+            if hote and hote not in ("localhost", "127.0.0.1") and entier(m):
+                yield "URL", hote, "hôte web"
+
+
+def adresses(c):
+    """Les adresses réseau vues dans la collecte, chacune avec sa provenance.
+
+    Une adresse ne dit presque rien toute seule ; ce qui compte est OÙ elle a
+    été vue. La même IP dans un profil NetworkManager, dans une ligne de
+    journal et dans les octets bruts du disque ne raconte pas la même chose :
+    la première est une configuration, la deuxième une connexion datée, la
+    troisième une trace sans date ni auteur. Chaque ligne porte donc ses
+    pièces, ses identifiants de faits, et une confiance qui suit la provenance
+    la plus solide — jamais mieux qu'« à vérifier » quand l'adresse ne vient
+    que des octets bruts.
+
+    Les URL sont regroupées par HÔTE. Une synthèse qui listerait dix mille
+    adresses de pages n'en serait plus une ; le compte des URL distinctes
+    reste, et les faits « navigation » gardent le détail.
+    """
+    vues = {}
+    for f in FAITS:
+        # Ne pas se relire soi-même ; et surtout, ne JAMAIS lire un fait qui
+        # affirme une absence : la valeur qu'il porte est celle qu'on a cherchée
+        # sans la trouver. La ranger ici reviendrait à dire au lecteur qu'une
+        # adresse a été vue sur le poste parce qu'il l'a demandée.
+        if f["categorie"] == "adresse" or f.get("role") == "absence":
+            continue
+        for genre, valeur, portee in _adresses_du_fait(f):
+            a = vues.setdefault((genre, valeur),
+                                {"portee": portee, "faits": [], "sources": set(),
+                                 "ou": set(), "urls": set(), "dates": []})
+            a["faits"].append(f)
+            a["sources"].add(f["source"])
+            a["ou"].add(OU_ADRESSE.get(f["categorie"], f["categorie"]))
+            if not f["source"].startswith(DOSSIERS_SANS_PROVENANCE):
+                h = _horo(f)
+                if h:
+                    a["dates"].append((h, f))
+            if genre == "URL":
+                for champ, _ in CHAMPS_ADRESSE:
+                    if isinstance(f.get(champ), str) and "://" in f[champ]:
+                        a["urls"].add(f[champ][:400])
+    if not vues:
+        return
+    # Le plus vu d'abord : sur un disque, c'est l'ordre qui met en tête ce qui
+    # a servi, et non ce qui commence par un chiffre bas.
+    ordre = sorted(vues.items(), key=lambda kv: (kv[0][0], -len(kv[1]["faits"]), kv[0][1]))
+    for (genre, valeur), a in ordre[:ADRESSES_MAX]:
+        # Une adresse qui ne vient QUE de pièces sans provenance n'a pas de
+        # meilleure confiance qu'« à vérifier », et le rang ne monte que sur
+        # les pièces qui, elles, disent d'où elles sortent.
+        datables = [f for f in a["faits"]
+                    if not f["source"].startswith(DOSSIERS_SANS_PROVENANCE)]
+        confiance = max((f.get("confiance", "à vérifier") for f in datables),
+                        key=RANG_CONFIANCE.index, default="à vérifier")
+        dates = sorted(a["dates"], key=lambda x: (x[0], x[1]["id"]))
+        ids = ", ".join(f["id"] for f in a["faits"][:8])
+        fait("adresse", f"adresse {genre} vue dans la collecte", valeur,
+             sorted(a["sources"])[0],
+             f"toutes les adresses {genre} relevées dans les faits déjà établis",
+             horodatage=dates[0][1].get("horodatage") if dates else None,
+             confiance=confiance, genre=genre, portee=a["portee"],
+             occurrences=len(a["faits"]), pieces=len(a["sources"]),
+             ou=" / ".join(sorted(a["ou"])),
+             premiere=dates[0][1].get("horodatage") if dates else None,
+             derniere=dates[-1][1].get("horodatage") if dates else None,
+             urls=len(a["urls"]) or None,
+             note=f"vue dans {len(a['faits'])} fait(s) ({ids}) et "
+                  f"{len(a['sources'])} pièce(s) ; relevée dans : "
+                  + ", ".join(sorted(a["ou"]))
+                  + (f" ; {len(a['urls'])} adresse(s) de page distinctes"
+                     if a["urls"] else "")
+                  + ("" if dates else
+                     " ; AUCUNE pièce datée ne la porte — on sait qu'elle a été "
+                     "écrite sur ce poste, pas quand")
+                  + ("" if datables else
+                     " ; vue UNIQUEMENT dans des pièces sans provenance — octets "
+                     "bruts du disque, fichier rendu sans nom : ni fichier "
+                     "d'origine, ni compte"))
+    if len(ordre) > ADRESSES_MAX:
+        fait("limite", "synthèse des adresses réseau : seules les plus vues",
+             str(ADRESSES_MAX), c.prefix,
+             f"les {ADRESSES_MAX} adresses les plus souvent vues, par genre",
+             note=f"{len(ordre)} adresses distinctes au total ; les faits « reseau », "
+                  "« navigation » et « chaines » les portent toutes. Pour une "
+                  "adresse précise, cherchez-la avec --textes")
 
 
 RE_VIDPID = re.compile(r'idVendor=(?P<vid>[0-9a-fA-F]{4}).*?idProduct=(?P<pid>[0-9a-fA-F]{4})')
@@ -3048,8 +3250,13 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
         if x.get("absent") is False:
             continue          # l'absence d'un motif de l'outil n'est pas un fait
         if not x.get("trouve"):
+            # « role » marque une ABSENCE. Sans lui, la valeur cherchée — une IP,
+            # un domaine — se lit comme n'importe quelle autre : la synthèse des
+            # adresses rangeait parmi les adresses VUES sur le poste celles que
+            # l'analyste avait justement cherchées SANS les trouver.
             fait("indicateur", f"{x['genre']} recherché ABSENT de la collecte", x["valeur"],
                  c.prefix, "recherche dans chaque fichier et chaque membre d'archive",
+                 role="absence",
                  note="absent des pièces collectées, pas forcément du poste : la "
                       "collecte ne prend pas tout"
                       + (f" — {x['etiquette']}" if x["etiquette"] else ""))
@@ -3176,21 +3383,31 @@ def main():
     args = ap.parse_args()
 
     c = Collecte(args.collecte, visites=args.visites)
-    for etape, fn in (("complétude", completude),
-                      ("machine", machine), ("comptes et domaine", comptes),
-                      ("sessions", sessions), ("journaux", journaux),
-                      ("réseau", reseau), ("navigation", navigation),
-                      ("historique des paquets", historique_paquets),
-                      ("persistance", persistance), ("supprimés", supprimes),
-                      ("chaînes des disques", chaines),
-                      ("documents rendus", documents), ("timeline", timeline),
-                      ("périodes", periodes), ("supports amovibles", supports)):
+
+    def etape(nom, fn):
+        """Une phase, son compte de faits, et son plantage qui n'emporte rien.
+
+        Une phase qui échoue ne doit pas coûter les quatorze autres : la
+        collecte d'en face est une pièce à conviction, souvent incomplète ou
+        abîmée, et un rapport partiel vaut mieux qu'une trace de pile.
+        """
         avant = len(FAITS)
         try:
             fn(c)
         except Exception as e:                                    # noqa: BLE001
-            print(f"  ! {etape} : {type(e).__name__} {e}", file=sys.stderr)
-        print(f"  {etape:22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
+            print(f"  ! {nom} : {type(e).__name__} {e}", file=sys.stderr)
+        print(f"  {nom:22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
+
+    for nom, fn in (("complétude", completude),
+                    ("machine", machine), ("comptes et domaine", comptes),
+                    ("sessions", sessions), ("journaux", journaux),
+                    ("réseau", reseau), ("navigation", navigation),
+                    ("historique des paquets", historique_paquets),
+                    ("persistance", persistance), ("supprimés", supprimes),
+                    ("chaînes des disques", chaines),
+                    ("documents rendus", documents), ("timeline", timeline),
+                    ("périodes", periodes), ("supports amovibles", supports)):
+        etape(nom, fn)
     # Un seul parcours de la collecte pour les deux listes : celle de l'outil,
     # cherchée à chaque fois, et celle de l'analyste quand il en donne une.
     avant = len(FAITS)
@@ -3214,6 +3431,11 @@ def main():
         indicateurs(c, tous, rep, listes)
     print(f"  {'indicateurs et intérêts':22s} {len(FAITS) - avant:5d} faits",
           file=sys.stderr)
+    # APRÈS les indicateurs, et c'est la raison d'être de cette place : la
+    # synthèse des adresses relit TOUS les faits, y compris le contexte des
+    # motifs repérés dans les octets bruts. La ranger dans la boucle d'au-dessus
+    # lui aurait caché la moitié de ce qu'elle doit voir.
+    etape("adresses réseau", adresses)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:
         for f in FAITS:

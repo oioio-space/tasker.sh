@@ -86,6 +86,12 @@ des disques (`STRINGS/`), les fichiers rendus sans nom par photorec et
 `xfs_undelete`, et les motifs que l'outil repère seul (catégorie `interet` —
 clé privée, mot de passe en clair, jeton d'API).
 
+C'est le **dossier** qui décide, pas la catégorie du fait : une adresse que
+l'analyste a demandée et qui se trouve dans un strings de disque n'est pas
+mieux datée qu'une chaîne quelconque. La synthèse des adresses le tranche
+ainsi, et sa colonne « confiance » ne monte que sur les pièces qui, elles,
+disent d'où elles sortent.
+
 **La règle est la même pour les trois, et elle ne souffre pas d'exception :**
 le contenu est établi, la provenance ne l'est pas. « L'adresse figure dans les
 octets du volume racine » se dit ; « le compte a visité ce site » ne se dit
@@ -115,6 +121,15 @@ chaque ligne cite les identifiants dont elle sort.
 - **Les supports amovibles**, un par ligne, `idVendor:idProduct` et numéro de
   série — rattaché au branchement **par le temps**, d'où « forte ». Sans
   numéro de série, deux supports du même modèle ne se distinguent pas.
+- **Les adresses réseau** — IP, MAC et hôtes web —, chacune sur une ligne avec
+  **d'où elle sort** : configuration réseau, journal, navigation, octets bruts
+  du disque. C'est cette colonne-là qui compte, pas l'adresse : la même IP dans
+  un profil et dans le slack d'un disque ne raconte pas la même chose. Une IP
+  **privée** est le réseau local et ne prouve rien seule ; une **publique** est
+  un contact vers l'extérieur, à dater par une pièce qui porte une date. Une
+  MAC **« administrée localement »** est tirée au hasard — les portables le
+  font pour le Wi-Fi : **elle n'identifie pas un matériel** et ne se suit pas
+  d'un réseau à l'autre.
 
 **Si l'extraction plante, relancez la même commande** : elle reprend où elle
 s'était arrêtée.
@@ -301,7 +316,8 @@ Le rapport suit cet ordre, en français, à l'indicatif, sans jargon inutile :
    identités numériques, pas des personnes, et le rapport le précise une fois.
 3. **Le domaine** — royaume, contrôleurs, annuaire, appartenance prouvée ou non.
 4. **Le réseau** — interfaces, MAC, IP, DNS, passerelle, réseaux sans fil
-   enregistrés, hôtes SSH contactés.
+   enregistrés, hôtes SSH contactés. Puis la **synthèse des adresses** : une
+   ligne par IP, par MAC et par hôte web, avec la provenance de chacune.
 5. **La chronologie de la machine** — un tableau daté, du plus ancien au plus
    récent : installation, démarrages, sessions, sudo, USB, navigation,
    téléchargements, arrêt. Une colonne « compte », une colonne « source ».

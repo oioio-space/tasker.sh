@@ -269,11 +269,15 @@ def batir(base):
     T(f"RESEAU/{P}_reseau.tar.gz", {
         "etc/NetworkManager/system-connections/Bureau.nmconnection":
             "[connection]\nid=Bureau\nuuid=11111111-1111-1111-1111-111111111111\ntype=wifi\n"
-            "\n[wifi]\nssid=ENTREPRISE-CORP\n",
+            "\n[wifi]\nssid=ENTREPRISE-CORP\nmac-address=DC:A6:32:1B:4E:07\n",
         "etc/NetworkManager/system-connections/McDo.nmconnection":
             "[connection]\nid=McDonalds Free WiFi\n"
             "uuid=22222222-2222-2222-2222-222222222222\ntype=wifi\n"
-            "permissions=user:jdupont:;\n\n[wifi]\nssid=McDonalds Free WiFi\n",
+            "permissions=user:jdupont:;\n\n[wifi]\nssid=McDonalds Free WiFi\n"
+            # bit « administré localement » posé : une adresse tirée au hasard,
+            # ce que fait un portable pour le Wi-Fi. La synthèse doit le DIRE,
+            # sinon on croit suivre une machine alors qu'on suit un tirage.
+            "cloned-mac-address=B2:7A:11:C0:FF:EE\n",
         "var/lib/NetworkManager/timestamps":
             "[timestamps]\n22222222-2222-2222-2222-222222222222=1766000000\n",
         "etc/wpa_supplicant/wpa_supplicant.conf": 'network={\n    ssid="ibis-hotel"\n}\n',
@@ -373,10 +377,12 @@ def batir(base):
           "     8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent",
           "    16384 chaine-effacee-que-rien-d-autre-ne-porte",
           "    20480 AKIAIOSFODNN7EXAMPLE",
+          "    24576 e8:9c:25:3f:0a:b1",
           "    32768 https://www.yggtorrent.wtf/torrent/999"],
          {"urls": "      2 1024 https://www.yggtorrent.wtf/torrent/999\n",
           "courriels": "      1 2048 jdupont1987@gmail.com\n",
           "ip": "      1 4096 10.0.0.9\n",
+          "mac": "      1 24576 e8:9c:25:3f:0a:b1\n",
           "chemins": "      1 8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent\n"}),
         ("home",
          ["     512 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv",
@@ -571,6 +577,49 @@ ATTENDUS_CHAMPS = [
     # « interet ». S'il en reparaissait un, c'est qu'une seconde recherche a
     # été rajoutée dans documents(), et les deux se contrediraient.
     ("un seul moteur de motifs", {"__absent__": "interet"}),
+
+    # ── la synthèse des adresses ──────────────────────────────────────
+    # Ce qui compte n'est pas de trouver l'adresse, c'est de dire D'OÙ elle
+    # sort. La même IP vue dans un profil réseau ET dans les octets du disque
+    # doit porter les deux provenances sur une SEULE ligne.
+    ("adresse : deux provenances", {"fait": "adresse IP vue dans la collecte",
+                                    "valeur": "10.0.0.9",
+                                    "ou": "chaînes du disque / configuration réseau",
+                                    "portee": "privée"}),
+    # Vue seulement dans les octets bruts : jamais mieux qu'« à vérifier »,
+    # quelle que soit la catégorie du fait qui la porte. C'est le DOSSIER qui
+    # décide de la provenance, pas l'intitulé.
+    ("adresse : sans provenance", {"valeur": "192.168.0.5", "genre": "IP",
+                                   "confiance": "à vérifier",
+                                   "ou": "chaînes du disque"}),
+    # Le bit « administré localement » : une MAC tirée au hasard ne suit pas une
+    # machine d'un réseau à l'autre. Le rapport doit le dire, sinon on croit
+    # identifier un matériel alors qu'on suit un tirage.
+    ("adresse : MAC tirée au hasard", {"valeur": "b2:7a:11:c0:ff:ee",
+                                       "portee": "administrée localement"}),
+    ("adresse : MAC constructeur", {"valeur": "dc:a6:32:1b:4e:07",
+                                    "portee": "constructeur DC:A6:32"}),
+    # Une MAC écrite dans les octets du disque et nulle part ailleurs : la seule
+    # pièce qui garde la trace d'un point d'accès ou d'une machine du réseau
+    # local dont plus aucune configuration ne parle.
+    ("adresse : MAC des octets bruts", {"valeur": "e8:9c:25:3f:0a:b1",
+                                        "genre": "MAC", "confiance": "à vérifier"}),
+    # Les URL sont regroupées par HÔTE, sinon ce n'est plus une synthèse.
+    ("adresse : URL groupée par hôte", {"valeur": "www.yggtorrent.wtf",
+                                        "genre": "URL",
+                                        "ou": "chaînes du disque / navigation"}),
+
+    # 203.0.113.42 est l'indicateur que le piège dit « jamais vue ici ». Son
+    # fait d'ABSENCE porte la valeur cherchée : lue comme une adresse, elle
+    # rangeait parmi les adresses VUES sur le poste celle que l'analyste avait
+    # justement cherchée SANS la trouver. Le pire contresens possible ici.
+    ("adresse : une absence n'est pas une adresse",
+     {"__absent_si__": ("categorie", "adresse", "valeur", "203.0.113.42")}),
+    # Le contexte d'un motif est coupé à soixante octets sans égard pour ce
+    # qu'il tranche : « …/999 https://www.yggtor » y rend un hôte qui n'a
+    # jamais existé. Inventer une adresse est plus grave que d'en manquer une.
+    ("adresse : pas d'hôte tronqué",
+     {"__absent_si__": ("categorie", "adresse", "valeur", "www.yggtor")}),
 ]
 
 
@@ -684,7 +733,15 @@ def main():
         # DISPARU — un test qui ne sait dire que « présent » laisse revenir en
         # silence ce qu'on vient de retirer.
         interdit = exige.get("__absent__")
-        if interdit:
+        # « __absent_si__ » : (champ, valeur, champ, valeur) — AUCUN fait ne
+        # doit porter les deux à la fois. C'est ainsi qu'on teste qu'une chose
+        # vraie ailleurs ne s'est pas glissée là où elle serait un contresens.
+        jamais = exige.get("__absent_si__")
+        if jamais:
+            k1, v1, k2, v2 = jamais
+            ok = not any(d.get(k1) == v1 and d.get(k2) == v2 for d in lus_f)
+            interdit = f"{v2} en {v1}"
+        elif interdit:
             ok = not any(interdit in d for d in lus_f)
         else:
             ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)

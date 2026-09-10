@@ -364,6 +364,40 @@ def main():
     S.append(a_rediger("une phrase : où cette machine vivait (réseau, DNS, "
                        "passerelle), et si elle a connu d'autres réseaux."))
 
+    if par.get("adresse"):
+        S.append("\n**Toutes les adresses relevées, et d'où elles sortent.** Les "
+                 "lignes ci-dessus disent la configuration ; celles-ci rassemblent "
+                 "*chaque* adresse vue n'importe où dans la collecte — profils "
+                 "réseau, journaux, navigation, octets bruts du disque.\n")
+        S.append("> **La colonne « vue dans » est la colonne qui compte.** La même "
+                 "adresse dans un profil réseau, dans une ligne de journal et dans "
+                 "les octets du disque ne dit pas la même chose : une configuration, "
+                 "une connexion datée, une trace sans date ni auteur. Une adresse "
+                 "qui ne vient que des octets bruts établit qu'elle a été écrite sur "
+                 "ce disque — **ni quand, ni par quel logiciel, ni pour quel "
+                 "compte**.\n")
+        for genre, quoi in (("IP", "Adresses IP"), ("MAC", "Adresses MAC"),
+                            ("URL", "Hôtes web")):
+            lignes = [f for f in par["adresse"] if f.get("genre") == genre]
+            if not lignes:
+                continue
+            S.append(f"\n*{quoi}*\n")
+            S.append(table(["adresse", "portée", "vue dans", "faits", "pièces",
+                            "première", "dernière", "confiance", "id"],
+                           [(f["valeur"], f.get("portee"), f.get("ou"),
+                             f.get("occurrences"), f.get("pieces"),
+                             date_nue(f.get("premiere")), date_nue(f.get("derniere")),
+                             f.get("confiance"), f["id"]) for f in lignes],
+                           quoi=quoi.lower()))
+        S.append(a_rediger("les adresses qui comptent, et pourquoi. Une IP privée "
+                           "est le réseau local et ne prouve rien à elle seule ; une "
+                           "IP publique est un contact vers l'extérieur, à dater par "
+                           "une pièce qui porte une date. Une adresse MAC « tirée au "
+                           "hasard » ne suit pas une machine d'un réseau à l'autre : "
+                           "ne l'employez pas pour identifier un matériel. Rayez ce "
+                           "qui est banal — passerelle, DNS du fournisseur, dépôt de "
+                           "paquets — en le disant."))
+
     # Cette section sort TOUJOURS, même sans un seul fait daté. La rendre
     # conditionnelle faisait sauter le rapport de 4 à 6, et un renvoi « voir le
     # §10 » ne désignait plus la même section d'une collecte à l'autre — sans
