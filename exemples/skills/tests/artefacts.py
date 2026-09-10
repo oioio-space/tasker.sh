@@ -18,7 +18,7 @@ l'ajouter ici, c'est ne pas la tester.
 
 Sort 0 si tout est trouvé, 1 sinon, en disant ce qui manque.
 """
-import calendar, collections, gzip, io, json, os, re, shutil, sqlite3, subprocess
+import calendar, gzip, io, json, os, shutil, sqlite3, subprocess
 import sys, tarfile, tempfile, time
 
 ICI = os.path.dirname(os.path.abspath(__file__))
@@ -317,39 +317,39 @@ def batir(base):
         w(f"PHOTOREC/recup_1/{nom}", b"x" * taille)
 
     # ── STRINGS : les chaînes des périphériques, deux volumes ─────────
-    # Le piège doit porter DEUX volumes, sinon rien ne prouve que la collecte
-    # n'oublie pas le /home monté à part — c'est exactement ce qu'on veut
-    # garantir. Et le .gz doit contenir une chaîne qu'AUCUNE autre pièce ne
-    # porte : c'est le seul moyen de vérifier qu'il est vraiment décompressé
-    # et fouillé, et pas trouvé par ailleurs.
-    for volume, lignes in (
-        ("racine", ["     1024 https://www.yggtorrent.wtf/torrent/999",
-                    "     2048 jdupont1987@gmail.com",
-                    "     4096 10.0.0.9",
-                    "     8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent",
-                    "    16384 chaine-effacee-que-rien-d-autre-ne-porte",
-                    "    32768 https://www.yggtorrent.wtf/torrent/999"]),
-        ("home",   ["     512 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv",
-                    "    1024 mrobert@entreprise.fr",
-                    "    2048 192.168.0.5"]),
+    # DEUX volumes, sinon rien ne prouve que la collecte n'oublie pas le /home
+    # monté à part — c'est exactement la garantie à tenir. Et le .gz porte une
+    # chaîne qu'AUCUNE autre pièce ne contient : c'est le seul moyen de
+    # vérifier qu'il est vraiment décompressé et fouillé.
+    #
+    # Les extraits sont écrits LITTÉRALEMENT, au format que rend la collecte
+    # (« compte décalage valeur »). Les dériver en Python reviendrait à
+    # réécrire les motifs de la conf : le piège s'accorderait alors avec
+    # lui-même quoi qu'il arrive, ce qui est le contraire d'un test.
+    for volume, brut, extraits in (
+        ("racine",
+         ["     1024 https://www.yggtorrent.wtf/torrent/999",
+          "     2048 jdupont1987@gmail.com",
+          "     4096 10.0.0.9",
+          "     8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent",
+          "    16384 chaine-effacee-que-rien-d-autre-ne-porte",
+          "    32768 https://www.yggtorrent.wtf/torrent/999"],
+         {"urls": "      2 1024 https://www.yggtorrent.wtf/torrent/999\n",
+          "courriels": "      1 2048 jdupont1987@gmail.com\n",
+          "ip": "      1 4096 10.0.0.9\n",
+          "chemins": "      1 8192 /home/jdupont/Téléchargements/Le.Film.2024.VOSTFR.torrent\n"}),
+        ("home",
+         ["     512 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv",
+          "    1024 mrobert@entreprise.fr",
+          "    2048 192.168.0.5"],
+         {"chemins": "      1 512 /home/jdupont/Vidéos/Films/Le.Film.2024.1080p.mkv\n",
+          "courriels": "      1 1024 mrobert@entreprise.fr\n",
+          "ip": "      1 2048 192.168.0.5\n"}),
     ):
         w(f"STRINGS/{P}_strings_{volume}.txt.gz",
-          gzip.compress("\n".join(lignes).encode("utf-8") + b"\n"))
-        extraits = {"urls": [], "courriels": [], "ip": [], "chemins": []}
-        for l in lignes:
-            v = l.split(None, 1)[1]
-            if v.startswith("http"):
-                extraits["urls"].append(v)
-            elif "@" in v:
-                extraits["courriels"].append(v)
-            elif re.fullmatch(r'(\d{1,3}\.){3}\d{1,3}', v):
-                extraits["ip"].append(v)
-            elif v.startswith("/home/"):
-                extraits["chemins"].append(v)
-        for genre, vals in extraits.items():
-            compte = collections.Counter(vals)
-            w(f"STRINGS/{P}_strings_{volume}_{genre}.txt",
-              "".join(f"{n:>7} {v}\n" for v, n in compte.most_common()))
+          gzip.compress("\n".join(brut).encode("utf-8") + b"\n"))
+        for genre, contenu in extraits.items():
+            w(f"STRINGS/{P}_strings_{volume}_{genre}.txt", contenu)
 
     # hors de la collecte : un fichier d'indicateurs posé DEDANS se trouverait
     # lui-même, et l'extracteur l'écarte — le test le vérifie en le posant à côté
@@ -416,8 +416,6 @@ ATTENDUS_FAITS = [
     ("chaînes : IP", "adresse IP"),
     ("chaînes : chemin", "chemin personnel"),
     ("chaînes : brut", "chaînes brutes du périphérique"),
-    ("indicateur dans le .gz",
-     "texte recherché présent dans les chaînes du disque"),
     ("indicateur trouvé", "texte recherché présent dans un fichier"),
     ("indicateur absent", "ip recherché ABSENT de la collecte"),
 ]
@@ -460,6 +458,16 @@ ATTENDUS_PRECIS = [
                  "source": "logins.json"}),
     ("règle : marque-page", "constat", {"constat": "domaine présent dans une base de navigateur",
                                         "source": "Bookmarks"}),
+]
+
+# Une chaîne qui n'existe QUE dans le .txt.gz. Si l'extracteur cesse de
+# décompresser en flux, elle sort « ABSENTE » et le test tombe — et comme le
+# libellé du fait est désormais le même pour tous les fichiers, c'est la
+# SOURCE qui doit être vérifiée, pas l'intitulé.
+ATTENDUS_INDICATEURS = [
+    ("indicateur dans le .gz", {"fait": "texte recherché présent dans un fichier",
+                                "valeur": "chaine-effacee-que-rien-d-autre-ne-porte",
+                                "source": ".txt.gz"}),
 ]
 
 
@@ -542,6 +550,14 @@ def main():
             ok = attendu in vus
             manques += not ok
             print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {attendu}")
+    print("\n── LE .GZ DES CHAÎNES EST-IL VRAIMENT FOUILLÉ ? ──")
+    with open(faits, encoding="utf-8") as fh:
+        lus_f = [json.loads(l) for l in fh if l.strip()]
+    for artefact, exige in ATTENDUS_INDICATEURS:
+        ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
+        manques += not ok
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {exige['valeur']}")
+
     print(f"\n── PIÈCES QUI SURVIVENT AU VIDAGE DE L'HISTORIQUE ──")
     with open(constats, encoding="utf-8") as fh:
         lus = [json.loads(l) for l in fh if l.strip()]

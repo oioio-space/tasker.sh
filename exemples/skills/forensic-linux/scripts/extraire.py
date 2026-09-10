@@ -12,7 +12,7 @@ archives sont lues en flux, jamais dépaquetées sur place.
 """
 import argparse, bz2, collections, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
 import urllib.parse
-import sqlite3, struct, sys, tarfile, tempfile
+import sqlite3, struct, sys, tarfile, tempfile, zlib
 from datetime import datetime, timezone
 
 COLONNES_CSV = ("id", "categorie", "fait", "valeur", "horodatage", "acteur", "confiance",
@@ -1694,13 +1694,21 @@ def supprimes(c):
                                                        "base ou courriel") else None)
 
 
-RE_EXTRAIT = re.compile(r'_strings_(?P<volume>.+)_(?P<genre>urls|courriels|ip|chemins)\.txt$')
+# Le genre n'est PAS figé sur les quatre connus : un extrait ajouté à
+# collecte-linux.conf serait sinon ignoré en silence, sans fait ni limite pour
+# le dire. Il ressort ici sous son nom brut, ce qui est honnête à défaut d'être
+# élégant.
+RE_EXTRAIT = re.compile(r'_strings_(?P<volume>.+)_(?P<genre>[a-z]+)\.txt$')
+RE_BRUT = re.compile(r'_strings_(?P<volume>.+)\.txt\.gz$')
 _GENRE_CHAINE = {
     "urls": "adresse web",
     "courriels": "adresse de courriel",
     "ip": "adresse IP",
     "chemins": "chemin personnel",
 }
+_SANS_DATE = ("lu sur les OCTETS du disque : ni date, ni fichier d'origine, ni "
+              "compte. Une chaîne présente ici a existé sur ce volume, c'est tout "
+              "ce qu'elle établit")
 
 
 def chaines(c):
@@ -1713,59 +1721,62 @@ def chaines(c):
     qui répond à « cela a-t-il jamais existé sur ce disque ? » quand tout le
     reste a été vidé.
 
-    En contrepartie, elle ne dit NI QUAND, NI DANS QUEL FICHIER, NI PAR QUI :
-    une chaîne trouvée là n'est pas datée et n'est imputable à personne. Le
-    décalage en octets du .gz est la seule adresse qu'elle ait. Chaque fait le
-    dit, pour qu'aucune ligne du rapport ne fasse dire à cette pièce plus
-    qu'elle ne porte.
+    En contrepartie, elle ne dit NI QUAND, NI DANS QUEL FICHIER, NI PAR QUI.
+    Chaque fait le porte, pour qu'aucune ligne du rapport ne lui fasse dire
+    plus qu'elle ne sait.
     """
     base = os.path.join(c.racine, "STRINGS")
     if not os.path.isdir(base):
         return
-    volumes = set()
     for f in sorted(os.listdir(base)):
+        chemin = os.path.join(base, f)
+        brut = RE_BRUT.search(f)
+        if brut:
+            # Rapporté sur ses PROPRES preuves : un .gz dont les extraits
+            # manquent est justement le cas qu'il faut signaler.
+            fait("chaines", "chaînes brutes du périphérique", brut.group("volume"),
+                 c.rel(chemin), "strings -a -t d -n 8 sur le périphérique",
+                 note=f"{_taille(os.path.getsize(chemin))} compressés ; chaque ligne "
+                      "porte son DÉCALAGE EN OCTETS sur le volume, ce qui permet de "
+                      "revenir à l'emplacement exact. Cherchez-y avec --indicateurs")
+            continue
         m = RE_EXTRAIT.search(f)
         if not m:
             continue
         volume, genre = m.group("volume"), m.group("genre")
-        volumes.add(volume)
-        lignes = c.texte(os.path.join(base, f)).splitlines()
-        # « <compte> <chaîne> », le plus fréquent d'abord : sort -rn l'a déjà
-        # trié, on garde la tête et on dit combien de queue on laisse.
-        vus = []
-        for l in lignes:
-            ch = l.strip().split(None, 1)
-            if len(ch) == 2 and ch[0].isdigit():
-                vus.append((int(ch[0]), ch[1]))
-        if not vus:
+        libelle = _GENRE_CHAINE.get(genre, genre)
+        methode = f"strings sur le périphérique de {volume}, motif « {genre} »"
+        # c.lignes et non c.texte : ce dernier coupe à 8 Mo SANS LE DIRE, et
+        # l'extrait d'un vrai disque les dépasse — le nombre rapporté serait
+        # alors celui des huit premiers mégaoctets, dans une pièce dont le
+        # nombre est tout l'intérêt.
+        # « <compte> <décalage> <chaîne> » : le décalage est celui de la
+        # PREMIÈRE occurrence, et c'est lui qui permet de retrouver l'endroit
+        # exact dans le .gz sans le rouvrir.
+        tete, total = [], 0
+        for l in c.lignes(chemin):
+            ch = l.strip().split(None, 2)
+            if len(ch) != 3 or not ch[0].isdigit() or not ch[1].isdigit():
+                continue                       # ligne de total, ou ligne vide
+            total += 1
+            if len(tete) < 20:
+                tete.append((int(ch[0]), int(ch[1]), ch[2]))
+        if not total:
             continue
-        fait("chaines", f"chaînes distinctes de type « {_GENRE_CHAINE[genre]} »",
-             str(len(vus)), f"STRINGS/{f}",
-             f"strings -a -t d -n 8 sur le périphérique de {volume}, puis motif « {genre} »",
-             note="lu sur les OCTETS du disque : ni date, ni fichier d'origine, ni "
-                  "compte. Une chaîne présente ici a existé sur ce disque, c'est "
-                  "tout ce qu'elle établit")
-        for n, valeur in vus[:20]:
-            fait("chaines", _GENRE_CHAINE[genre], valeur, f"STRINGS/{f}",
-                 f"strings sur le périphérique de {volume}, motif « {genre} »",
-                 confiance="forte",
-                 note=f"{n} occurrence(s) dans les octets du volume {volume} — non "
-                      "datée et non imputable : à recouper avec une pièce qui, elle, "
-                      "porte une date")
-        if len(vus) > 20:
-            fait("limite", f"extrait « {_GENRE_CHAINE[genre]} » tronqué à 20 lignes",
-                 str(len(vus)), f"STRINGS/{f}",
-                 "les 20 plus fréquentes sont rendues", confiance="certaine",
+        fait("chaines", f"chaînes distinctes de type « {libelle} »", str(total),
+             c.rel(chemin), methode, nature="compte", genre=genre, note=_SANS_DATE)
+        for n, octet, valeur in tete:
+            fait("chaines", libelle, valeur, c.rel(chemin), methode,
+                 confiance="forte", genre=genre, occurrences=n, volume=volume,
+                 octet=octet,
+                 note=f"{n} occurrence(s) dans les octets du volume {volume} ; la "
+                      f"première vers l'octet {octet} — non datée et non imputable : "
+                      "à recouper avec une pièce qui, elle, porte une date")
+        if total > len(tete):
+            fait("limite", f"extrait « {libelle} » rendu en partie", str(total),
+                 c.rel(chemin), "les 20 plus fréquentes sont rendues",
                  note="le fichier les porte toutes ; cherchez-y une valeur précise "
                       "avec --indicateurs plutôt que de tout lire")
-    for volume in sorted(volumes):
-        brut = c.chercher(f"_strings_{volume}.txt.gz", "STRINGS")
-        if brut:
-            fait("chaines", "chaînes brutes du périphérique", volume,
-                 c.rel(brut[0]), "strings -a -t d -n 8 sur le périphérique",
-                 note=f"{_taille(os.path.getsize(brut[0]))} compressés ; chaque ligne "
-                      "porte son DÉCALAGE EN OCTETS sur le volume, ce qui permet de "
-                      "revenir à l'emplacement exact. Cherchez-y avec --indicateurs")
 
 
 # ── 8 · la timeline du système de fichiers ────────────────────────────
@@ -2154,62 +2165,19 @@ def lire_indicateurs(chemin):
     return liste
 
 
-def _chercher_en_flux(chemin, source, alternative, motifs, bloc=1 << 23, chevauche=1 << 12):
-    """Cherche les motifs dans un .gz décompressé au fil de l'eau.
+def _blocs(chemin, bloc=1 << 20):
+    """Rend (brut, clair) : les octets du fichier, et leur version lisible.
 
-    Le chevauchement n'est pas un détail : une chaîne à cheval sur deux blocs
-    serait invisible sans lui. On garde donc la queue du bloc précédent, et on
-    ignore les correspondances qui tombent entièrement dedans — sinon elles
-    seraient comptées deux fois.
-
-    Un seul fait par motif et par fichier, avec le total et le premier
-    contexte : un disque peut porter des milliers d'occurrences d'une même
-    chaîne, et mille faits identiques ne sont pas une information.
+    Le strings d'un disque pèse des gigaoctets : il ne peut être ni chargé en
+    mémoire, ni lu deux fois. zlib décompresse au fil des blocs bruts, ce qui
+    donne les deux en UNE lecture — l'empreinte porte sur le fichier tel qu'il
+    est sur le disque, les motifs sur ce qu'il contient. Pour un fichier non
+    compressé, les deux sont le même bloc et rien n'est copié.
     """
-    comptes_, contextes = {}, {}
-    reste, decale = b"", 0
-    try:
-        with gzip.open(chemin, "rb") as fh:
-            for morceau in iter(lambda: fh.read(bloc), b""):
-                tampon = reste + morceau
-                for m in alternative.finditer(tampon):
-                    if m.end() <= len(reste):
-                        continue                      # déjà vu au tour d'avant
-                    i = int(m.lastgroup[1:])
-                    comptes_[i] = comptes_.get(i, 0) + 1
-                    if i not in contextes:
-                        d, f = max(0, m.start() - 60), min(len(tampon), m.end() + 60)
-                        contextes[i] = (tampon[d:f].decode("utf-8", "replace")
-                                        .replace("\n", " "),
-                                        decale + m.start())
-                decale += len(tampon) - min(chevauche, len(tampon))
-                reste = tampon[-chevauche:]
-    except (OSError, EOFError, gzip.BadGzipFile):
-        return
-    for i, n in sorted(comptes_.items()):
-        x = motifs[i]
-        x["trouve"] = True
-        contexte, position = contextes[i]
-        fait("indicateur", f"{x['genre']} recherché présent dans les chaînes du disque",
-             x["valeur"], source,
-             f"motif « {x['valeur']} » cherché dans le flux décompressé",
-             note=f"{n} occurrence(s) ; la première vers l'octet {position} du flux, "
-                  f"autour d'elle : « {contexte} ». Lu sur les octets du disque : "
-                  "ni date, ni fichier d'origine, ni compte"
-                  + (f" — {x['etiquette']}" if x["etiquette"] else ""))
-
-
-def _empreintes_en_flux(chemin, source, empreintes, examiner):
-    """L'empreinte porte sur le .gz tel qu'il est, pas sur son contenu."""
-    hs = {g: hashlib.new(g) for g in empreintes}
-    try:
-        with open(chemin, "rb") as fh:
-            for b in iter(lambda: fh.read(1 << 20), b""):
-                for h in hs.values():
-                    h.update(b)
-    except OSError:
-        return
-    examiner(source, source, {g: h.hexdigest() for g, h in hs.items()})
+    dec = zlib.decompressobj(16 + zlib.MAX_WBITS) if chemin.endswith(".gz") else None
+    with open(chemin, "rb") as fh:
+        for brut in iter(lambda: fh.read(bloc), b""):
+            yield brut, (dec.decompress(brut) if dec else brut)
 
 
 def indicateurs(c, liste, fichier=None):
@@ -2228,37 +2196,66 @@ def indicateurs(c, liste, fichier=None):
                                        for i, x in enumerate(motifs))) if motifs else None
     lire = bool(empreintes or motifs)
 
-    def examiner(source, nom, blob):
+    def examiner(source, nom, blocs=None, chevauche=1 << 12):
+        """Le nom, l'empreinte et les motifs, en UNE lecture.
+
+        « blocs » est une suite de (brut, clair) — un seul couple pour un
+        membre d'archive déjà en mémoire, autant que nécessaire pour un gros
+        fichier. Tout passe par ici : sans quoi une source qu'on ne peut pas
+        charger d'un bloc réclame un second chercheur, et les deux divergent
+        — la première victime étant le contrôle des NOMS, qui n'a rien à voir
+        avec la taille du fichier.
+
+        Le chevauchement n'est pas un détail : une chaîne à cheval sur deux
+        blocs serait invisible sans lui. On garde donc la queue du bloc
+        précédent, et on ignore ce qui tombe entièrement dedans, sinon la même
+        occurrence serait comptée deux fois.
+        """
         base = os.path.basename(nom)
         for x in noms:
             if fnmatch.fnmatch(base, x["valeur"]) or fnmatch.fnmatch(nom, x["valeur"]):
                 x["trouve"] = True
                 fait("indicateur", "fichier au nom recherché", nom, source,
                      f"nom comparé au motif « {x['valeur']} »", note=x["etiquette"])
-        if blob is None:
+        if blocs is None:
             return
+        hs = {g: hashlib.new(g) for g in empreintes}
+        comptes_, contextes = {}, {}
+        reste, depart = b"", 0
+        for brut, clair in blocs:
+            for h in hs.values():
+                h.update(brut)
+            if not alternative:
+                continue
+            tampon = reste + clair
+            for m in alternative.finditer(tampon):
+                if m.end() <= len(reste):
+                    continue                       # déjà compté au tour d'avant
+                i = int(m.lastgroup[1:])
+                comptes_[i] = comptes_.get(i, 0) + 1
+                if i not in contextes:
+                    d, f = max(0, m.start() - 60), min(len(tampon), m.end() + 60)
+                    contextes[i] = (tampon[d:f].decode("utf-8", "replace")
+                                    .replace("\n", " "), depart + m.start())
+            reste = tampon[-chevauche:]
+            depart += len(tampon) - len(reste)
         for g, attendus in empreintes.items():
-            h = hashlib.new(g, blob).hexdigest() if isinstance(blob, bytes) else blob[g]
+            h = hs[g].hexdigest()
             if h in attendus:
                 attendus[h]["trouve"] = True
                 fait("indicateur", f"fichier à l'empreinte {g} recherchée", nom, source,
                      f"{g} du fichier = {h}", note=attendus[h]["etiquette"])
-        if alternative and isinstance(blob, bytes):
-            comptes_, contextes = {}, {}
-            for m in alternative.finditer(blob):
-                i = int(m.lastgroup[1:])
-                comptes_[i] = comptes_.get(i, 0) + 1
-                if i not in contextes:
-                    d, f = max(0, m.start() - 60), min(len(blob), m.end() + 60)
-                    contextes[i] = blob[d:f].decode("utf-8", "replace").replace("\n", " ")
-            for i, n in sorted(comptes_.items()):
-                x = motifs[i]
-                x["trouve"] = True
-                fait("indicateur", f"{x['genre']} recherché présent dans un fichier",
-                     x["valeur"], source,
-                     f"motif « {x['valeur']} » cherché dans les octets du fichier",
-                     note=f"{n} occurrence(s) ; autour de la première : « {contextes[i]} »"
-                          + (f" — {x['etiquette']}" if x["etiquette"] else ""))
+        for i, n in sorted(comptes_.items()):
+            x = motifs[i]
+            x["trouve"] = True
+            contexte, octet = contextes[i]
+            fait("indicateur", f"{x['genre']} recherché présent dans un fichier",
+                 x["valeur"], source,
+                 f"motif « {x['valeur']} » cherché dans les octets du fichier",
+                 octet=octet,
+                 note=f"{n} occurrence(s) ; la première vers l'octet {octet}, autour "
+                      f"d'elle : « {contexte} »"
+                      + (f" — {x['etiquette']}" if x["etiquette"] else ""))
 
     # le fichier d'indicateurs posé DANS la collecte se trouverait lui-même :
     # chaque chaîne y figure, par construction
@@ -2270,43 +2267,25 @@ def indicateurs(c, liste, fichier=None):
                 continue
             if chemin.endswith(".tar.gz"):
                 for nom, blob in c.membres_tar(chemin, None if lire else lambda n: False):
-                    examiner(f"{c.rel(chemin)} → {nom}", nom, blob)
+                    examiner(f"{c.rel(chemin)} → {nom}", nom,
+                             [(blob, blob)] if blob is not None else None)
                 if not lire:
                     for nom in c.mtimes.get(chemin, {}):
-                        examiner(f"{c.rel(chemin)} → {nom}", nom, None)
+                        examiner(f"{c.rel(chemin)} → {nom}", nom)
                 continue
             if not lire:
-                examiner(c.rel(chemin), c.rel(chemin), None)
+                examiner(c.rel(chemin), c.rel(chemin))
                 continue
             c.lus.add(chemin)
-            # Un .gz simple — le strings d'un disque — se lit EN FLUX. Le lire
-            # comme les autres serait doublement faux : on chercherait dans des
-            # octets compressés, où rien ne peut correspondre, et on tenterait
-            # de charger des gigaoctets en mémoire. C'est pourtant la pièce où
-            # une chaîne effacée a le plus de chances de subsister.
-            if chemin.endswith(".gz") and not chemin.endswith(".tar.gz"):
-                if motifs:
-                    _chercher_en_flux(chemin, c.rel(chemin), alternative, motifs)
-                if empreintes:
-                    _empreintes_en_flux(chemin, c.rel(chemin), empreintes, examiner)
-                continue
-            if motifs:
-                try:
-                    with open(chemin, "rb") as fh:
-                        examiner(c.rel(chemin), c.rel(chemin), fh.read())
-                except OSError:
-                    pass
-            else:
-                # empreintes seules : en flux, sans charger le fichier
-                hs = {g: hashlib.new(g) for g in empreintes}
-                try:
-                    with open(chemin, "rb") as fh:
-                        for bloc in iter(lambda: fh.read(1 << 20), b""):
-                            for h in hs.values():
-                                h.update(bloc)
-                except OSError:
-                    continue
-                examiner(c.rel(chemin), c.rel(chemin), {g: h.hexdigest() for g, h in hs.items()})
+            # Une seule voie : _blocs décide seul s'il faut décompresser, et
+            # rend toujours des blocs. Un .gz — le strings d'un disque — n'est
+            # donc ni chargé d'un coup, ni cherché dans ses octets compressés,
+            # où rien ne pourrait correspondre ; et un .txt de plusieurs
+            # centaines de mégaoctets ne l'est pas davantage.
+            try:
+                examiner(c.rel(chemin), c.rel(chemin), _blocs(chemin))
+            except (OSError, zlib.error):
+                pass
     for x in liste:
         if not x.get("trouve"):
             fait("indicateur", f"{x['genre']} recherché ABSENT de la collecte", x["valeur"],

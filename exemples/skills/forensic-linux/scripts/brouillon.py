@@ -548,18 +548,31 @@ def main():
                  "chaîne trouvée là établit qu'elle a existé sur le volume, rien de "
                  "plus. Pour en faire un fait daté, il faut la recouper avec une pièce "
                  "qui porte une date — l'historique, la timeline, un journal.\n")
-        comptages = [f for f in par["chaines"] if f["fait"].startswith("chaînes ")]
-        valeurs = [f for f in par["chaines"] if not f["fait"].startswith("chaînes ")]
+        # Le tri se fait sur un CHAMP, pas sur le libellé français : « chaînes
+        # brutes du périphérique » commence lui aussi par « chaînes » et
+        # atterrissait dans le tableau des nombres, le nom du volume sous la
+        # colonne « combien ».
+        comptages = [f for f in par["chaines"] if f.get("nature") == "compte"]
+        valeurs = [f for f in par["chaines"] if f.get("occurrences")]
+        bruts = [f for f in par["chaines"] if f not in comptages and f not in valeurs]
         if comptages:
             S.append(table(["quoi", "combien", "source", "id"],
                            [(f["fait"], f["valeur"], f["source"], f["id"])
                             for f in comptages]))
+        if bruts:
+            # Le volume n'est pas un nombre : ces lignes n'ont rien à faire
+            # sous une colonne « combien ».
+            S.append("\n**Les pièces brutes**, si une valeur précise doit être "
+                     "cherchée — par `--indicateurs`, jamais en les ouvrant :\n")
+            S.append(table(["volume", "pièce", "ce qu'elle porte", "id"],
+                           [(f["valeur"], f["source"], T(f.get("note")), f["id"])
+                            for f in bruts]))
         if valeurs:
             S.append("\n**Les plus fréquentes** — le nombre d'occurrences dit si une "
                      "chaîne traîne partout ou n'apparaît qu'une fois :\n")
-            S.append(table(["genre", "chaîne", "source", "occurrences", "id"],
-                           [(f["fait"], f["valeur"], f["source"], T(f.get("note")),
-                             f["id"]) for f in valeurs],
+            S.append(table(["genre", "chaîne", "volume", "occurrences", "id"],
+                           [(f["fait"], f["valeur"], f.get("volume"),
+                             f.get("occurrences"), f["id"]) for f in valeurs],
                            quoi="chaînes relevées"))
         S.append(a_rediger("ce que ces chaînes ajoutent, et SEULEMENT ça : une "
                            "existence sur le disque, sans date. Dites pour chacune si "
