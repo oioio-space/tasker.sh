@@ -38,15 +38,27 @@ archives sans les extraire et écrit un fait par ligne :
  "source":"JOURNAUX/PREFIX_journal.txt","methode":"journalctl -D var/log/journal -o short-iso, puis motifs"}
 ```
 
-Il écrit aussi `faits-manifeste.json` : l'empreinte SHA-256 de chaque pièce
-lue, celle de l'extracteur, celle du fichier de faits. C'est ce qui prouve
-**quels octets** ont été analysés.
+Trois champs ne se devinent pas, et les ignorer fait dire au rapport le
+contraire de la pièce :
 
-Les historiques de navigation sont bornés aux 5 000 pages les plus récentes
-par navigateur (`--visites` pour changer) ; quand la borne est atteinte, un
-fait `limite` dit combien de pages restent dehors. Les sites pour lesquels un
-mot de passe est enregistré sont relevés — **le site seul** : ni l'identifiant
-ni le secret ne sont lus.
+| champ | à lire comme |
+|---|---|
+| `provenance` | la pièce est un dossier de récupération (`STRINGS/`, `PHOTOREC/`, `SUPPRIMES/`) : des **octets**, pas des fichiers. Ni date, ni compte — ne fonde jamais « le compte a fait ceci » |
+| `trouve: false` | fait d'**absence** : la valeur est ce qu'on a cherché SANS le trouver. La lire comme une trouvaille est le pire contresens possible ici |
+| un `…` final | valeur **coupée** : ne la citez pas comme une phrase entière, et ne lisez pas une adresse collée au `…` — elle est peut-être tranchée |
+
+Il écrit aussi `faits-manifeste.json` : l'empreinte SHA-256 de chaque pièce
+lue, de l'extracteur, des listes de recherche, et la `provenance_sha256` qui
+les résume — la preuve de **quels octets**, **par quel outil**, **pour quelles
+questions**.
+
+Les historiques de navigation ne sont **pas bornés** : pages, téléchargements,
+marque-pages, recherches, saisies de formulaire — tout ce que la base porte
+devient un fait. Une borne aurait jeté les entrées les plus ANCIENNES, seules
+à survivre quand l'historique récent a été vidé. Attendez-vous donc à des
+dizaines de milliers de faits `navigation` ; le tableau du rapport, lui, reste
+réglable par `--lignes`. Les sites à mot de passe enregistré sont relevés —
+**le site seul**, jamais le secret.
 
 Le même contenu sort en `faits.csv`, pour un tableur. Et si l'on sait déjà ce
 que l'on cherche — une empreinte, une adresse, un nom —, `--indicateurs
@@ -82,18 +94,12 @@ Deux fiches à lire, dans cet ordre :
 ### Les pièces qui n'ont ni date ni auteur
 
 Trois sources disent ce qu'il y a **sans dire quand ni par qui** : les chaînes
-des disques (`STRINGS/`), les fichiers rendus sans nom par photorec et
-`xfs_undelete`, et les motifs que l'outil repère seul (catégorie `interet` —
-clé privée, mot de passe en clair, jeton d'API).
+des disques (`STRINGS/`), ce que photorec et `xfs_undelete` rendent sans nom,
+et les motifs que l'outil repère seul (catégorie `interet`). Leurs faits
+portent tous `provenance`.
 
-C'est le **dossier** qui décide, pas la catégorie du fait : une adresse que
-l'analyste a demandée et qui se trouve dans un strings de disque n'est pas
-mieux datée qu'une chaîne quelconque. La synthèse des adresses le tranche
-ainsi, et sa colonne « confiance » ne monte que sur les pièces qui, elles,
-disent d'où elles sortent.
-
-**La règle est la même pour les trois, et elle ne souffre pas d'exception :**
-le contenu est établi, la provenance ne l'est pas. « L'adresse figure dans les
+**La règle vaut pour les trois, sans exception :** le contenu est établi, la
+provenance ne l'est pas. « L'adresse figure dans les
 octets du volume racine » se dit ; « le compte a visité ce site » ne se dit
 pas, sauf si une pièce datée le porte. **Ouvrez la pièce citée avant d'en
 écrire un mot**, et rayez le reste en disant pourquoi.
@@ -107,9 +113,9 @@ Pour chercher : `--textes fichier` prend **une chaîne par ligne, sans syntaxe**
 expressions. Les deux fouillent aussi les `.gz`, les `.docx` et les PDF.
 Détail : `references/indicateurs.md` et `references/artefacts.md`.
 
-### Trois synthèses, et ce qu'elles valent
+### Quatre synthèses, et ce qu'elles valent
 
-Trois tableaux ne lisent aucune pièce : ils relisent les faits établis, et
+Quatre tableaux ne lisent aucune pièce : ils relisent les faits établis, et
 chaque ligne cite les identifiants dont elle sort.
 
 - **Les comptes**, avec première et dernière session, et la pièce qui le dit.
@@ -121,15 +127,12 @@ chaque ligne cite les identifiants dont elle sort.
 - **Les supports amovibles**, un par ligne, `idVendor:idProduct` et numéro de
   série — rattaché au branchement **par le temps**, d'où « forte ». Sans
   numéro de série, deux supports du même modèle ne se distinguent pas.
-- **Les adresses réseau** — IP, MAC et hôtes web —, chacune sur une ligne avec
-  **d'où elle sort** : configuration réseau, journal, navigation, octets bruts
-  du disque. C'est cette colonne-là qui compte, pas l'adresse : la même IP dans
-  un profil et dans le slack d'un disque ne raconte pas la même chose. Une IP
-  **privée** est le réseau local et ne prouve rien seule ; une **publique** est
-  un contact vers l'extérieur, à dater par une pièce qui porte une date. Une
-  MAC **« administrée localement »** est tirée au hasard — les portables le
-  font pour le Wi-Fi : **elle n'identifie pas un matériel** et ne se suit pas
-  d'un réseau à l'autre.
+- **Les adresses réseau** — IP, MAC, hôtes web —, chacune avec la colonne
+  **« vue dans »**, qui est ce qui compte : la même IP dans un profil réseau et
+  dans le slack d'un disque ne raconte pas la même chose. Deux pièges que la
+  colonne « portée » signale : une IP **privée** ne prouve rien seule, et une
+  MAC **« administrée localement »** est tirée au hasard — **elle n'identifie
+  pas un matériel**. Détail dans `references/artefacts.md`.
 
 **Si l'extraction plante, relancez la même commande** : elle reprend où elle
 s'était arrêtée.
@@ -159,16 +162,11 @@ Trois contrôles, dans cet ordre. Ils changent la lecture de tout le reste.
 
 ## Quand une pièce manque
 
-Ne vous contentez jamais d'écrire « absent ». Une absence a deux causes, qui
-n'ont pas la même conséquence, et **vous ne pouvez pas trancher seul** :
-
-- **le système ne l'avait pas** — pas de `/var/log/secure` sur Fedora, pas de
-  `wtmp` sur Fedora 40+ : c'est un fait *sur ce système*, à écrire comme tel ;
-- **la collecte l'a ratée** — étape passée à la main, étape rouge, outil absent
-  du poste d'analyse, volume non monté : il faut y retourner.
-
-`references/ou-chercher.md` donne la liste des absences normales et par quoi
-la pièce a été remplacée. Quand le doute demeure :
+Ne vous contentez jamais d'écrire « absent ». Une absence a deux causes que
+**vous ne pouvez pas départager seul** : ou bien *le système ne l'avait pas* —
+un fait sur ce système —, ou bien *la collecte l'a ratée*, et il faut y
+retourner. `references/ou-chercher.md` les distingue pièce par pièce et dit par
+quoi chacune a été remplacée. Quand le doute demeure :
 
 1. **Demandez le rapport de la collecte** — `PREFIX_rapport.txt` et
    `PREFIX_script.log`. Ils disent, étape par étape, ce qui a réussi, échoué ou
@@ -183,10 +181,11 @@ la pièce a été remplacée. Quand le doute demeure :
    > avec `-l` puis relancez avec `--only <numéro>`. Si l'image n'est plus
    > montée, remontez-la en lecture seule.
 
-3. **Écrivez le rapport quand même**, avec ce que vous avez. Dites en « Les
-   limites » ce que la pièce manquante vous empêche de conclure — et ce que
-   vous auriez pu conclure si elle avait été là. Un rapport qui attend une
-   pièce ne sert personne ; un rapport qui masque ce qu'il ignore est pire.
+3. **Écrivez le rapport quand même**, avec ce que vous avez — une collecte
+   incomplète est le cas courant. Dites en « Les limites » ce que la pièce
+   manquante vous empêche de conclure, et ce que vous auriez pu conclure si
+   elle avait été là. Un rapport qui attend une pièce ne sert personne ; un
+   rapport qui masque ce qu'il ignore est pire.
 
 ### 3 · Répartir, quand la collecte est grosse
 
@@ -207,30 +206,22 @@ Puis, selon le volume :
       grep '"categorie":"evenement"' faits.jsonl
       grep '"categorie":"suspect"'   faits.jsonl
 
-- **Au-delà** : répartissez sur des **sous-agents**, s'ils sont disponibles.
-  Crush expose pour cela l'outil `agent`, qui les lance **en parallèle** et
-  les restreint **aux outils de lecture seule** — `view`, `ls`, `grep`,
-  `glob` : un sous-agent ne peut, par construction, rien écrire dans les
-  scellés. C'est la façon la plus sûre de traiter un gros volume.
-
-  Une catégorie par sous-agent, une consigne identique pour chacun :
+- **Au-delà** : répartissez sur des **sous-agents** si l'outil `agent` est
+  disponible. Crush les lance en parallèle et les restreint aux outils de
+  **lecture seule** — un sous-agent ne peut, par construction, rien écrire
+  dans les scellés. Une catégorie par sous-agent, la même consigne pour tous :
 
   > Lis `faits.jsonl`, ne retiens que les lignes dont la catégorie est
   > `reseau`. Rends un résumé de dix lignes au plus, chaque affirmation
   > suivie des identifiants de faits qui la portent (`F0123`). N'invente
   > rien, ne conclus rien : je recoupe ensuite.
 
-  Vous gardez pour vous le recoupement et la rédaction — c'est là que le
-  jugement s'exerce, et il demande d'avoir toutes les catégories en tête.
-
-**Ce qu'un sous-agent ne doit jamais faire** : conclure, qualifier de
-suspect, ou décider de ce qui entre dans le rapport. Il lit et il résume.
-Les identifiants de faits qu'il rend vous permettent de tout revérifier
-sans le croire sur parole.
-
-Si l'outil `agent` n'est pas dans les permissions, ce n'est pas grave :
-lisez par catégorie, dans l'ordre du plan de rédaction, et écrivez chaque
-section dès que vous en avez la matière plutôt que de tout garder en tête.
+**Un sous-agent lit et résume ; il ne conclut pas**, ne qualifie rien de
+suspect et ne décide pas de ce qui entre dans le rapport — les identifiants
+qu'il rend sont là pour que vous revérifiiez sans le croire sur parole. Le
+recoupement et la rédaction restent à vous : c'est là qu'est le jugement.
+Sans l'outil `agent`, lisez par catégorie dans l'ordre du plan et écrivez
+chaque section dès que vous en avez la matière.
 
 ### 4 · Recouper
 
@@ -239,18 +230,15 @@ sources à chaque fois :
 
 - une **session** (`wtmp`) et ce qui s'est passé pendant sa fenêtre : sudo,
   branchement USB, navigation, écriture de fichier dans la timeline ;
-- un **support amovible** et sa chaîne complète : branchement, **numéro de
-  série**, modèle, `/dev/sdX` obtenu, montage — dont le chemin
-  `/run/media/<compte>/` **nomme le compte** —, puis débranchement. Entre les
-  deux, les fichiers apparus ou lus sous ce chemin (timeline,
-  `recently-used.xbel`) : c'est ainsi qu'on montre une copie. Sans
-  environnement graphique il n'y a pas de `/run/media/` : l'attribution passe
-  alors par la session ouverte à cet instant, et c'est un rapprochement, pas
-  une preuve — dites-le. **Ce qui a été copié dessus est dans le brouillon** :
-  la timeline a été interrogée sous chaque point de montage, et un fichier
-  `...b` y est une création, donc une copie vers le support ; un `.a..` une
-  lecture. Aucune ligne sous le montage veut dire que le support lui-même n'a
-  pas été lu, pas qu'il n'a rien reçu ;
+- un **support amovible** et sa chaîne : branchement, **numéro de série**,
+  modèle, `/dev/sdX`, montage — dont le chemin `/run/media/<compte>/` **nomme
+  le compte** —, débranchement. **Ce qui a été copié dessus est déjà dans le
+  brouillon** : la timeline a été interrogée sous chaque point de montage, où
+  un `...b` est une création (donc une copie vers le support) et un `.a..` une
+  lecture ; aucune ligne veut dire que le support n'a pas été lu, pas qu'il
+  n'a rien reçu. Sans environnement graphique, pas de `/run/media/` :
+  l'attribution passe par la session ouverte à cet instant — un rapprochement,
+  pas une preuve, et dites-le ;
 - un **téléchargement** et l'apparition du fichier dans la timeline — c'est
   déjà fait : l'extraction pose un fait `confirme: F0123` qui répond, et le
   brouillon l'affiche en face du téléchargement. Reprenez la réponse, ne la
@@ -274,14 +262,11 @@ Ne partez pas d'une page blanche. Faites d'abord produire le brouillon :
 python3 scripts/brouillon.py faits.jsonl -o rapport-forensic-<PREFIX>.md
 ```
 
-Il contient les **sections dans l'ordre**, avec tous les tableaux déjà
-remplis depuis les faits — la machine, les comptes et leurs sessions, le
-réseau, **ce qui s'est passé session par session**, les domaines les plus
-visités par compte, les cookies sans page d'historique, les téléchargements,
-les supports, les suspects et les indicateurs cherchés, les limites avec la
-demande de reprise toute prête, l'annexe, un lexique — et des passages marqués
-**« À rédiger »** qui disent ce qu'il faut écrire à cet endroit. Toutes les
-dates y sont dans le fuseau du poste.
+Il contient les **sections dans l'ordre** (celui du plan ci-dessous), tous les
+tableaux déjà remplis depuis les faits, une demande de reprise toute prête, une
+annexe, un lexique — et des passages marqués **« À rédiger »** qui disent ce
+qu'il faut écrire à cet endroit. Toutes les dates y sont dans le fuseau du
+poste.
 
 Chaque ligne d'événement répond à **quand, qui, quoi, où, comment** : la date,
 le compte, le fait, le terminal ou l'origine ou le chemin, la pièce et le
@@ -290,11 +275,10 @@ qu'un compte est ouvert lui est rapproché. Quand deux sessions se chevauchent,
 la ligne dit « ? (session simultanée) » : **ne l'attribuez à personne** sans
 une autre trace (le chemin `/run/media/<compte>/`, le compte d'un sudo).
 
-Le brouillon s'ouvre sur **« En bref »** : cinq phrases pour qui ne lira que
-cela, sans jargon — le lexique de la fin est là pour le reste. Un rapport doit
-se lire par quelqu'un qui n'est pas du métier, et se vérifier par quelqu'un
-qui l'est : les phrases sont pour le premier, les identifiants et les tableaux
-pour le second.
+Le brouillon s'ouvre sur **« En bref »** : cinq phrases sans jargon pour qui ne
+lira que cela. Un rapport se lit par quelqu'un qui n'est pas du métier et se
+vérifie par quelqu'un qui l'est — les phrases sont pour le premier, les
+identifiants et les tableaux pour le second.
 
 Ce que vous faites du brouillon :
 
@@ -384,11 +368,3 @@ Distinguez les deux, et dites-le dans l'annexe :
   vaut mieux qu'une certitude fausse.
 - **N'inventez pas de chemin ni de commande.** Si vous n'avez pas lu le
   fichier, vous ne le citez pas.
-
-## Si la collecte est incomplète
-
-C'est le cas courant. Une étape rouge dans `PREFIX_rapport.txt` explique
-souvent un manque : lisez-le et citez-le. Une image sans journal systemd, sans
-`wtmp` ou sans profil de navigateur donne un rapport plus court — pas un
-rapport qui invente. Dites dans « Les limites » ce que vous auriez pu conclure
-si la pièce avait été là.

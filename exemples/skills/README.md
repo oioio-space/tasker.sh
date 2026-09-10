@@ -108,8 +108,10 @@ vérification ci-dessus.
 
 Les deux skills suivent le standard ouvert [Agent Skills](https://agentskills.io),
 celui que Crush revendique : `name` en minuscules égal au nom du dossier,
-`description` sous 1024 **octets** (Crush compte en octets, un accent en vaut
-deux), corps du `SKILL.md` sous 5 000 jetons et 500 lignes, `scripts/` et
+`description` sous 1024 **octets** et corps du `SKILL.md` sous 5 000 jetons et
+500 lignes — **comptés en octets** dans les deux cas, un accent en valant deux,
+ce qui fait qu'un texte français franchit la borne environ 3 % plus tôt qu'on
+ne le croit, `scripts/` et
 `references/` en chemins relatifs d'un seul niveau, `compatibility` déclaré.
 **Ces bornes sont vérifiées par `tests/artefacts.py`** plutôt que recopiées
 ici, où elles rouilleraient.
@@ -211,7 +213,6 @@ Les options de `extraire.py`, toutes facultatives :
 |---|---|
 | `--textes fichier` | des chaînes à chercher, **une par ligne, sans syntaxe** — noms, références, mots-clés. Répétable |
 | `--indicateurs fichier` | le format riche : `sha256:`, `ip:`, `domaine:`, `regex:`, `fichier:`… (`references/indicateurs.md`) |
-| `--visites N` | pages retenues par historique de navigateur (5 000 par défaut) ; au-delà, un fait « limite » le dit |
 | `--sans-reprise` | ignorer le journal de progression et tout reparcourir |
 
 Une extraction qui plante se relance **avec la même commande** : elle reprend

@@ -115,12 +115,11 @@ def _compte_de(chemin, suffixe):
 class Collecte:
     """Le dossier PREFIX/ produit par collecte-linux."""
 
-    def __init__(self, racine, visites=5000):
+    def __init__(self, racine):
         self.racine = os.path.abspath(racine)
         self.prefix = os.path.basename(self.racine)
         self.lus = set()          # ce qui a servi, pour le manifeste
         self.mtimes = {}          # archive → {membre: date}, rempli en lisant
-        self.visites = visites    # pages retenues par historique de navigateur
         if not os.path.isdir(self.racine):
             sys.exit(f"pas un dossier : {self.racine}")
         # os-release, lu une fois : les faits « machine » en viennent, et la
@@ -1038,30 +1037,30 @@ def _sqlite_lire(blob, requetes):
                 yield nom, lignes
 
 
-# Les visites sont bornées, et la borne est un fait : quand elle est atteinte,
-# un fait « limite » dit combien de pages restent hors des faits. Un profil
-# de plusieurs années en compte des dizaines de milliers ; la borne se règle
-# par --visites. Chaque page porte son nombre de visites et la première : ce
-# qui distingue un passage d'une habitude.
+# RIEN n'est borné ici : tout ce que la base porte devient un fait. Un profil
+# de plusieurs années compte des dizaines de milliers de pages, et une borne
+# aurait beau se dire dans un fait « limite », elle laisserait dehors les plus
+# ANCIENNES — c'est-à-dire justement ce qu'on ne peut retrouver nulle part
+# ailleurs quand l'historique récent a été vidé. Chaque page porte son nombre
+# de visites et la première : ce qui distingue un passage d'une habitude.
 FF_EPOCH = "datetime(v.last_visit_date/1000000,'unixepoch')"
 REQ_FIREFOX = {
-    "total": "SELECT COUNT(*) FROM moz_places WHERE last_visit_date IS NOT NULL",
     "visite": f"SELECT {FF_EPOCH}, v.url, v.title, v.visit_count, "
               "(SELECT datetime(MIN(h.visit_date)/1000000,'unixepoch') "
               " FROM moz_historyvisits h WHERE h.place_id=v.id) "
               "FROM moz_places v WHERE v.last_visit_date IS NOT NULL "
-              "ORDER BY v.last_visit_date DESC LIMIT ?",
+              "ORDER BY v.last_visit_date DESC",
     "telechargement":
         "SELECT datetime(a.dateAdded/1000000,'unixepoch'), a.content, p.url "
         "FROM moz_annos a JOIN moz_places p ON p.id=a.place_id "
-        "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC LIMIT ?",
+        "WHERE a.content LIKE 'file://%' ORDER BY a.dateAdded DESC",
     # un marque-page est un choix délibéré, et il est DATÉ : il survit au
     # vidage de l'historique, que l'utilisateur croit souvent suffisant
     "marque-page":
         "SELECT datetime(b.dateAdded/1000000,'unixepoch'), p.url, b.title "
         "FROM moz_bookmarks b JOIN moz_places p ON p.id=b.fk "
         "WHERE b.type=1 AND p.url NOT LIKE 'place:%' "
-        "ORDER BY b.dateAdded DESC LIMIT ?",
+        "ORDER BY b.dateAdded DESC",
 }
 # Un cookie prouve une visite même quand l'historique a été vidé : les deux
 # bases sont indépendantes. On regroupe par domaine — un profil en compte des
@@ -1070,10 +1069,10 @@ REQ_FIREFOX = {
 # à établir la visite ; la valeur n'ajoute rien et ferait du rapport un secret.
 REQ_COOKIES_FF = [
     ("cookie", "SELECT host, COUNT(*), MIN(creationTime), MAX(lastAccessed) "
-               "FROM moz_cookies GROUP BY host ORDER BY MAX(lastAccessed) DESC LIMIT 300"),
+               "FROM moz_cookies GROUP BY host ORDER BY MAX(lastAccessed) DESC"),
     ("cookie (ancien schéma)",
      "SELECT baseDomain, COUNT(*), MIN(creationTime), MAX(lastAccessed) "
-     "FROM moz_cookies GROUP BY baseDomain ORDER BY MAX(lastAccessed) DESC LIMIT 300"),
+     "FROM moz_cookies GROUP BY baseDomain ORDER BY MAX(lastAccessed) DESC"),
 ]
 
 # Chrome range ses cookies dans « Cookies » — sous Default/, ou sous
@@ -1082,26 +1081,25 @@ REQ_COOKIES_FF = [
 # bureau : illisible sans la clé, et on ne la lit pas davantage.
 REQ_COOKIES_CHROME = [
     ("cookie", "SELECT host_key, COUNT(*), MIN(creation_utc), MAX(last_access_utc) "
-               "FROM cookies GROUP BY host_key ORDER BY MAX(last_access_utc) DESC LIMIT 300"),
+               "FROM cookies GROUP BY host_key ORDER BY MAX(last_access_utc) DESC"),
 ]
 
 REQ_CHROME = {
-    "total": "SELECT COUNT(*) FROM urls WHERE last_visit_time > 0",
     "visite": "SELECT datetime(u.last_visit_time/1000000-11644473600,'unixepoch'), "
               "u.url, u.title, u.visit_count, "
               "(SELECT datetime(MIN(x.visit_time)/1000000-11644473600,'unixepoch') "
               " FROM visits x WHERE x.url=u.id) "
               "FROM urls u WHERE u.last_visit_time > 0 "
-              "ORDER BY u.last_visit_time DESC LIMIT ?",
+              "ORDER BY u.last_visit_time DESC",
     "telechargement":
         "SELECT datetime(start_time/1000000-11644473600,'unixepoch'), target_path, tab_url "
-        "FROM downloads ORDER BY start_time DESC LIMIT ?",
+        "FROM downloads ORDER BY start_time DESC",
     # ce que le compte a TAPÉ dans la barre d'adresse : l'intention, pas
     # seulement la page atteinte
     "recherche":
         "SELECT datetime(u.last_visit_time/1000000-11644473600,'unixepoch'), k.term, u.url "
         "FROM keyword_search_terms k JOIN urls u ON u.id=k.url_id "
-        "ORDER BY u.last_visit_time DESC LIMIT ?",
+        "ORDER BY u.last_visit_time DESC",
 }
 
 # Les mots de passe enregistrés : on lit le SITE, jamais l'identifiant ni le
@@ -1170,11 +1168,9 @@ def _logins_chrome(source, compte, blob, req, outil):
                  note=f"enregistré le {_date_us(cree, True)}" if cree else None)
 
 
-def _historique_navigateur(source, compte, blob, req, outil, limite):
+def _historique_navigateur(source, compte, blob, req, outil):
     with _sqlite(blob) as cx:
-        total = (_lignes(cx, req["total"]) or [[None]])[0][0]
-        visites = _lignes(cx, req["visite"], (limite,))
-        for ts, url, titre, combien, premiere in visites:
+        for ts, url, titre, combien, premiere in _lignes(cx, req["visite"]):
             ts, premiere = _iso_z(ts), _iso_z(premiere)
             note = f"{combien} visite(s)" if combien else ""
             if premiere and premiere != ts:
@@ -1184,19 +1180,18 @@ def _historique_navigateur(source, compte, blob, req, outil, limite):
             fait("navigation", "page visitée", url, source,
                  f"sqlite3 sur l'historique {outil}", horodatage=ts, acteur=compte,
                  note=note or None)
-        for ts, cible, origine in _lignes(cx, req["telechargement"], (limite,)):
+        for ts, cible, origine in _lignes(cx, req["telechargement"]):
             fait("telechargement", "fichier téléchargé", cible, source,
                  f"sqlite3 sur les téléchargements {outil}", horodatage=_iso_z(ts),
                  acteur=compte, note=f"depuis {origine}" if origine else None)
-        signets = _lignes(cx, req["marque-page"], (limite,)) if req.get("marque-page") else []
-        for ts, url, titre in signets:
+        for ts, url, titre in (_lignes(cx, req["marque-page"])
+                               if req.get("marque-page") else []):
             fait("navigation", "marque-page enregistré", url, source,
                  f"sqlite3 sur les marque-pages {outil}", horodatage=_iso_z(ts),
                  acteur=compte, note=(titre or None),
                  confiance="certaine")
-        _borne_atteinte(len(signets), limite, "marque-pages", source, compte,
-                        f"LIMIT {limite} sur les marque-pages {outil}")
-        for ts, terme, url in _lignes(cx, req.get("recherche", ""), (limite,)) if req.get("recherche") else []:
+        for ts, terme, url in (_lignes(cx, req["recherche"])
+                               if req.get("recherche") else []):
             fait("navigation", "recherche saisie dans la barre d'adresse", terme, source,
                  f"sqlite3 sur keyword_search_terms {outil}", horodatage=_iso_z(ts),
                  acteur=compte, confiance="forte",
@@ -1204,13 +1199,7 @@ def _historique_navigateur(source, compte, blob, req, outil, limite):
                       + "la date est celle de la DERNIÈRE visite de la page atteinte, "
                         "pas celle de la frappe : une recherche ancienne dont la page a "
                         "été revue porte la date récente")
-    if total and total > len(visites):
-        fait("limite", "historique de navigation tronqué",
-             f"{len(visites)} pages sur {total}", source,
-             f"COUNT(*) sur l'historique {outil}, borne --visites {limite}",
-             acteur=compte, confiance="certaine",
-             note="les pages les plus anciennes ne sont pas dans les faits ; "
-                  "relancez avec --visites plus grand pour les avoir")
+
 
 
 def _recemment_ouverts(source, compte, blob, req, outil):
@@ -1226,30 +1215,19 @@ def _recemment_ouverts(source, compte, blob, req, outil):
 REQ_FORMULAIRES_FF = [
     ("formulaire", "SELECT fieldname, value, timesUsed, "
                    "datetime(firstUsed/1000000,'unixepoch'), datetime(lastUsed/1000000,'unixepoch') "
-                   "FROM moz_formhistory ORDER BY lastUsed DESC LIMIT 500"),
+                   "FROM moz_formhistory ORDER BY lastUsed DESC"),
 ]
 # Chrome compte en SECONDES dans cette table — pas en microsecondes comme
 # ailleurs : c'est la table, pas une devinette.
 REQ_FORMULAIRES_CHROME = [
     ("formulaire", "SELECT name, value, count, "
                    "datetime(date_created,'unixepoch'), datetime(date_last_used,'unixepoch') "
-                   "FROM autofill ORDER BY date_last_used DESC LIMIT 500"),
+                   "FROM autofill ORDER BY date_last_used DESC"),
 ]
-
-
-def _borne_atteinte(rendues, borne, quoi, source, compte, methode):
-    """Une requête qui rend exactement sa borne en cachait peut-être d'autres."""
-    if rendues >= borne:
-        fait("limite", f"{quoi} : la borne de lecture est atteinte", str(borne), source,
-             methode, acteur=compte, confiance="à vérifier",
-             note="il y en a peut-être davantage ; les plus anciens ne sont pas dans "
-                  "les faits")
 
 
 def _formulaires(source, compte, blob, req, outil):
     for _, lignes in _sqlite_lire(blob, req):
-        _borne_atteinte(len(lignes), 500, "saisies de formulaire", source, compte,
-                        f"LIMIT 500 sur l'historique de formulaires {outil}")
         for champ, valeur, combien, premier, dernier in lignes:
             fait("usage", "saisie dans un formulaire", _coupe(str(valeur), 200), source,
                  f"sqlite3 sur l'historique de formulaires {outil}",
@@ -1267,21 +1245,17 @@ def _marque_pages_chrome(source, compte, blob, req, outil):
     except (ValueError, AttributeError):
         return
     pile = [(v, k) for k, v in racines.items() if isinstance(v, dict)]
-    poses, borne = 0, 2000
-    while pile and poses < borne:
+    while pile:
         noeud, dossier = pile.pop()
         for enfant in noeud.get("children", []) or []:
             if enfant.get("type") == "folder":
                 pile.append((enfant, enfant.get("name") or dossier))
             elif enfant.get("url"):
-                poses += 1
                 quand = enfant.get("date_added")
                 fait("navigation", "marque-page enregistré", enfant["url"], source,
                      "lecture du fichier Bookmarks (JSON)", acteur=compte,
                      horodatage=_date_us(int(quand), True) if str(quand).isdigit() else None,
                      note=f"« {enfant.get('name', '')} », dans « {dossier} »")
-    _borne_atteinte(poses, borne, "marque-pages", source, compte,
-                    f"borne de {borne} marque-pages dans le fichier Bookmarks")
 
 
 # Le fichier, le navigateur, la requête, le traitement. C'est LA liste des
@@ -1300,12 +1274,12 @@ NAVIGATEURS = {
 }
 
 
-def _base_navigateur(source, compte, base, blob, visites):
+def _base_navigateur(source, compte, base, blob):
     """Un membre d'archive dont le nom est dans NAVIGATEURS — ou son -wal."""
     if base in NAVIGATEURS:
         outil, req, traitement = NAVIGATEURS[base]
         if traitement == "historique":
-            _historique_navigateur(source, compte, blob, req, outil, visites)
+            _historique_navigateur(source, compte, blob, req, outil)
         elif traitement == "cookies":
             _cookies(source, compte, blob, req, outil, base == "Cookies")
         else:
@@ -1381,7 +1355,7 @@ def navigation(c):
                 base = os.path.basename(nom)
                 source = f"{c.rel(prof)} → {nom}"
                 if _garde_navigation(nom):
-                    _base_navigateur(source, compte, base, blob, c.visites)
+                    _base_navigateur(source, compte, base, blob)
                 else:
                     _artefact(source, compte, base, blob)
             _applications(c, prof, compte)
@@ -3440,10 +3414,6 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("collecte", help="le dossier PREFIX/ produit par collecte-linux")
     ap.add_argument("-o", "--sortie", default="faits.jsonl")
-    ap.add_argument("--visites", type=int, default=5000, metavar="N",
-                    help="pages retenues par historique de navigateur, les plus "
-                         "récentes d'abord (défaut 5000) ; au-delà, un fait "
-                         "« limite » le dit")
     ap.add_argument("--indicateurs", metavar="FICHIER",
                     help="chaînes, empreintes, adresses à chercher dans toute la "
                          "collecte, une par ligne : voir references/indicateurs.md")
@@ -3456,7 +3426,7 @@ def main():
                          "collecte, même ce qui a déjà été lu")
     args = ap.parse_args()
 
-    c = Collecte(args.collecte, visites=args.visites)
+    c = Collecte(args.collecte)
 
     def etape(nom, fn):
         """Une phase, son compte de faits, et son plantage qui n'emporte rien.

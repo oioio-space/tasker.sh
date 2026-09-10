@@ -163,7 +163,13 @@ def batir(base):
          "title TEXT, dateAdded INTEGER)"],
         [("INSERT INTO moz_places VALUES(?,?,?,?,?)", [
             (1, "https://www.yggtorrent.wtf/torrent/999", "Le.Film.2024", 1, ff("2025-11-30T18:38:00")),
-            (2, "https://intranet.entreprise.fr/rh", "RH", 40, ff("2026-01-05T09:00:00"))]),
+            (2, "https://intranet.entreprise.fr/rh", "RH", 40, ff("2026-01-05T09:00:00")),
+            # Une longue traîne de pages ANCIENNES. Une borne, quelle qu'elle
+            # soit, garde les plus récentes et jette celles-ci — c'est-à-dire
+            # exactement ce qu'on ne retrouve nulle part ailleurs quand
+            # l'historique récent a été vidé. Le test les compte toutes.
+            *((i, f"https://vieux-site-{i:03d}.example/page", f"Page {i}", 1,
+               ff("2025-01-%02dT08:00:00" % (i % 28 + 1))) for i in range(3, 23))]),
          ("INSERT INTO moz_historyvisits VALUES(?,?,?)", [
             (1, 1, ff("2025-11-30T18:38:00")), (2, 2, ff("2025-06-01T09:00:00"))]),
          ("INSERT INTO moz_annos VALUES(?,?,?,?)", [
@@ -634,7 +640,33 @@ ATTENDUS_CHAMPS = [
     # d'une absence se glisse là où on lit des trouvailles.
     ("indicateur : la polarité est dite",
      {"__jamais__": {"categorie": "indicateur", "trouve": None}}),
+
+    # ── l'historique de navigation n'est pas borné ────────────────────
+    # Le piège pose 22 pages dans places.sqlite — dont 20 anciennes — et 1 dans
+    # Chrome. Les 23 doivent devenir des faits : une borne garde « les plus
+    # récentes d'abord » et laisse dehors les anciennes, qui sont justement
+    # celles qu'aucune autre pièce ne porte quand l'historique récent a été
+    # vidé. Compter est la SEULE forme qui attrape ça — une recherche par
+    # présence trouve toujours les premières lignes et ne voit rien.
+    ("navigation : rien n'est borné", {"__compte__": ("page visitée", 23)}),
+    ("navigation : la plus ancienne est là", {"fait": "page visitée",
+                                              "valeur": "vieux-site-003.example"}),
+    # Et si quelqu'un rebornait la lecture selon l'idiome de la maison, il
+    # poserait l'un de ces deux faits pour le dire. Qu'ils n'existent jamais
+    # est la garde qui tient même sur un piège plus petit que la borne.
+    ("navigation : aucun fait de borne",
+     {"__jamais__": {"categorie": "limite", "fait": "historique de navigation tronqué"}}),
+    ("navigation : aucune borne de lecture",
+     {"__jamais__": {"categorie": "limite",
+                     "fait": "marque-pages : la borne de lecture est atteinte"}}),
 ]
+
+
+# Les bornes de la spécification Agent Skills pour le CORPS d'un SKILL.md.
+# Le compte en jetons est approché comme le fait Crush : quatre octets par
+# jeton. C'est grossier, et c'est justement pour ça qu'on garde une marge.
+CORPS_MAX_JETONS = 5000
+CORPS_MAX_LIGNES = 500
 
 
 def frontmatter_sain(racine):
@@ -657,6 +689,24 @@ def frontmatter_sain(racine):
         if not texte.startswith("---\n") or "\n---" not in texte[4:]:
             ennuis.append((chemin, "frontmatter absent ou non refermé"))
             continue
+        # Le CORPS est lu à chaque activation du skill, en entier, et il est
+        # pris sur le contexte du modèle. La borne est celle de la spécification
+        # Agent Skills, et le README annonce qu'elle est vérifiée ICI : sans ce
+        # contrôle, elle se franchit d'un paragraphe à la fois sans que rien ne
+        # le dise. Ce qui déborde va dans references/, lu à la demande.
+        # En OCTETS, comme Crush : son ApproxTokenCount fait (len(s)+3)/4 sur
+        # une chaîne Go, où len() compte les octets. En français, chaque accent
+        # en pèse deux — compter les caractères sous-estime d'un bon 3 %, et
+        # c'est ainsi qu'un corps déjà au-dessus de la borne passait pour bon.
+        corps = texte[4:].split("\n---", 1)[1].strip()
+        jetons = (len(corps.encode("utf-8")) + 3) // 4
+        if jetons > CORPS_MAX_JETONS:
+            ennuis.append((chemin, f"corps de ~{jetons} jetons : au-dessus des "
+                                   f"{CORPS_MAX_JETONS} de la spécification. "
+                                   f"Déplacez un passage dans references/"))
+        if corps.count("\n") > CORPS_MAX_LIGNES:
+            ennuis.append((chemin, f"corps de {corps.count(chr(10))} lignes : "
+                                   f"au-dessus des {CORPS_MAX_LIGNES}"))
         for ligne in texte[4:].split("\n---", 1)[0].splitlines():
             if not ligne.strip() or ligne.lstrip().startswith("#"):
                 continue
@@ -753,8 +803,18 @@ def main():
         # EXACTE, à rebours du reste : « www.yggtor » est un morceau du
         # légitime « www.yggtorrent.wtf », et une recherche par sous-chaîne
         # sonnerait l'alarme sur le fait même qu'elle doit laisser passer.
+        # « __compte__ » : (libellé de fait, nombre) — il doit y en avoir
+        # EXACTEMENT autant. C'est la seule forme qui attrape une troncature :
+        # une borne laisse toujours passer les premières lignes, donc une
+        # recherche par présence trouve ce qu'elle cherche et ne voit rien.
+        compte = exige.get("__compte__")
         jamais = exige.get("__jamais__")
-        if jamais:
+        if compte:
+            quoi, attendu = compte
+            vu = sum(1 for d in lus_f if d.get("fait") == quoi)
+            ok = vu == attendu
+            etiquette = f"{vu} « {quoi} » (attendu {attendu})"
+        elif jamais:
             ok = not any(all(d.get(k) == v for k, v in jamais.items())
                          for d in lus_f)
             etiquette = " + ".join(f"{k}={v}" for k, v in jamais.items())
