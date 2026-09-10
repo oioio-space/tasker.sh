@@ -2,6 +2,8 @@
 name: forensic-linux
 description: Analyse une collecte produite par tasker.sh exemples/collecte-linux.conf et rédige un rapport forensique daté et sourcé — identité et installation de la machine, chronologie de vie attribuée aux comptes, réseau (IP, MAC, DNS, domaine), navigation et téléchargements, supports amovibles, comptes locaux et de domaine, contrôleurs de domaine, éléments suspects. À utiliser dès qu'un dossier de collecte Linux doit être exploité, ou quand on demande « que s'est-il passé sur ce poste ». Chaque fait rapporté cite son fichier source et la commande qui l'a obtenu.
 user-invocable: true
+license: MIT
+compatibility: Exige python3 (bibliothèque standard seule, dont sqlite3) et une collecte produite par tasker.sh exemples/collecte-linux.conf. Fonctionne entièrement hors ligne : aucun accès réseau, aucune dépendance à installer. Les outils d'écriture ne sont pas nécessaires sur les scellés, qui se montent en lecture seule (mount -o bind,ro).
 ---
 
 # Analyse d'une collecte Linux

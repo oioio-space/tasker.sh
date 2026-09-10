@@ -63,13 +63,23 @@ suffit, il n'y a **rien à déclarer** dans `crush.json` :
 et, dans le dossier de travail courant, `.crush/skills/`, `.agents/skills/`,
 `.claude/skills/` et `.cursor/skills/`.
 
+Dans un dépôt git, Crush regarde en plus ces quatre dossiers **à la racine du
+dépôt**, pas seulement dans le dossier courant : un jeu de skills posé à la
+racine sert donc à tous les sous-dossiers.
+
 Deux réglages déplacent tout ça, et c'est la seule raison pour laquelle votre
 machine pourrait différer : `XDG_CONFIG_HOME`, qui remplace `~/.config`, et
 `CRUSH_SKILLS_DIR`, qui **remplace les quatre dossiers d'un coup** par celui
-qu'il nomme. Vérifiez sur votre poste avant de copier quoi que ce soit :
+qu'il nomme.
 
-    echo "config : ${XDG_CONFIG_HOME:-$HOME/.config}/crush"
-    echo "skills  : ${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
+Inutile de deviner : Crush sait le dire lui-même.
+
+    crush dirs        # « Show config and data directories »
+
+La première ligne est le dossier de **configuration** (les skills vont dans son
+sous-dossier `skills/`), la seconde celui d'**état**. Pour compléter :
+
+    echo "skills : ${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
     ls -d ~/.config/crush ~/.local/share/crush ~/.claude/skills 2>/dev/null
 
 ### Poser les skills
@@ -92,6 +102,37 @@ un jeu de skills par affaire :
 Dans les deux cas, Crush doit lister les deux skills au démarrage. S'il ne les
 voit pas, c'est le chemin, pas le skill : relancez les trois commandes de
 vérification ci-dessus.
+
+### Ce que le format garantit, et ce qu'il coûte en contexte
+
+Les deux skills suivent le standard ouvert [Agent Skills](https://agentskills.io),
+celui que Crush revendique. Ça se vérifie, et c'est vérifié :
+
+| règle de la spec | ici |
+|---|---|
+| `name` : 1-64 car., minuscules, chiffres et tirets, égal au nom du dossier | `forensic-linux` (14 o), `conformite-linux` (16 o) |
+| `description` : 1-1024 caractères | 580 et 632 **octets** — Crush compte en octets, et un accent en vaut deux |
+| corps du `SKILL.md` : < 5000 jetons, < 500 lignes | 4 334 jetons / 330 lignes, et 3 090 / 243 |
+| `scripts/`, `references/`, `assets/` | `scripts/` et `references/`, chemins relatifs, un seul niveau |
+| `compatibility` si le skill a des exigences | déclaré : python3, bibliothèque standard, hors ligne |
+
+Ça compte, parce que Crush ne charge pas un skill d'un bloc — c'est la
+**divulgation progressive**, en trois temps :
+
+1. **au démarrage**, seuls `name`, `description` et le **chemin** du `SKILL.md`
+   entrent dans l'invite système. Pour les deux skills réunis : **≈ 333
+   jetons**, et rien d'autre ;
+2. **à l'activation**, le modèle lit le `SKILL.md` — d'où la borne des 5 000
+   jetons, et d'où le fait que le modèle a besoin de l'outil `view` ;
+3. **à la demande**, et seulement là, les fichiers de `references/`.
+
+C'est pour ça que `artefacts.md` peut peser 5 500 jetons sans gêner : il n'est
+lu que si la question s'y prête. Si vous ajoutez un skill, gardez la même
+discipline — le `SKILL.md` mince, le détail dans `references/`.
+
+Pour contrôler un skill que vous écririez vous-même, le standard fournit un
+validateur (`skills-ref validate ./mon-skill`) — à récupérer avant de couper le
+réseau.
 
 ### Deux formats, un seul à préférer
 
@@ -493,8 +534,13 @@ et il vaut mieux le dire que le laisser croire :
   - **le nom du modèle dans `crushrc`.** Les builtins prennent la forme
     `<provider>/<id>`, or l'identifiant Nemotron contient déjà une barre
     oblique : `dgx/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B`. La découpe se
-    fait selon toute vraisemblance sur la **première** barre, mais vérifiez-le
-    d'un `crush models`, qui imprime la forme attendue ;
+    fait selon toute vraisemblance sur la **première** barre. Pour le vérifier,
+    `model large` sans argument, dans un `crushrc`, imprime la sélection
+    courante sous la forme attendue ; et l'identifiant réellement servi se lit
+    par `curl -s http://dgx.local:8000/v1/models`. (Il n'y a **pas** de
+    sous-commande `crush models` : les sous-commandes sont `run`, `dirs`,
+    `projects`, `update-providers`, `logs`, `login`, `logout`, `schema`,
+    `stats` et `session`.) ;
   - **la tolérance de `_commentaire`** dans `crush.json`. Le schéma est en
     `additionalProperties: false` ; Go ignore les clés inconnues, mais si votre
     éditeur la souligne ou si Crush la refuse, supprimez le bloc : c'est de la
