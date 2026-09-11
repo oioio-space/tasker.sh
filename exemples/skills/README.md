@@ -230,9 +230,24 @@ Gardez le **`faits-manifeste.json`** qui sort à côté : l'empreinte SHA-256 de
 chaque pièce lue, celle de l'extracteur lui-même, celle du fichier de faits, la
 commande exacte et l'heure. C'est lui qui rend le rapport opposable (§5).
 
+**La phase qui dure, c'est `indicateurs et intérêts`** — la dernière avant les
+synthèses, et la seule qui ouvre **chaque** pièce de la collecte : elle
+décompresse les archives, lit les gigaoctets de `STRINGS/` et les centaines de
+milliers de fichiers de `PHOTOREC/`. Des heures sur un gros scellé, c'est
+normal ; tout ce qui précède se compte en minutes. Elle écrit son avancement
+toutes les quinze secondes, en nommant le dossier en cours :
+
+      lecture : PHOTOREC/recup_12 — 148302 pièces, 51 min 20 s
+
+Depuis un autre terminal, le journal de reprise dit la même chose — il est vidé
+sur le disque après **chaque** pièce :
+
+    wc -l faits-reprise.jsonl ; find scelle -type f | wc -l
+    du -sh scelle/STRINGS scelle/PHOTOREC     # ce qui explique le temps
+
 Une extraction qui plante se relance **avec la même commande** : elle reprend où
-elle en était grâce au `faits-reprise.jsonl`, et rend le même fichier,
-identifiants compris.
+elle en était grâce à ce journal, et rend le même fichier, identifiants
+compris.
 
 | à ajouter | quand |
 |---|---|

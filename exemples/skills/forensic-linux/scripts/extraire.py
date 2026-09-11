@@ -12,7 +12,7 @@ archives sont lues en flux, jamais dépaquetées sur place.
 """
 import argparse, bisect, bz2, codecs, collections, contextlib, csv, fnmatch, gzip
 import itertools
-import hashlib, io, json, lzma, os, re
+import hashlib, io, json, lzma, os, re, time
 import urllib.parse
 import sqlite3, struct, sys, tarfile, tempfile, zlib
 from datetime import datetime, timedelta, timezone
@@ -4150,6 +4150,16 @@ def _rejouer(f):
     FAITS.append({"id": f"F{len(FAITS) + 1:04d}", **f})
 
 
+# La phase des indicateurs n'écrivait RIEN pendant des heures. Sur une collecte
+# qui porte un PHOTOREC/ — des centaines de milliers de pièces rendues par le
+# carving — et un STRINGS/ de plusieurs gigaoctets, l'analyste ne pouvait pas
+# distinguer « ça travaille » de « c'est bloqué », et la seule façon de le
+# savoir était de surveiller le journal de reprise depuis un autre terminal.
+# Une ligne toutes les quinze secondes suffit, et elle NOMME le dossier en
+# cours : c'est lui qui explique le temps passé.
+PAS_AVANCEMENT = 15.0
+
+
 def indicateurs(c, liste, reprise=None, fichiers=()):
     """Cherche chaque indicateur dans TOUTE la collecte, source par source.
 
@@ -4371,6 +4381,26 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             c.lus.add(chemin)
             lire_source(rel, rel, lambda: open(chemin, "rb"))
 
+    # L'avancement, sur stderr comme le reste des étapes. Sur un terminal la
+    # ligne se réécrit sur elle-même ; ailleurs — journal, tube — elle
+    # s'ajoute, et le rythme suffit à ce que le fichier reste lisible.
+    tty = sys.stderr.isatty()
+    depart = time.monotonic()
+    avance = {"n": 0, "quand": depart}
+
+    def avancer(ou):
+        avance["n"] += 1
+        maintenant = time.monotonic()
+        if maintenant - avance["quand"] < PAS_AVANCEMENT:
+            return
+        avance["quand"] = maintenant
+        ecoule = int(maintenant - depart)
+        ligne = (f"      lecture : {ou or '.'} — {avance['n']} "
+                 f"pièce{'s' if avance['n'] > 1 else ''}, "
+                 f"{ecoule // 60} min {ecoule % 60:02d} s")
+        print(f"\r{ligne:<78.78s}" if tty else ligne,
+              end="" if tty else "\n", file=sys.stderr, flush=True)
+
     for d, sous, noms_fichiers in os.walk(c.racine):
         # os.walk n'a pas d'ordre garanti : sans ces deux tris, la reprise
         # rejouerait les faits dans un autre ordre que la première fois, et les
@@ -4385,6 +4415,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             chemin, rel = os.path.join(d, f), c.rel(os.path.join(d, f))
             if rel in soi:
                 continue
+            avancer(os.path.dirname(rel))
             deja = reprise.reutilisable(rel, chemin) if reprise else None
             if deja is not None:
                 for x in deja.get("trouves", ()):
@@ -4411,6 +4442,8 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             if reprise:
                 reprise.noter(rel, chemin, FAITS[debut_faits:],
                               nouveaux[debut_trouves:])
+    if tty and avance["quand"] != depart:
+        print("\r" + " " * 78 + "\r", end="", file=sys.stderr, flush=True)
     for x in liste:
         if x.get("absent") is False:
             continue          # l'absence d'un motif de l'outil n'est pas un fait
