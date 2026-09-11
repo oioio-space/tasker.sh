@@ -117,9 +117,18 @@ def _compte_de(chemin, suffixe):
 
 # Les compresseurs que logrotate et les gestionnaires de paquets emploient.
 # .gz est le défaut, mais .xz est celui de Debian pour les vieilles rotations
-# et .bz2 se rencontre encore. Ajouter un compresseur ici suffit.
-_DECOMPRESSEURS = ((".gz", gzip.decompress), (".xz", lzma.decompress),
-                   (".lzma", lzma.decompress), (".bz2", bz2.decompress))
+# et .bz2 se rencontre encore. UNE table : None veut dire « connu, mais pas
+# ouvrable ici » — c'est là qu'on éditera le jour où zstd sera pris en charge,
+# et non dans une seconde liste qui devrait rester complémentaire de celle-ci.
+_DECOMPRESSEURS = {".gz": gzip.decompress, ".xz": lzma.decompress,
+                   ".lzma": lzma.decompress, ".bz2": bz2.decompress,
+                   ".zst": None, ".lz4": None, ".Z": None}
+
+
+def _non_lu(nom, source, pourquoi):
+    constat("limite", "membre d'archive non décompressé", nom, source or nom,
+            pourquoi, portee="poste",
+            note="son contenu n'est PAS dans l'analyse")
 
 
 def texte_de(nom, blob, source=None):
@@ -133,9 +142,12 @@ def texte_de(nom, blob, source=None):
     membres avec les mêmes compresseurs ; les deux rapports se contredisaient
     sur la même pièce.
     """
-    for suffixe, ouvrir in _DECOMPRESSEURS:
-        if not nom.endswith(suffixe):
-            continue
+    suffixe = os.path.splitext(nom)[1]
+    if suffixe in _DECOMPRESSEURS:
+        ouvrir = _DECOMPRESSEURS[suffixe]
+        if ouvrir is None:
+            _non_lu(nom, source, "compresseur non disponible")
+            return None
         try:
             blob = ouvrir(blob)
         except (OSError, EOFError, ValueError, lzma.LZMAError, zlib.error) as e:
@@ -144,16 +156,7 @@ def texte_de(nom, blob, source=None):
             # etape(), qui vidait la liste des pièces — et le rapport annonçait
             # alors « pièce absente » pour un fichier bel et bien présent et
             # lisible. Une affirmation fausse, pas seulement une omission.
-            constat("limite", "membre d'archive non décompressé", nom,
-                    source or nom, f"{type(e).__name__} à l'ouverture",
-                    portee="poste", note="son contenu n'est PAS dans l'analyse")
-            return None
-        break
-    else:
-        if nom.endswith((".zst", ".lz4", ".Z")):
-            constat("limite", "membre d'archive non décompressé", nom,
-                    source or nom, "compresseur non disponible", portee="poste",
-                    note="son contenu n'est PAS dans l'analyse")
+            _non_lu(nom, source, f"{type(e).__name__} à l'ouverture")
             return None
     if b"\x00" in blob[:4096]:
         return None

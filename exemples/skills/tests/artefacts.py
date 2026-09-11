@@ -18,7 +18,9 @@ l'ajouter ici, c'est ne pas la tester.
 
 Sort 0 si tout est trouvé, 1 sinon, en disant ce qui manque.
 """
-import bz2, calendar, gzip, io, json, os, re, shutil, sqlite3, subprocess, zipfile
+import bz2, calendar, functools, gzip, hashlib, io, json, os, re, shutil, sqlite3
+import subprocess
+import zipfile
 import sys, tarfile, tempfile, time
 
 ICI = os.path.dirname(os.path.abspath(__file__))
@@ -791,6 +793,48 @@ def lire(chemin, cle):
         return {json.loads(l)[cle] for l in fh if l.strip()}
 
 
+
+# ── l'échafaudage des blocs de contrôle ───────────────────────────────
+# Trois fabriques, une seule fois chacune : elles étaient recopiées de quatre à
+# six fois, et les deux versions de « tourner » avaient déjà divergé — l'une
+# tolérait la sortie absente, l'autre levait FileNotFoundError et faisait
+# passer un contrôle rouge pour un plantage de toute la suite.
+EXTRAIRE = os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py")
+CONTROLES = os.path.join(SKILLS, "conformite-linux", "scripts", "controles.py")
+
+
+def coin_collecte(coin, nom, *dossiers):
+    """Une collecte vide, sous <coin>/<nom>/PC42_B12_ARTE_ubuntu/."""
+    r = os.path.join(coin, nom, "PC42_B12_ARTE_ubuntu")
+    for d in dossiers:
+        os.makedirs(os.path.join(r, d), exist_ok=True)
+    return r
+
+
+def poser_tar_gz(chemin, membres):
+    """membres : [(nom, octets)] — l'archive telle que la collecte l'écrit."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as t:
+        for nom, contenu in membres:
+            ti = tarfile.TarInfo(nom)
+            ti.size = len(contenu)
+            t.addfile(ti, io.BytesIO(contenu))
+    with open(chemin, "wb") as fh:
+        fh.write(gzip.compress(buf.getvalue()))
+
+
+def tourner(script, racine, sortie, *reste):
+    """(code de retour, faits lus). Une sortie absente rend une liste vide, et
+    non une exception : c'est au contrôle de juger, pas à la suite de tomber."""
+    p = subprocess.run([sys.executable, script, racine, "-o", sortie, *reste],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    lus = []
+    if os.path.exists(sortie):
+        with open(sortie, encoding="utf-8") as fh:
+            lus = [json.loads(l) for l in fh if l.strip()]
+    return p.returncode, lus
+
+
 def blocs_bornes():
     """Un .gz rend des blocs BORNÉS, et le plafond d'archive joue sur lui.
 
@@ -885,39 +929,12 @@ def pieces_abimees(base):
     faisaient pire que se taire — un fichier présent déclaré absent, et une
     règle enfreinte déclarée conforme.
     """
-    import bz2, gzip, hashlib, io, lzma, tarfile
+    import lzma
 
-    sys.path.insert(0, os.path.join(SKILLS, "forensic-linux", "scripts"))
-    import extraire
     coin = os.path.join(base, "abimees")
-    EXTRAIRE = os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py")
-    CONTROLES = os.path.join(SKILLS, "conformite-linux", "scripts", "controles.py")
     MOT = b"MOT-CLE-AFFAIRE-2024"
-
-    def collecte(nom, *dossiers):
-        r = os.path.join(coin, nom, "PC42_B12_ARTE_ubuntu")
-        for d in dossiers:
-            os.makedirs(os.path.join(r, d), exist_ok=True)
-        return r
-
-    def tar_gz(chemin, membres):
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w") as t:
-            for nom, contenu in membres:
-                ti = tarfile.TarInfo(nom)
-                ti.size = len(contenu)
-                t.addfile(ti, io.BytesIO(contenu))
-        with open(chemin, "wb") as fh:
-            fh.write(gzip.compress(buf.getvalue()))
-
-    def tourner(script, racine, sortie, *reste):
-        p = subprocess.run([sys.executable, script, racine, "-o", sortie, *reste],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        lus = []
-        if os.path.exists(sortie):
-            with open(sortie, encoding="utf-8") as fh:
-                lus = [json.loads(l) for l in fh if l.strip()]
-        return p.returncode, lus
+    collecte = functools.partial(coin_collecte, coin)
+    tar_gz = poser_tar_gz
 
     # ── 1 · un .gz au corps abîmé : l'EMPREINTE ne dépend pourtant de rien ──
     # Elle sortait « ABSENTE » pour un fichier bel et bien dans la collecte :
@@ -1205,36 +1222,16 @@ def pieces_abimees(base):
 def fausses_accusations(base):
     """Un constat de conformité met en cause QUELQU'UN. Trois façons dont il
     le faisait à tort, toutes mesurées sur le code d'avant."""
-    import gzip, io, tarfile
-
     coin = os.path.join(base, "accusations")
-    CONTROLES = os.path.join(SKILLS, "conformite-linux", "scripts", "controles.py")
     REGLES_LIVREES = os.path.join(SKILLS, "conformite-linux", "references",
                                   "regles", "usage-non-professionnel.regles")
-
-    def collecte(nom, *dossiers):
-        r = os.path.join(coin, nom, "PC42_B12_ARTE_ubuntu")
-        for d in dossiers:
-            os.makedirs(os.path.join(r, d), exist_ok=True)
-        return r
+    collecte = functools.partial(coin_collecte, coin)
 
     def profil(racine, octets):
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w") as t:
-            ti = tarfile.TarInfo(
-                "home/jdupont/.mozilla/firefox/ab.default/places.sqlite")
-            ti.size = len(octets)
-            t.addfile(ti, io.BytesIO(octets))
-        with open(os.path.join(racine, "COMPTES",
-                               "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"),
-                  "wb") as fh:
-            fh.write(gzip.compress(buf.getvalue()))
-
-    def tourner(racine, sortie, *reste):
-        subprocess.run([sys.executable, CONTROLES, racine, "-o", sortie, *reste],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        with open(sortie, encoding="utf-8") as fh:
-            return [json.loads(l) for l in fh if l.strip()]
+        poser_tar_gz(os.path.join(racine, "COMPTES",
+                                  "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"),
+                     [("home/jdupont/.mozilla/firefox/ab.default/places.sqlite",
+                       octets)])
 
     # ── 1 · un domaine reconnu dans le CHEMIN d'une URL ──
     # RE_HOTE garde jusqu'à 120 caractères de chemin, et le motif de la règle
@@ -1248,7 +1245,7 @@ def fausses_accusations(base):
         fh.write("regle: R03\ntitre: streaming au travail\n"
                  "texte: Les services de streaming sont interdits.\n"
                  "theme: usage\ndomaine: netflix[.]\n")
-    cs = tourner(r, os.path.join(coin, "domaine-chemin.jsonl"), "--regles", regle)
+    _, cs = tourner(CONTROLES, r, os.path.join(coin, "domaine-chemin.jsonl"), "--regles", regle)
     yield ("domaine dans le chemin : aucune accusation",
            not any(c.get("regle") == "R03" and c["theme"] == "usage" for c in cs),
            "un nom de fichier n'est pas un domaine visité")
@@ -1257,7 +1254,7 @@ def fausses_accusations(base):
     # distingue l'achat de la simple mention. Elles doivent continuer de mordre.
     r = collecte("domaine-ancre", "COMPTES")
     profil(r, b"\x00https://www.amazon.fr/gp/cart/view.html\x00https://x.com/home\x00")
-    cs = tourner(r, os.path.join(coin, "domaine-ancre.jsonl"),
+    _, cs = tourner(CONTROLES, r, os.path.join(coin, "domaine-ancre.jsonl"),
                  "--regles", REGLES_LIVREES)
     vus = {c.get("valeur") for c in cs if c["constat"].startswith("domaine")}
     yield ("domaine ancré sur l'hôte : toujours vu",
@@ -1289,7 +1286,7 @@ def fausses_accusations(base):
         fh.write("regle: R05\ntitre: prise en main a distance\n"
                  "texte: Les outils de prise en main a distance sont interdits.\n"
                  "theme: usage\nprogramme: teamviewer\n")
-    cs = tourner(r, os.path.join(coin, "paquet-retire.jsonl"), "--regles", regle)
+    _, cs = tourner(CONTROLES, r, os.path.join(coin, "paquet-retire.jsonl"), "--regles", regle)
     dits = [c["constat"] for c in cs if c.get("valeur") == "teamviewer"]
     yield ("paquet retiré : jamais dit « installé »",
            dits and not any("installé sur le poste" in d for d in dits),
@@ -1301,8 +1298,6 @@ def fausses_accusations(base):
     # pourtant « fichier retrouvé sur le disque », confiance CERTAINE, avec
     # jdupont pour acteur : le rapport attribuait un fichier à quelqu'un sur un
     # nom. Le chemin complet est pourtant dans le fait demandeur.
-    EXTRAIRE_S = os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py")
-    import gzip as _gz, io as _io, sqlite3, tarfile as _tf
     telech = os.path.join(coin, "History")
     cx = sqlite3.connect(telech)
     cx.executescript(
@@ -1318,22 +1313,22 @@ def fausses_accusations(base):
             ("homonyme", "/usr/share/doc/exemple/facture.pdf", False),
             ("le bon",   "/home/jdupont/Documents/facture.pdf", True)):
         r = collecte("timeline-" + nom.replace(" ", "-"), "COMPTES", "TIMELINE")
-        buf = _io.BytesIO()
-        with _tf.open(fileobj=buf, mode="w") as tf:
-            ti = _tf.TarInfo("home/jdupont/.config/google-chrome/Default/History")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tf:
+            ti = tarfile.TarInfo("home/jdupont/.config/google-chrome/Default/History")
             ti.size = len(blob)
-            tf.addfile(ti, _io.BytesIO(blob))
+            tf.addfile(ti, io.BytesIO(blob))
         with open(os.path.join(r, "COMPTES",
                                "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"),
                   "wb") as fh:
-            fh.write(_gz.compress(buf.getvalue()))
+            fh.write(gzip.compress(buf.getvalue()))
         with open(os.path.join(r, "TIMELINE", "PC42_B12_ARTE_ubuntu_mactime.csv"),
                   "w", encoding="utf-8") as fh:
             fh.write("Date,Size,Type,Mode,UID,GID,Meta,File Name\n"
                      "Mon Mar 04 2024 10:00:00,120,m...,r/rrr,0,0,4242,"
                      + chemin_timeline + "\n")
         sortie = os.path.join(coin, f"timeline-{nom}.jsonl")
-        subprocess.run([sys.executable, EXTRAIRE_S, r, "-o", sortie],
+        subprocess.run([sys.executable, EXTRAIRE, r, "-o", sortie],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with open(sortie, encoding="utf-8") as fh:
             fs = [json.loads(l) for l in fh if l.strip()]
@@ -1353,14 +1348,14 @@ def fausses_accusations(base):
     # part. En dessous, 400 chemins sensibles pour un plafond de 300, sans un
     # mot.
     r = collecte("plafonds", "COMPTES", "TIMELINE")
-    buf = _io.BytesIO()
-    with _tf.open(fileobj=buf, mode="w") as tf:
-        ti = _tf.TarInfo("home/jdupont/.config/google-chrome/Default/History")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        ti = tarfile.TarInfo("home/jdupont/.config/google-chrome/Default/History")
         ti.size = len(blob)
-        tf.addfile(ti, _io.BytesIO(blob))
+        tf.addfile(ti, io.BytesIO(blob))
     with open(os.path.join(r, "COMPTES",
                            "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"), "wb") as fh:
-        fh.write(_gz.compress(buf.getvalue()))
+        fh.write(gzip.compress(buf.getvalue()))
     lignes = ["Date,Size,Type,Mode,UID,GID,Meta,File Name"]
     lignes += [f"Mon Mar 04 2024 10:00:00,120,m...,r/rrr,0,0,{1000 + i},"
                f"/usr/share/doc/p{i}/facture.pdf" for i in range(30)]
@@ -1372,7 +1367,7 @@ def fausses_accusations(base):
               "w", encoding="utf-8") as fh:
         fh.write("\n".join(lignes) + "\n")
     sortie = os.path.join(coin, "plafonds.jsonl")
-    subprocess.run([sys.executable, EXTRAIRE_S, r, "-o", sortie],
+    subprocess.run([sys.executable, EXTRAIRE, r, "-o", sortie],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     with open(sortie, encoding="utf-8") as fh:
         fs = [json.loads(l) for l in fh if l.strip()]
@@ -1402,7 +1397,7 @@ def fausses_accusations(base):
         fh.write("regle: R04\ntitre: chiffrement du disque\n"
                  "texte: Le disque d un poste nomade doit etre chiffre.\n"
                  "theme: durcissement\n")
-    cs = tourner(r, os.path.join(coin, "regle-muette.jsonl"), "--regles", regle)
+    _, cs = tourner(CONTROLES, r, os.path.join(coin, "regle-muette.jsonl"), "--regles", regle)
     themes = {c["theme"] for c in cs if c.get("regle") == "R04"}
     yield ("règle sans indice : jamais « conforme »",
            "conforme" not in themes and "limite" in themes,

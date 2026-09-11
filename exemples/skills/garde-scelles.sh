@@ -80,6 +80,10 @@ MUTENT = {"rm", "rmdir", "mv", "cp", "touch", "mkdir", "rename", "chmod",
           "mount", "umount", "patch", "split", "wipefs", "sgdisk", "fdisk",
           "debugfs", "tune2fs", "xfs_undelete", "photorec", "testdisk"}
 SEPARATEURS = re.compile(r'\|\||&&|[;|&\n\r]')
+# Une redirection, avec son descripteur facultatif : « > x », « >x », « 2>> x ».
+# On NORMALISE avant de lire, plutôt que de découper à l'indice : « cat a>b »,
+# collé à un mot non numérique, n'était pas vu du tout.
+REDIRECTION = re.compile(r'\d?>{1,2}')
 # « sed -i », « tar -x », « perl -i » : la commande est anodine, le drapeau non.
 DRAPEAUX_ECRIVENT = {"-i", "--in-place", "-x", "--extract", "--delete"}
 
@@ -136,6 +140,11 @@ def absolu(chemin, cwd=None):
                            if cwd and not os.path.isabs(p) else p)
 
 
+def sous(p, d):
+    """Ce chemin est-il DANS ce dossier ?"""
+    return p == d or p.startswith(d + os.sep)
+
+
 def protege(chemin, declares, cwd=None):
     """(« scelle » ou « image », dossier) que ce chemin vise, ou (None, None).
 
@@ -143,7 +152,7 @@ def protege(chemin, declares, cwd=None):
     être refusé comme le reste."""
     p = absolu(chemin, cwd)
     for d in declares:
-        if p == d or p.startswith(d + os.sep):
+        if sous(p, d):
             return "scelle", d
     while True:
         if est_collecte(p):
@@ -156,11 +165,6 @@ def protege(chemin, declares, cwd=None):
         p = parent
 
 
-def scelle_touche(chemin, declares, cwd=None):
-    genre, d = protege(chemin, declares, cwd)
-    return d if genre == "scelle" else None
-
-
 def ecrit_dans(commande, dossier, cwd=None):
     """La commande écrit-elle DANS ce dossier ? Segment par segment.
 
@@ -171,30 +175,25 @@ def ecrit_dans(commande, dossier, cwd=None):
     écriture.
     """
     def dedans(mot):
-        p = absolu(mot.strip("'\""), cwd)
-        return p == dossier or p.startswith(dossier + os.sep)
+        return sous(absolu(mot.strip("'\""), cwd), dossier)
 
     for segment in SEPARATEURS.split(commande):
-        mots = segment.split()
+        # « cat a>b » devient « cat a > b » : une seule forme à examiner
+        # ensuite, au lieu d'une arithmétique d'indices qui laissait justement
+        # passer la redirection collée à un mot non numérique.
+        mots = REDIRECTION.sub(lambda m: f" {m.group(0)} ", segment).split()
         if not mots:
             continue
-        # les redirections : « > x », « >x », « 2>> x »
-        for i, mot in enumerate(mots):
-            coupe = mot.find(">")
-            if coupe < 0 or (coupe and not mot[:coupe].rstrip(">").isdigit()):
-                continue
-            cible = mot[coupe:].lstrip(">")
-            if not cible and i + 1 < len(mots):
-                cible = mots[i + 1]
-            if cible and dedans(cible):
+        for op, cible in zip(mots, mots[1:]):
+            if REDIRECTION.fullmatch(op) and dedans(cible):
                 return True
         # le premier mot du segment, une fois les « VAR=valeur » écartés
         tete = next((os.path.basename(m) for m in mots if "=" not in m.split("/")[0]),
                     "")
-        args = [m for m in mots[1:] if not m.startswith("-")]
-        if tete in MUTENT and any(dedans(m) for m in args):
-            return True
-        if DRAPEAUX_ECRIVENT & set(mots) and any(dedans(m) for m in args):
+        args = [m for m in mots[1:]
+                if not m.startswith("-") and not REDIRECTION.fullmatch(m)]
+        if (tete in MUTENT or DRAPEAUX_ECRIVENT & set(mots)) \
+                and any(dedans(m) for m in args):
             return True
     return False
 
@@ -217,18 +216,25 @@ except OSError:
 commande = entree.get("command") if isinstance(entree.get("command"), str) else ""
 vises = [v for k in ("file_path", "path") for v in (entree.get(k),) if isinstance(v, str)]
 # TOUT mot d'une commande est un chemin possible : un nom sans barre oblique
-# en est un, relatif au dossier de travail.
-mots = [t.strip("'\"") for t in commande.split()]
-vises += [m for m in mots if m and not m.startswith("-")]
+# en est un, relatif au dossier de travail. Les redirections sont DÉCOLLÉES
+# d'abord : « cat a>/scelle/x » ne formait qu'un seul mot, qui ne ressemblait à
+# aucun chemin, et le scellé n'était donc même pas vu.
+mots = [t.strip("'\"") for t in REDIRECTION.sub(
+    lambda m: f" {m.group(0)} ", commande).split()]
+vises += [m for m in mots
+          if m and not m.startswith("-") and not REDIRECTION.fullmatch(m)]
 
-# Le scellé d'abord : c'est le régime le plus strict, et un scellé posé sous un
-# point de montage doit être traité en scellé.
-touche = next((s for c in vises for s in (scelle_touche(c, declares, cwd),) if s), None)
+# UN seul parcours des mots : protege() remonte les parents, et le faire deux
+# fois doublait ce travail sur une commande bash qui porte désormais tous ses
+# mots. Le scellé d'abord : c'est le régime le plus strict, et un scellé posé
+# sous un point de montage doit être traité en scellé.
+genres = [protege(c, declares, cwd) for c in vises]
+touche = next((d for g, d in genres if g == "scelle"), None)
 
 if touche:
     if outil == "bash" and RE_LECTEUR.match(commande) \
             and not any(d in commande for d in ENCHAINE) \
-            and not any(scelle_touche(v, declares, cwd)
+            and not any(protege(v, declares, cwd)[0] == "scelle"
                         for o, v in zip(mots, mots[1:]) if o in SORTIES):
         sys.exit(0)      # un lecteur du skill, seul, qui écrit hors du scellé
 
@@ -240,8 +246,7 @@ if touche:
     sys.exit(2)
 
 # L'image montée : tout ce qui lit est permis, rien de ce qui écrit.
-image = next((d for c in vises
-              for g, d in (protege(c, declares, cwd),) if g == "image"), None)
+image = next((d for g, d in genres if g == "image"), None)
 if not image:
     sys.exit(0)
 

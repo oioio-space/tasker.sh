@@ -110,6 +110,11 @@ essai "copier VERS l'image" 2 \
   "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"cp /etc/hosts $M/etc/hosts\"}}"
 essai "sed -i sur un fichier de l'image" 2 \
   "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"sed -i s/a/b/ $M/etc/passwd\"}}"
+# La redirection COLLÉE au mot qui précède : « cat a>b ». L'ancienne détection
+# découpait à l'indice et exigeait un descripteur numérique devant le « > » ;
+# « a » n'en étant pas un, elle passait.
+essai "une redirection collée au mot" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"cat /etc/hosts>$M/etc/h\"}}"
 essai "une lecture, PUIS une écriture" 2 \
   "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"cat $M/etc/passwd ; touch $M/etc/vu\"}}"
 # Le poste de l'analyste n'est pas une image : « / » porte etc/ et usr/ lui
