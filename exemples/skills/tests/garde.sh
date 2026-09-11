@@ -60,6 +60,27 @@ essai "un lecteur du skill, PUIS autre chose" 2 \
 essai "un lecteur du skill, redirigé DANS le scellé" 2 \
   "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"python3 extraire.py x > $C/SYSTEME/z\"}}"
 
+# Sept contournements, tous mesurés comme PASSANT avant correction. Le
+# premier a réellement écrasé une pièce du scellé pendant la revue : il
+# suffisait d'écrire le nom d'un lecteur du skill dans un COMMENTAIRE.
+echo "── LES CONTOURNEMENTS ──"
+essai "le mot magique en commentaire" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"cp /etc/hosts $C/SYSTEME/hostname # extraire.py\"}}"
+essai "un lecteur qui ÉCRIT dans le scellé (-o)" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"python3 extraire.py $C -o $C/faits.jsonl\"}}"
+essai "tar -x dont le nom porte « extraire.py »" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"tar -xzf extraire.py.tgz -C $C\"}}"
+essai "une seconde commande après un saut de ligne" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"python3 extraire.py $C\nrm -rf $C\"}}"
+essai "un enchaînement par « & »" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"python3 extraire.py $C & rm -rf $C\"}}"
+# Un chemin RELATIF au dossier de travail : sans « cwd », ce n'était même pas
+# vu comme un chemin, faute de barre oblique.
+essai "un chemin relatif, depuis le dossier parent" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"rm -rf PC01_S01_SYCOBS_LINUX\"},\"cwd\":\"$(dirname "$C")\"}"
+essai "un lecteur qui écrit HORS du scellé (doit passer)" 0 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"python3 extraire.py $C -o $travail/analyse/f.jsonl\"}}"
+
 # Le fichier de déclaration reste possible, pour protéger en plus un dossier
 # qui n'est pas une collecte — un dossier d'affaire, par exemple.
 echo "── LA LISTE DÉCLARÉE, EN PLUS DE LA STRUCTURE ──"

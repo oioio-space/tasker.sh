@@ -45,7 +45,7 @@ export TK_SCELLES="${CRUSH_SCELLES:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/scel
 # Le programme est capturé dans une variable, et NON passé sur l'entrée
 # standard : celle-ci porte le JSON de Crush, et un « python3 - » la mangerait.
 garde=$(cat <<'PY'
-import json, os, sys
+import json, os, re, sys
 
 # Les dossiers que collecte-linux.conf écrit sous PREFIX/.
 DOSSIERS = {"SYSTEME", "PAQUETS", "COMPTES", "CONNEXIONS", "RESEAU",
@@ -56,11 +56,21 @@ DOSSIERS = {"SYSTEME", "PAQUETS", "COMPTES", "CONNEXIONS", "RESEAU",
 ASSEZ = 3
 
 # Les scripts du skill ne modifient JAMAIS leur entrée : ils lisent les
-# archives en flux, sans les dépaqueter, et écrivent ailleurs.
-LECTEURS = ("extraire.py", "controles.py", "brouillon.py")
-# … mais seulement s'ils sont SEULS. Un enchaînement ou une redirection peut
-# remettre n'importe quoi derrière le lecteur.
-ENCHAINE = (";", "&&", "||", "|", ">", "<", "`", "$(")
+# archives en flux, sans les dépaqueter, et écrivent là où « -o » le dit.
+#
+# La commande doit COMMENCER par l'un d'eux. Chercher leur nom n'importe où
+# dans la ligne ne valait rien : « cp /etc/hosts SCELLE/SYSTEME/hostname
+# # extraire.py » passait, et détruisait la pièce. Le mot magique en
+# commentaire suffisait à tout blanchir.
+RE_LECTEUR = re.compile(r'\s*(?:[\w./-]*python[\d.]*\s+)?[\w./-]*'
+                        r'(?:extraire|controles|brouillon)\.py(?=\s|$)')
+# Tout ce qui peut remettre une commande derrière la première, ou rediriger.
+# « & » et le saut de ligne manquaient ; « # » aussi, et c'était le trou.
+ENCHAINE = (";", "&", "|", ">", "<", "`", "$(", "#", "\n", "\r", "\\")
+# Où le lecteur ÉCRIT. Un « -o » qui vise le scellé n'est pas une redirection
+# au sens du shell, donc rien ne l'arrêtait — alors que c'est la façon la plus
+# naturelle d'y écrire par mégarde.
+SORTIES = ("-o", "--sortie", "--out")
 
 
 def est_collecte(d):
@@ -71,10 +81,11 @@ def est_collecte(d):
         return False
 
 
-def scelle_touche(chemin, declares):
+def scelle_touche(chemin, declares, cwd=None):
     """Le scellé que ce chemin vise, ou None. On remonte les parents : écrire
     un fichier NEUF au fond d'une collecte doit être refusé comme le reste."""
-    p = os.path.abspath(os.path.expanduser(chemin))
+    p = os.path.expanduser(chemin)
+    p = os.path.abspath(os.path.join(cwd, p) if cwd and not os.path.isabs(p) else p)
     for d in declares:
         if p == d or p.startswith(d + os.sep):
             return d
@@ -90,6 +101,9 @@ def scelle_touche(chemin, declares):
 e = json.load(sys.stdin)
 outil = str(e.get("tool_name") or "").lower()
 entree = e.get("tool_input") or {}
+# Le dossier de travail : sans lui, « rm -rf PC01_… » depuis le dossier parent
+# n'était même pas vu comme un chemin.
+cwd = e.get("cwd") if isinstance(e.get("cwd"), str) else None
 
 declares = []
 try:
@@ -101,16 +115,20 @@ except OSError:
 
 commande = entree.get("command") if isinstance(entree.get("command"), str) else ""
 vises = [v for k in ("file_path", "path") for v in (entree.get(k),) if isinstance(v, str)]
-# D'une commande, on ne retient que ce qui ressemble à un chemin.
-vises += [t.strip("'\"") for t in commande.split() if "/" in t or t.startswith("~")]
+# TOUT mot d'une commande est un chemin possible : un nom sans barre oblique
+# en est un, relatif au dossier de travail.
+mots = [t.strip("'\"") for t in commande.split()]
+vises += [m for m in mots if m and not m.startswith("-")]
 
-touche = next((s for c in vises for s in (scelle_touche(c, declares),) if s), None)
+touche = next((s for c in vises for s in (scelle_touche(c, declares, cwd),) if s), None)
 if not touche:
     sys.exit(0)
 
-if outil == "bash" and any(s in commande for s in LECTEURS) \
-        and not any(d in commande for d in ENCHAINE):
-    sys.exit(0)          # un lecteur du skill, seul : c'est son travail
+if outil == "bash" and RE_LECTEUR.match(commande) \
+        and not any(d in commande for d in ENCHAINE) \
+        and not any(scelle_touche(v, declares, cwd)
+                    for o, v in zip(mots, mots[1:]) if o in SORTIES):
+    sys.exit(0)          # un lecteur du skill, seul, qui écrit hors du scellé
 
 print(f"refusé : « {touche} » est un scellé — une collecte, reconnue à sa "
       "structure. Le skill ne modifie jamais une pièce. Pour LIRE, servez-vous "
