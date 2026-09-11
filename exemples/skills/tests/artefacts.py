@@ -1771,6 +1771,41 @@ def main():
           f"{len(lues)} pièces vérifiées octet par octet"
           + (f", FAUSSES : {faux[:2]}" if faux else ""))
 
+    # ── une pièce qui n'est PAS un fichier ordinaire ──
+    # open() sur une FIFO attend qu'on écrive dedans : pour toujours. Aucune
+    # erreur, aucun CPU, aucune lecture, rien dans le journal de reprise —
+    # l'extraction paraît simplement figée. Reproduit : sans le contrôle, ce
+    # test ne rend jamais la main. Le délai est donc l'assertion.
+    print("\n── CE QU'ON N'OUVRE PAS ──")
+    rf = collecte_speciale = tempfile.mkdtemp()
+    cs = os.path.join(rf, "PC01_S01_TUBE_LINUX")
+    for d in ("SYSTEME", "COMPTES", "JOURNAUX"):
+        os.makedirs(os.path.join(cs, d))
+    with open(os.path.join(cs, "SYSTEME", "os-release"), "w") as fh:
+        fh.write("ID=ubuntu\n")
+    os.mkfifo(os.path.join(cs, "JOURNAUX", "PC01_S01_TUBE_LINUX_tube.log"))
+    os.symlink("/nulle/part", os.path.join(cs, "JOURNAUX", "lien-mort"))
+    sortie_s = os.path.join(rf, "f.jsonl")
+    fige = False
+    try:
+        subprocess.run([sys.executable, EXTRAIRE, cs, "-o", sortie_s],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=120)
+    except subprocess.TimeoutExpired:
+        fige = True
+    lim = []
+    if not fige and os.path.exists(sortie_s):
+        with open(sortie_s, encoding="utf-8") as fh:
+            lim = [json.loads(l) for l in fh if l.strip()]
+        lim = [x for x in lim
+               if x["fait"] == "pièces qui ne sont pas des fichiers ordinaires"]
+    ok = not fige and lim and lim[0]["valeur"] == "2"
+    manques += not ok
+    print(f"  {'ok ' if ok else 'MANQUE'}  {'une FIFO ne fige pas la lecture':28s} "
+          + ("FIGÉ" if fige else f"{lim[0]['valeur'] if lim else 'AUCUN'} pièce(s) "
+             "écartée(s) et DITES"))
+    shutil.rmtree(rf)
+
     print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")
     with open(faits, encoding="utf-8") as fh:
         lus_f = [json.loads(l) for l in fh if l.strip()]

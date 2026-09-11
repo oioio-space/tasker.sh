@@ -4236,6 +4236,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
     nouveaux = []      # les valeurs trouvées, dans l'ordre, pour le journal
 
     av = Avancement("lecture")
+    speciaux = []      # ce qui n'est pas un fichier ordinaire, et qu'on n'ouvre pas
 
     def trouve(x):
         """Note qu'un indicateur vient d'être vu — une fois, à sa découverte."""
@@ -4461,6 +4462,15 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             chemin, rel = os.path.join(d, f), c.rel(os.path.join(d, f))
             if rel in soi:
                 continue
+            # UN FICHIER ORDINAIRE, ou rien. open() sur une FIFO attend qu'on
+            # écrive dedans — pour toujours : l'extraction se fige alors sans
+            # le moindre signe, ni CPU, ni lecture, et rien dans le journal.
+            # Une socket ou un périphérique posé par une copie maladroite font
+            # de même. os.path.isfile suit les liens et écarte du même coup les
+            # liens morts, qui lèveraient à l'ouverture.
+            if not os.path.isfile(chemin):
+                speciaux.append(rel)
+                continue
             av.pas(rel)
             deja = reprise.reutilisable(rel, chemin) if reprise else None
             if deja is not None:
@@ -4491,6 +4501,16 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                 reprise.noter(rel, chemin, FAITS[debut_faits:],
                               nouveaux[debut_trouves:], c.empreintes.get(chemin))
     av.fin()
+    # Une pièce écartée se DIT : « non lue » et « lue et vide » ne sont pas la
+    # même chose, et c'est la preuve « quels octets ont été analysés » qui en
+    # dépend.
+    if speciaux:
+        fait("limite", "pièces qui ne sont pas des fichiers ordinaires",
+             str(len(speciaux)), c.prefix, "parcours de la collecte",
+             note="non ouvertes — une FIFO, une socket ou un lien mort bloque "
+                  "ou lève à l'ouverture, et rien n'y est analysable : "
+                  + ", ".join(sorted(speciaux)[:5])
+                  + (" …" if len(speciaux) > 5 else ""))
     for x in liste:
         if x.get("absent") is False:
             continue          # l'absence d'un motif de l'outil n'est pas un fait

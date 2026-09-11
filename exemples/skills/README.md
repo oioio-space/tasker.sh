@@ -263,6 +263,29 @@ sur le disque après **chaque** pièce :
     wc -l faits-reprise.jsonl ; find scelle -type f | wc -l
     du -sh scelle/STRINGS scelle/PHOTOREC     # ce qui explique le temps
 
+**Et pour trancher « ça travaille » ou « c'est bloqué »**, deux prises à dix
+secondes d'intervalle :
+
+    P=$(pgrep -f extraire.py | head -1)
+    v() { awk '{print $14+$15}' /proc/$P/stat; awk '/^rchar|^wchar/{print $2}' /proc/$P/io; }
+    a=($(v)); sleep 10; b=($(v))
+    echo "état : $(awk '/^State/{print $2,$3}' /proc/$P/status), \
+    $(awk '/^VmRSS/{printf "%d Mo", $2/1024}' /proc/$P/status)"
+    echo "CPU  : $(( (b[0]-a[0]) * 10 / $(getconf CLK_TCK) )) %"
+    echo "lu   : $(( (b[1]-a[1]) >> 20 )) Mo   écrit : $(( (b[2]-a[2]) >> 20 )) Mo"
+    ls -l /proc/$P/fd | grep -v 'pipe\|socket\|/dev/' | tail -2
+
+| ce que vous lisez | ce que ça veut dire |
+|---|---|
+| CPU proche de 100 % | il calcule — motifs ou empreintes. Laissez finir |
+| « lu » qui monte | il lit. La dernière ligne dit quel fichier |
+| `D (disk sleep)` | il attend le disque ou le partage réseau |
+| tout à zéro, `S (sleeping)` | **il est bloqué** — le fichier ouvert dit sur quoi |
+
+N'utilisez pas `read_bytes` pour ça : il ne compte que ce qui atteint vraiment
+le disque, donc il reste à zéro sur un fichier déjà en cache et sur un travail
+purement CPU. C'est `rchar` qui compte toutes les lectures.
+
 Une extraction qui plante se relance **avec la même commande** : elle reprend où
 elle en était grâce à ce journal, et rend le même fichier, identifiants
 compris.
