@@ -497,6 +497,15 @@ super-timeline vaut plus que la somme de ses lignes :
   plaso a lu les bases, les journaux et les caches. Un intervalle vide **ici**
   pèse bien plus lourd — sans dire pour autant que le poste n'a pas servi.
 
+**Ce que ça coûte.** Mesuré sur un million d'événements (234 Mio de JSONL) :
+**11,8 s et 32 Mio de pic** — le fichier est lu en flux, la mémoire ne croît
+donc pas avec lui. Comptez deux minutes pour une super-timeline de dix millions
+de lignes. Les deux tiers du temps sont le `json.loads` de chaque ligne, et le
+tiers restant la datation ; les deux sont déjà au plancher de la bibliothèque
+standard (deux formes plus courtes ont été mesurées et sont plus LENTES). Si
+vous devez aller plus vite, restreignez le fichier en amont, avec `psort` et son
+filtre de dates.
+
 **Pour le reste, interrogez le fichier vous-même.** Il est fait pour :
 
     jq -r .data_type PLASO/*.jsonl | sort | uniq -c | sort -rn | head -30
