@@ -40,8 +40,18 @@ def cellule(v, large=200):
     """Une valeur dans une case : sans barre verticale ni retour à la ligne."""
     if v is None or v == "":
         return "—"
-    t = str(v).replace("|", "\\|").replace("\n", " ")
-    return t if len(t) <= large else t[:large - 1] + "…"
+    # Couper AVANT d'échapper : sinon le couteau tombe entre l'antislash et ce
+    # qu'il protège, et la case perd sa barre fermante.
+    t = str(v).replace("\n", " ")
+    if len(t) > large:
+        t = t[:large - 1] + "…"
+    # L'antislash d'abord, la barre ensuite. Dans l'autre sens, une valeur qui
+    # porte déjà « \\| » — un chemin Windows, un motif d'expression — donnait
+    # « \\\\| » : l'antislash échappé, et la barre redevenue SÉPARATEUR. Une
+    # ligne du tableau se coupait en deux, décalant toutes les colonnes qui
+    # suivent, et le rapport devenait illisible à l'endroit précis où la valeur
+    # était la plus curieuse.
+    return t.replace("\\", "\\\\").replace("|", "\\|")
 
 
 def tableau(colonnes, lignes, large=200, borne=None, quoi="lignes", fichier="le fichier"):

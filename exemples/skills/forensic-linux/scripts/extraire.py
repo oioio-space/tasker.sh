@@ -2477,8 +2477,21 @@ def _portee_ip(v):
     a, b = int(parties[0]), int(parties[1])
     if a == 127 or v in ("0.0.0.0", "255.255.255.255"):
         return None
+    # Un disque est plein de MASQUES DE SOUS-RÉSEAU — « 255.255.255.0 » est
+    # dans chaque fichier de configuration réseau, et il passait tous les
+    # contrôles : quatre octets valides, hors des plages privées, hors
+    # multidiffusion. La synthèse le rangeait donc en « publique », c'est-à-dire
+    # « un contact vers l'extérieur ». Tout masque de /8 ou plus long commence
+    # par 255, et 240.0.0.0/4 est de toute façon réservé : le même test écarte
+    # les deux. 0.x, c'est « ce réseau-ci » : personne non plus.
+    if a == 0 or a >= 240:
+        return None
     if a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168):
         return "privée"
+    if a == 100 and 64 <= b <= 127:
+        # 100.64.0.0/10, l'espace partagé des opérateurs : ni privée au sens du
+        # réseau local, ni joignable depuis l'extérieur.
+        return "partagée (report d'adresse d'opérateur)"
     if a == 169 and b == 254:
         return "auto-attribuée (aucun DHCP n'a répondu)"
     if 224 <= a <= 239:

@@ -1241,6 +1241,73 @@ def fausses_accusations(base):
            f"thème posé : {', '.join(sorted(themes)) or 'AUCUN'}")
 
 
+def ce_que_le_rapport_montre(base):
+    """Le rapport est ce que l'analyste lit. Trois façons dont il disait faux."""
+    import importlib.util
+
+    sys.path.insert(0, os.path.join(SKILLS, "forensic-linux", "scripts"))
+    import extraire
+    spec = importlib.util.spec_from_file_location(
+        "brouillon_f", os.path.join(SKILLS, "forensic-linux", "scripts", "brouillon.py"))
+    brouillon = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(brouillon)
+
+    # ── 1 · un masque de sous-réseau n'est pas une adresse publique ──
+    # « 255.255.255.0 » est dans chaque fichier de configuration réseau : quatre
+    # octets valides, hors des plages privées, hors multidiffusion. La synthèse
+    # le rangeait en « publique », c'est-à-dire « un contact vers l'extérieur ».
+    masques = {v: extraire._portee_ip(v) for v in
+               ("255.255.255.0", "255.255.0.0", "255.0.0.0", "240.1.2.3", "0.0.0.1")}
+    yield ("masque de sous-réseau : pas une adresse",
+           not any(masques.values()),
+           ", ".join(f"{v}→{p}" for v, p in masques.items() if p) or "aucun classé")
+    vraies = {v: extraire._portee_ip(v) for v in
+              ("8.8.8.8", "10.0.0.9", "192.168.1.1", "169.254.1.1")}
+    yield ("les vraies adresses gardent leur portée",
+           vraies["8.8.8.8"] == "publique" and vraies["10.0.0.9"] == "privée"
+           and vraies["192.168.1.1"] == "privée"
+           and vraies["169.254.1.1"].startswith("auto"),
+           "la correction ne doit pas coûter un faux négatif")
+
+    # ── 2 · une case de tableau ne casse pas la ligne ──
+    # « \\| » était échappé en « \\\\| » : l'antislash protégé, et la barre
+    # redevenue SÉPARATEUR. La ligne se coupait en deux et toutes les colonnes
+    # qui suivent se décalaient.
+    lignes = brouillon.tableau(["valeur", "note"],
+                               [["C:" + chr(92), "fin"],
+                                ["a" + chr(92) + "|b", "fin"],
+                                ["x|y", "fin"]]).splitlines()
+    def barres(ligne):
+        """Les barres qui SÉPARENT vraiment, au sens de Markdown : celles que
+        ne précède pas un nombre impair d'antislashs."""
+        n = i = 0
+        while i < len(ligne):
+            if ligne[i] == chr(92):
+                i += 2
+                continue
+            n += ligne[i] == "|"
+            i += 1
+        return n
+
+    corps = [l for l in lignes if l.startswith("| ")][2:]
+    bonnes = all(barres(l) == 3 for l in corps)
+    yield ("tableau : la ligne garde ses trois barres", bonnes,
+           "un antislash en fin de valeur mangeait la barre fermante")
+
+    # ── 3 · §2 n'invente pas de comptes à partir des adresses de courriel ──
+    # La valeur du fait est l'ADRESSE, pas le nom du compte : le tableau des
+    # comptes s'ouvrait sur « jean.dupont@entreprise.fr | 0 session | — | — ».
+    with open(os.path.join(base, "rapport-forensic.md"), encoding="utf-8") as fh:
+        rapport = fh.read()
+    section = rapport.split("## 2 · Les comptes", 1)[-1].split("## 3", 1)[0]
+    tableau_comptes = section.split("**Ce qui est propre", 1)[0]
+    inventes = [l.split("|")[1].strip() for l in tableau_comptes.splitlines()
+                if l.startswith("| ") and "@" in l.split("|")[1]]
+    yield ("§2 : aucun compte inventé", not inventes,
+           ", ".join(inventes) if inventes else
+           "le fait porte le vrai compte dans son champ acteur")
+
+
 def main():
     base = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "artefacts")
     shutil.rmtree(base, ignore_errors=True)
@@ -1293,6 +1360,11 @@ def main():
 
     print("\n── CE QU'UN CONSTAT NE DOIT PAS DIRE ──")
     for artefact, ok, detail in fausses_accusations(base):
+        manques += not ok
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:38s} {detail}")
+
+    print("\n── CE QUE LE RAPPORT MONTRE ──")
+    for artefact, ok, detail in ce_que_le_rapport_montre(base):
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:38s} {detail}")
 

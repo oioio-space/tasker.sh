@@ -42,8 +42,18 @@ def cellule(v, large=200):
     """Une valeur dans une case : sans barre verticale ni retour à la ligne."""
     if v is None or v == "":
         return "—"
-    t = str(v).replace("|", "\\|").replace("\n", " ")
-    return t if len(t) <= large else t[:large - 1] + "…"
+    # Couper AVANT d'échapper : sinon le couteau tombe entre l'antislash et ce
+    # qu'il protège, et la case perd sa barre fermante.
+    t = str(v).replace("\n", " ")
+    if len(t) > large:
+        t = t[:large - 1] + "…"
+    # L'antislash d'abord, la barre ensuite. Dans l'autre sens, une valeur qui
+    # porte déjà « \\| » — un chemin Windows, un motif d'expression — donnait
+    # « \\\\| » : l'antislash échappé, et la barre redevenue SÉPARATEUR. Une
+    # ligne du tableau se coupait en deux, décalant toutes les colonnes qui
+    # suivent, et le rapport devenait illisible à l'endroit précis où la valeur
+    # était la plus curieuse.
+    return t.replace("\\", "\\\\").replace("|", "\\|")
 
 
 def tableau(colonnes, lignes, large=200, borne=None, quoi="lignes", fichier="le fichier"):
@@ -322,9 +332,15 @@ def main():
     # sont pas les siennes. Elle est déjà dans le tableau qui suit, avec sa
     # source. Ce tableau-ci répond à une seule question : quels comptes, de
     # quelle sorte, et quand ont-ils ouvert une session.
+    # « adresse de courriel configurée » n'est PAS une nature de compte : la
+    # valeur du fait est l'adresse, pas le nom du compte. Le tableau s'ouvrait
+    # donc sur une ligne « jean.dupont@example.com | adresse de courriel
+    # configurée | 0 session | — | — » : un compte inventé, qui n'existe dans
+    # aucun passwd et n'a jamais ouvert de session. Le fait porte pourtant le
+    # VRAI compte dans son champ acteur, et il ressort deux tableaux plus bas,
+    # sous « ce qui est propre à chaque compte », là où il a un sens.
     NATURES = ("compte local ouvrant une session", "compte de service avec un shell",
-               "compte de domaine vu sur la machine", "compte sans mot de passe",
-               "adresse de courriel configurée")
+               "compte de domaine vu sur la machine", "compte sans mot de passe")
     lignes, vus = [], set()
     for f in par.get("compte", []):
         if "(nombre)" in f["fait"] or f["fait"] not in NATURES:
