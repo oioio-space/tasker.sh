@@ -20,7 +20,7 @@
     "s'exécute sans jamais rien refuser, tout en ayant l'air posé.",
     "",
     "Le script attendu à côté : outils/garde-scelles.sh, exécutable.",
-    "Voir README.md §0 et §2."
+    "Voir README.md : « Où va quoi », la fiche de tâche, et §2."
   ],
   "hooks": {
     "PreToolUse": [

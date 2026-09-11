@@ -18,49 +18,127 @@ Format **Agent Skills** (`SKILL.md`), lu tel quel par Claude Code et par Crush.
 
 ---
 
-## 0 · Fiche de tâche — de zéro au rapport
+## Où va quoi — l'arborescence
 
-Un dossier par machine, `analyse/<PREFIX>/`, dans lequel on se met et on lance
-Crush. Tout ce qui suit se copie tel quel ; les sections d'après expliquent
-chaque geste.
+Trois endroits, et un seul est à vous : le dossier de travail. Le dépôt est la
+source, `~/.config/crush/` reçoit ce qui ne bouge plus, et `~/analyse/<PREFIX>/`
+est l'affaire en cours.
 
-    ~/analyse/PC01_B13_SYCOBS_LINUX/     ← on lance crush ICI
-      .crush.json                        ← le hook, et rien d'autre
-      outils/garde-scelles.sh            ← la ceinture
-      scelle/                            ← la collecte, montée bind,ro
-      mnt/                               ← l'image, montée ro
-      faits.jsonl  constats.jsonl        ← ce que les scripts produisent
-      rapport-forensic.md  rapport-conformite.md
-      .crush/                            ← Crush y met son journal et ses sessions
+### 1 · Ce que le dépôt donne
 
-### A · Une seule fois sur le poste
+    exemples/skills/
+      forensic-linux/            ← un SKILL, à copier tel quel
+        SKILL.md                   la consigne lue par le modèle
+        scripts/extraire.py        lit la collecte → faits.jsonl
+        scripts/brouillon.py       faits.jsonl → rapport-forensic.md
+        references/*.md            ce qu'est chaque pièce, hors ligne
+      conformite-linux/          ← l'autre SKILL, même forme
+        SKILL.md
+        scripts/controles.py       lit la collecte → constats.jsonl
+        scripts/brouillon.py       constats.jsonl → rapport-conformite.md
+        references/regles-type.md  comment s'écrit une règle
+        references/regles/         un exemple livré, à relire contre VOTRE charte
+
+      garde-scelles.sh           ← la ceinture : le hook qui refuse d'écrire
+      crush-projet.json          ← le hook déclaré, pour UN dossier d'analyse
+      crush.json                 ← la configuration globale (modèle, DGX)
+      crushrc                    ← la même chose en Bash, si vous préférez
+
+      tests/  artefacts/  matrice/   ← le banc d'essai du dépôt. NE PAS copier.
+
+### 2 · Sur le poste : ce qui ne bouge plus
+
+    ~/.config/crush/
+      crush.json                 ← copié de exemples/skills/crush.json,
+                                   base_url adaptée, SANS bloc "hooks"
+      skills/
+        forensic-linux/          ← copié tel quel
+        conformite-linux/        ← copié tel quel
+
+C'est tout. `~/.local/share/crush/` est l'**état** de Crush : n'y mettez jamais
+rien à la main — un skill posé là n'est jamais trouvé, et le `crush.json` qui
+s'y trouve **prime** sur le vôtre (§2).
+
+### 3 · L'affaire en cours : un dossier par machine
+
+    ~/analyse/PC01_B13_SYCOBS_LINUX/   ← on lance « crush » ICI
+      .crush.json                ← copié de exemples/skills/crush-projet.json
+      outils/
+        garde-scelles.sh         ← copié de exemples/skills/, rendu exécutable
+      scelle/                    ← LA COLLECTE, montée en bind,ro
+      mnt/                       ← L'IMAGE, montée en ro
+      faits.jsonl                ← produit par extraire.py
+      faits.csv  faits-manifeste.json  faits-reprise.jsonl
+      constats.jsonl             ← produit par controles.py
+      constats.csv  constats-manifeste.json
+      rapport-forensic.md        ← produit par brouillon.py, à compléter
+      rapport-conformite.md
+      .crush/                    ← créé par Crush : sessions et journal
+
+Rien de ce dossier n'est écrit en dur dans les scripts. `scelle/` et `mnt/` sont
+une convention : la garde les reconnaît à leur **structure**, jamais à leur
+chemin (§3). Montez-les ailleurs, dites-le au modèle, ça marche pareil.
+
+### Le tableau, en une fois
+
+| ce que vous copiez | où | pourquoi là |
+|---|---|---|
+| `forensic-linux/`, `conformite-linux/` | `~/.config/crush/skills/` | Crush y cherche d'office ; les deux skills servent à toutes les affaires |
+| `crush.json` | `~/.config/crush/crush.json` | le modèle et les permissions ne changent pas d'une affaire à l'autre |
+| `garde-scelles.sh` | `<affaire>/outils/` | le hook doit être à côté du `.crush.json` qui l'appelle |
+| `crush-projet.json` | `<affaire>/.crush.json` | **doit** être dans le dossier où vous lancez Crush, sinon il n'est pas lu (voir « les quatre pièges », plus bas) |
+| `crushrc` | — | l'alternative au `crush.json` global. Si vous utilisez le JSON, ignorez-le |
+| `tests/`, `artefacts/`, `matrice/` | — | le banc d'essai du dépôt, sans usage sur le poste |
+
+---
+
+## La fiche de tâche — de zéro au rapport
+
+Cinq étapes. **A** une fois sur le poste, **B** à **E** pour chaque machine.
+Chaque bloc se copie tel quel ; les sections d'après expliquent chaque geste, et
+l'arborescence ci-dessus dit où chaque fichier atterrit.
+
+### A · Le poste, une fois pour toutes
+
+> Poser les deux skills et la configuration globale.
 
     cd /chemin/vers/tasker.sh
     C="${XDG_CONFIG_HOME:-$HOME/.config}/crush"
     mkdir -p "$C/skills"
     tar -c --exclude=__pycache__ -C exemples/skills forensic-linux conformite-linux \
         | tar -x -C "$C/skills/"
-    cp exemples/skills/crush.json "$C/crush.json"      # puis adaptez base_url (§9)
+    cp exemples/skills/crush.json "$C/crush.json"
 
-    ls "$C/skills"          # forensic-linux  conformite-linux
+Puis **deux retouches à la main** dans `"$C/crush.json"` :
 
-Retirez du `crush.json` global son bloc `"hooks"` : la garde se pose par
-affaire, à l'étape B. Installez aussi **`ripgrep`**, sans quoi l'outil `grep`
-de Crush se bloque sur une grosse collecte.
+1. `base_url` → l'adresse de votre serveur (§9) ;
+2. **supprimez le bloc `"hooks"`** — la garde se pose par affaire, à l'étape B.
+   Laissé là, il s'appliquerait à tous vos autres projets Crush.
 
-### B · Pour chaque machine
+Vous devez voir :
 
-    P=PC01_B13_SYCOBS_LINUX                     # le PREFIX du scellé
+    ls "$C/skills"          →  conformite-linux   forensic-linux
+
+Installez enfin **`ripgrep`**, et ce n'est pas optionnel : sans lui, l'outil
+`grep` de Crush se bloque sans rendre la main sur une grosse collecte.
+
+### B · Une machine : le dossier, la garde, les montages
+
+> Créer l'affaire, y poser le hook, monter la collecte et l'image en lecture
+> seule.
+
+    P=PC01_B13_SYCOBS_LINUX                    # le PREFIX du scellé
     T=~/analyse/$P
-    mkdir -p "$T"/{outils,scelle,mnt}
     S=/chemin/vers/tasker.sh/exemples/skills
+
+    mkdir -p "$T"/{outils,scelle,mnt}
     cp "$S/garde-scelles.sh" "$T/outils/" && chmod +x "$T/outils/garde-scelles.sh"
-    cp "$S/crush-projet.json" "$T/.crush.json"        # le hook, et rien d'autre
+    cp "$S/crush-projet.json" "$T/.crush.json"
 
-**Les deux montages, et c'est la seule garantie qui tienne.** Une permission
-dans un fichier de configuration se contourne, un montage en lecture seule non :
+**Les montages sont la seule garantie qui tienne.** Une permission dans un
+fichier de configuration se contourne ; un montage en lecture seule, non.
 
-    # la collecte — bind,ro : même si elle est déjà sur un partage en écriture
+    # la collecte — bind,ro tient même si elle est sur un partage en écriture
     sudo mount -o bind,ro /mnt/SAN/ANALYSE/$P "$T/scelle"
 
     # l'image, pour aller chercher ce que la collecte ne porte pas
@@ -68,73 +146,83 @@ dans un fichier de configuration se contourne, un montage en lecture seule non :
     lsblk "$L"                                                # quelle partition ?
     sudo mount -o ro,noatime "${L}p2" "$T/mnt"                # p2 : adaptez
 
-Et on contrôle, bruyamment — `findmnt` ne dit rien quand on lui donne deux
-points de montage à la fois, ce qui ressemble beaucoup trop à « tout va bien » :
-
-    for m in "$T/scelle" "$T/mnt"; do
-        [ "$(findmnt -no OPTIONS "$m" | cut -d, -f1)" = ro ] \
-            && echo "ro           $m" \
-            || echo "PAS EN LECTURE SEULE : $m"
-    done
-
-Ni `scelle/` ni `mnt/` ne sont écrits en dur nulle part : la garde les reconnaît
-à leur **structure** — trois dossiers de collecte pour l'un, `etc/` et `usr/`
-pour l'autre. Montez-les ailleurs et dites-le au modèle, ça marchera pareil
-(§3).
-
-Puis les deux contrôles, dans le dossier même où tout se passera :
+Puis **trois contrôles**, et aucun n'est décoratif :
 
     cd "$T"
 
-    # 1 · la ceinture mord ?
+    # 1 · les deux montages sont-ils en lecture seule ?
+    for m in scelle mnt; do
+        [ "$(findmnt -no OPTIONS "$T/$m" | cut -d, -f1)" = ro ] \
+            && echo "ro                     $m" \
+            || echo "PAS EN LECTURE SEULE : $m"
+    done
+
+    # 2 · la garde mord-elle ?
     printf '{"tool_name":"write","tool_input":{"file_path":"%s"},"cwd":"%s"}' \
         "$T/scelle/SYSTEME/x" "$T" | outils/garde-scelles.sh ; echo "code $?"
 
-    # 2 · Crush voit-il les skills ? (hors ligne : c'est journalisé avant
+    # 3 · Crush voit-il les skills ? (hors ligne : c'est journalisé avant
     #     tout appel au modèle)
     crush run "x" --debug >/dev/null 2>&1
     crush logs | grep -o 'Successfully loaded skill name=[a-z-]*' | sort -u
 
-**`code 2`** au premier, avec un motif en français sur la sortie d'erreur — si
-vous lisez `code 0`, ne lancez pas Crush, la garde est muette. Et les deux noms
-au second :
+Ce que vous devez lire, exactement :
 
+    ro                     scelle
+    ro                     mnt
+    refusé : « …/scelle » est un scellé — une collecte, reconnue à sa structure…
+    code 2
     Successfully loaded skill name=conformite-linux
     Successfully loaded skill name=forensic-linux
 
-`crush logs` lit le journal du dossier où vous êtes : Crush range sessions et
-journal dans un `.crush/` du dossier de travail, jamais ailleurs (§2).
+Un `PAS EN LECTURE SEULE`, un `code 0`, ou un seul nom de skill : **arrêtez-vous
+là**. Le premier veut dire que le scellé est modifiable, le deuxième que la
+garde est muette, le troisième que Crush ne trouvera pas le skill. Aucun des
+trois ne se voit ensuite — ils se paient en fin d'analyse.
 
-### C · Extraire, hors de l'agent
+`crush logs` lit le journal du dossier où vous êtes : Crush range sessions et
+journal dans un `.crush/` de son dossier de travail, jamais ailleurs (§2).
+
+### C · Extraire — vous, pas l'agent
+
+> Les scripts font le travail exact et répétable. Le modèle ne rédige qu'après.
 
     K="${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills"
     cd "$T"
+
     python3 $K/forensic-linux/scripts/extraire.py    scelle -o faits.jsonl
     python3 $K/conformite-linux/scripts/controles.py scelle --faits faits.jsonl \
             -o constats.jsonl
+
     python3 $K/forensic-linux/scripts/brouillon.py   faits.jsonl    -o rapport-forensic.md
     python3 $K/conformite-linux/scripts/brouillon.py constats.jsonl -o rapport-conformite.md
 
-À côté des faits sortent un `.csv` et un **`faits-manifeste.json`** : l'empreinte
-SHA-256 de chaque pièce lue, celle de l'extracteur lui-même, celle du fichier de
-faits, la commande exacte et l'heure. C'est lui qui rend le rapport opposable —
-gardez-le avec (§5).
+Les deux premières lisent la collecte ; les deux dernières remplissent les
+tableaux du rapport et laissent des passages « À rédiger ».
+
+Gardez le **`faits-manifeste.json`** qui sort à côté : l'empreinte SHA-256 de
+chaque pièce lue, celle de l'extracteur lui-même, celle du fichier de faits, la
+commande exacte et l'heure. C'est lui qui rend le rapport opposable (§5).
 
 Une extraction qui plante se relance **avec la même commande** : elle reprend où
-elle en était, grâce au `faits-reprise.jsonl` qu'elle tient à jour, et rend le
-même fichier, identifiants compris. `--sans-reprise` pour tout reparcourir.
-Ajoutez `--indicateurs` si vous cherchez quelque chose de précis, `--regles`
-pour vos règles internes (§4).
+elle en était grâce au `faits-reprise.jsonl`, et rend le même fichier,
+identifiants compris.
 
-### D · Rédiger avec Crush
+| à ajouter | quand |
+|---|---|
+| `--indicateurs fichier` | vous cherchez une empreinte, une adresse, un nom précis (§4) |
+| `--regles fichier.regles` | vos règles internes sont écrites — à relire contre la charte |
+| `--sans-reprise` | vous voulez tout reparcourir |
+
+### D · Rédiger, avec Crush
+
+> Le modèle lit les faits et remplit les trous. Il ne recalcule rien.
 
     cd "$T" && crush
 
-Puis, dans la session :
+Dans la session, appelez le skill puis dites-lui où sont les pièces :
 
     /forensic-linux
-
-et dites-lui où sont les pièces — par exemple :
 
 > Le scellé est dans `scelle/`, l'image est montée en lecture seule dans
 > `mnt/`. Les faits sont dans `faits.jsonl`, le brouillon dans
@@ -142,15 +230,16 @@ et dites-lui où sont les pièces — par exemple :
 > en citant les identifiants. S'il te manque une pièce, va la lire dans `mnt/`
 > et dis d'où elle vient.
 
-L'agent n'a plus qu'à **lire** les faits et **éditer** le brouillon. C'est ce
-qui rend un modèle de taille moyenne fiable ici : il ne retape aucune date,
-aucun identifiant. Ne pré-autorisez pas `edit` — chaque édition affiche alors le
-chemin touché, et vous n'acceptez que celles qui visent ce dossier. N'ajoutez
-pas `bash` (§4).
+Puis `/conformite-linux` sur `constats.jsonl` et `rapport-conformite.md`, dans
+la même session : un manquement **daté** vaut mieux qu'un manquement constaté.
 
-Pour la conformité, `/conformite-linux` sur `constats.jsonl` et
-`rapport-conformite.md`, dans la même session : un manquement **daté** vaut
-mieux qu'un manquement constaté.
+L'agent n'a besoin que de **lire** les faits et d'**éditer** le brouillon. C'est
+ce qui rend un modèle de taille moyenne fiable ici : il ne retape aucune date,
+aucun identifiant, il écrit entre des tableaux qu'un script a remplis.
+**Ne pré-autorisez pas `edit`** — chaque édition affiche alors le chemin touché,
+et vous n'acceptez que ceux de ce dossier. **N'ajoutez pas `bash`** : ce serait
+le droit d'écrire partout, pour des commandes que vous venez de lancer à la
+main (§4).
 
 ### E · Refermer
 
@@ -160,30 +249,30 @@ mieux qu'un manquement constaté.
 Le `${L:-…}` sert au lendemain, quand la variable du shell a disparu :
 `losetup -j` retrouve le périphérique par le fichier image.
 
-La session, elle, reste dans `$T/.crush/` : `crush --continue` depuis ce dossier
-la reprend là où elle en était, les montages une fois refaits.
+La session reste dans `$T/.crush/` : `crush --continue` depuis ce dossier la
+reprend là où elle en était, les montages une fois refaits.
 
 ### Les quatre pièges, tous vérifiés sur Crush compilé
 
 - **Le `.crush.json` doit être DANS le dossier où vous lancez Crush.** La
-  recherche remonte les parents, mais s'arrête à la racine du dépôt git quand
-  il y en a un, **et au dossier courant sinon** (`load.go`, `lookupConfigs`).
-  Posé dans `~/analyse/` pendant que vous lancez Crush depuis
-  `~/analyse/PC01…/`, le hook n'est **pas** lu, et rien ne le dit. Mesuré :
-  ignoré sans dépôt git, lu après un `git init` dans `~/analyse/`. Si vous
-  préférez un seul fichier pour toutes les affaires, faites ce `git init` une
-  fois ; sinon recopiez les deux lignes de l'étape B, c'est plus sûr.
+  recherche remonte les parents, mais s'arrête à la racine du dépôt git quand il
+  y en a un, **et au dossier courant sinon** (`load.go`, `lookupConfigs`). Posé
+  dans `~/analyse/` pendant que vous lancez Crush depuis `~/analyse/PC01…/`, le
+  hook n'est **pas** lu, et rien ne le dit. Mesuré dans les deux sens : ignoré
+  sans dépôt git, lu après un `git init` dans `~/analyse/`. Un seul fichier pour
+  toutes les affaires ? faites ce `git init` une fois. Sinon recopiez les deux
+  lignes de l'étape B — c'est plus sûr.
 - **`$CRUSH_PROJECT_DIR`, pas `$CRUSH_PROJECT`.** C'est le dossier où Crush a
-  été lancé (`coordinator.go` le passe depuis `cfg.WorkingDir()`). Une variable
-  inconnue devient une chaîne **vide** : le hook s'exécute alors sans jamais
-  rien refuser, et il a l'air posé.
+  été lancé (`coordinator.go`, depuis `cfg.WorkingDir()`). Une variable inconnue
+  devient une chaîne **vide** : le hook s'exécute alors sans jamais rien
+  refuser, tout en ayant l'air posé.
 - **En `crush run`, rien ne demande.** La session non interactive auto-approuve
-  toutes les permissions. Il ne reste alors que les montages en lecture seule
-  et la garde — d'où le contrôle de l'étape B.
+  toutes les permissions. Il ne reste que les montages en lecture seule et la
+  garde — d'où les contrôles de l'étape B.
 - **Ne lancez jamais Crush *dans* un scellé.** Il crée un `.crush/` — base des
   sessions et journal — dans son dossier de travail, dès la première seconde et
-  sans rien demander à personne. Le dossier d'analyse est là pour ça ; le
-  scellé se monte dedans, on ne s'installe pas dessus.
+  sans rien demander. Le dossier d'analyse est là pour ça : le scellé se monte
+  dedans, on ne s'installe pas dessus.
 
 ---
 
