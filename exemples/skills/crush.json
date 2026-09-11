@@ -45,8 +45,13 @@
     "  - api_key, base_url, env : ni l'un ni l'autre, mais $VAR, ${VAR:-defaut} et $(cmd) y",
     "    sont développés (load.go passe ces champs par ResolveValue).",
     "",
-    "D'où les chemins absolus ci-dessous pour data_directory et skills_paths : remplacez",
-    "/home/analyste par votre vrai dossier personnel. Le hook, lui, garde son ~.",
+    "Ce fichier ne pose donc AUCUN chemin absolu, et n'a rien à éditer de ce côté :",
+    "  - skills_paths est inutile — Crush ajoute d'office ~/.config/crush/skills et trois",
+    "    autres dossiers globaux (load.go:607-612). Le poser n'ajoutait rien.",
+    "  - data_directory est un confort : sans lui la base et les journaux vont dans",
+    "    ~/.local/share/crush, qui n'est jamais dans les scellés. Pour les ranger à côté",
+    "    de l'analyse, ajoutez-le avec VOTRE chemin absolu — le ~ n'y est pas développé.",
+    "Livré avec /home/analyste en dur, ce fichier créait ce dossier sur la machine.",
     "",
     "_commentaire n'est pas une clé du schéma (Config est en additionalProperties: false).",
     "Go ignore les clés inconnues, et rien ici n'en dépend : si votre éditeur la souligne ou",
@@ -159,16 +164,12 @@
     ]
   },
   "options": {
-    "skills_paths": [
-      "/home/analyste/.config/crush/skills"
-    ],
     "disabled_tools": [
       "fetch",
       "agentic_fetch",
       "sourcegraph",
       "download"
     ],
-    "data_directory": "/home/analyste/analyse/.crush",
     "disable_provider_auto_update": true,
     "disable_metrics": true
   },

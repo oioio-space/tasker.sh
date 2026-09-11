@@ -15,7 +15,8 @@
 # L'avantage sur le JSON n'est pas cosmétique : ceci est un shell, donc $HOME
 # et XDG_CONFIG_HOME y sont développés pour de vrai, partout. En crush.json,
 # le ~ n'est développé QUE dans la commande d'un hook (elle passe par le shell
-# embarqué) ; data_directory et skills_paths le prennent au pied de la lettre
+# embarqué) ; data_directory le prend au pied de la lettre, skills_paths le
+# développe bien (manager.go:218, home.Long)
 # et cherchent, ou créent, un dossier nommé « ~ ». Ici, la question ne se pose
 # pas : c'est le shell qui résout, avant que Crush ne voie la valeur.
 #

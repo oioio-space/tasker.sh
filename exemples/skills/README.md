@@ -49,10 +49,14 @@ d'état n'est jamais trouvé. Et le `crush.json` qui s'y trouve est bien **lu
 comme de la configuration**, après celui de `~/.config/` — donc il **prime sur
 lui**. Un réglage qui semble ignoré vient presque toujours de là. N'y écrivez
 pas pour autant : Crush le réécrit seul, changer de modèle par `ctrl+l` y
-laisse une trace. L'ordre, du plus faible au plus fort :
+laisse une trace. L'ordre, du plus faible au plus fort — la DERNIÈRE ligne est
+la plus forte de toutes, et elle est facile à manquer : un `crush.json` posé
+dans le dossier d'analyse écrase tout le reste (`internal/config/load.go:58,66`,
+« *Load workspace config last so it has highest priority* ) :
 
     config système → ~/.config/crush/crush.json → ~/.config/crush/crushrc
                    → ~/.local/share/crush/crush.json → configs du projet
+                   → <data_directory>/crush.json
 
 Pour les skills, quatre dossiers sont regardés d'office — le premier venu
 suffit, **rien à déclarer** :
@@ -90,7 +94,11 @@ Pour Crush, une fois pour toutes :
     K="${CRUSH_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/skills}"
     C="${XDG_CONFIG_HOME:-$HOME/.config}/crush"
     mkdir -p "$K" "$C"
-    cp -r exemples/skills/forensic-linux exemples/skills/conformite-linux "$K/"
+    # --exclude : un « cp -r » embarque les __pycache__ du dépôt, qui sont des
+    # .pyc compilés pour UNE version de Python et n'ont rien à faire dans une
+    # copie posée.
+    tar -c --exclude=__pycache__ -C exemples/skills forensic-linux conformite-linux \
+        | tar -x -C "$K/"
     cp exemples/skills/garde-scelles.sh "$C/" && chmod +x "$C/garde-scelles.sh"
     cp exemples/skills/crushrc    "$C/crushrc"             # puis adaptez base_url
 
@@ -100,9 +108,16 @@ un jeu de skills par affaire :
     mkdir -p ~/analyse/.crush/skills
     cp -r exemples/skills/forensic-linux ~/analyse/.crush/skills/
 
-Dans les deux cas, Crush doit lister les deux skills au démarrage. S'il ne les
-voit pas, c'est le chemin, pas le skill : relancez les trois commandes de
-vérification ci-dessus.
+Dans les deux cas, Crush doit voir les deux skills. Il n'existe pas de
+sous-commande `crush skills` pour le demander ; la façon sûre de le vérifier,
+**et elle marche hors ligne** — la découverte est journalisée avant tout appel
+au modèle :
+
+    crush run "x" --debug 2>/dev/null
+    grep -o '"Successfully loaded skill","name":"[a-z-]*"' \
+        "$(crush dirs | sed -n 2p)/logs/crush.log" | sort -u
+
+Les deux noms doivent sortir. Sinon c'est le chemin, pas le skill.
 
 ### Ce que le format garantit, et ce qu'il coûte en contexte
 
@@ -120,7 +135,10 @@ Elles comptent, parce que Crush ne charge pas un skill d'un bloc — c'est la
 **divulgation progressive**, en trois temps :
 
 1. **au démarrage** : seuls `name`, `description` et le *chemin* du `SKILL.md`
-   entrent dans l'invite. Pour les deux skills réunis, ≈ 333 jetons ;
+   entrent dans l'invite. Pour les deux skills du projet, ≈ 404 jetons —
+   mais Crush ajoute d'office trois skills embarqués (`crush-config`,
+   `crush-hooks`, `jq`), ce qui porte le total réel à **≈ 700**. Ils ne
+   partent qu'avec `option disable-skill <nom>` ;
 2. **à l'activation** : le modèle lit le `SKILL.md` — d'où la borne des 5 000
    jetons, et d'où son besoin de l'outil `view` ;
 3. **à la demande** seulement : les fichiers de `references/`.
@@ -140,6 +158,17 @@ supported, but it should be considered deprecated. » Le format courant est le
 font la même chose ; préférez le `crushrc`, gardez le `crush.json` si votre
 version de Crush est ancienne.
 
+**N'en posez qu'UN.** S'ils cohabitent, Crush lit les deux et fusionne, le
+`crushrc` l'emportant. Il émet bien un avertissement (`load.go:1023`) — mais
+**personne ne le voit jamais** : `internal/cmd/root.go:195` pose
+`slog.DiscardHandler` avant le chargement de la configuration. Vérifié : stderr
+vide, rien dans le journal. Un réglage que vous croyez avoir changé dans le
+JSON peut donc être silencieusement recouvert.
+
+Et les listes fusionnent **par ajout** : un `crush.json` déposé dans le dossier
+d'analyse peut ainsi **élargir** `allowed_tools`. Il ne peut en revanche ni la
+restreindre, ni effacer le hook — testé.
+
 Ce n'est pas qu'une question de mode : un `crushrc` est un shell, donc `$HOME`
 et `XDG_CONFIG_HOME` y sont **réellement développés, partout**. En
 `crush.json`, le `~` n'est développé que dans certains champs — et il fallait
@@ -149,12 +178,18 @@ lire le code de Crush pour savoir lesquels :
 |---|---|---|
 | `hooks[].command` | **oui** | la commande passe par le shell POSIX embarqué (`shell.Run`) |
 | `options.data_directory` | **non** | `SmartJoin` ne teste que `filepath.IsAbs` : Crush crée un dossier nommé `~` |
-| `options.skills_paths` | **non** | le chemin part tel quel dans `fastwalk.Walk` — même si le schéma en donne un en exemple |
+| `options.skills_paths` | **oui** | `ResolvePaths` passe chaque chemin par `home.Long` (`internal/skills/manager.go:218`), puis résout un `$VAR` |
 | `api_key`, `base_url`, `env` | non, mais… | `$VAR`, `${VAR:-defaut}` et `$(cmd)` y sont développés |
 
-D'où les chemins absolus du `crush.json` fourni pour `data_directory` et
-`skills_paths` — **remplacez `/home/analyste` par votre dossier personnel** —
-et le `~` conservé pour le hook, où il fonctionne.
+Le `crush.json` fourni ne pose donc **aucun chemin absolu, et n'a rien à
+éditer de ce côté**. Il en portait deux, et c'était un défaut : livré tel quel,
+il créait un `/home/analyste/` sur la machine et y mettait la base et les
+journaux. `skills_paths` en est parti pour une autre raison — il est **inutile** :
+Crush ajoute d'office `~/.config/crush/skills` et trois autres dossiers globaux
+(`internal/config/load.go:607-612`). Quant à `data_directory`, il n'est qu'un
+confort : sans lui, la base va dans `~/.local/share/crush`, qui n'est jamais
+dans les scellés. Pour la ranger à côté de l'analyse, ajoutez-le **avec votre
+chemin absolu** — c'est le seul champ des trois où le `~` ne passe pas.
 
 Dans les deux cas, c'est **du code exécuté au lancement** : un `crushrc` est un
 shell complet, et tout `$(...)` d'un `crush.json` s'exécute au chargement. Ne
@@ -181,20 +216,40 @@ l'arborescence avant et après. Mais ne comptez pas là-dessus : montez en `ro`.
 
 `garde-scelles.sh` est une ceinture par-dessus le montage : elle a le mérite
 d'**expliquer** au modèle pourquoi il ne peut pas écrire, au lieu de le laisser
-buter sur un « permission denied ». Mais un hook dont le chemin ne se résout
-pas **ne bloque rien, et ne dit rien** — c'est le seul mode de panne dangereux,
-parce qu'il est silencieux. Alors on le vérifie, hors de Crush :
+buter sur un « permission denied ».
 
-    printf '{"tool_name":"write","tool_input":{"file_path":"/mnt/scelles/x"},"cwd":"/tmp"}' \
+**Un scellé s'y reconnaît à sa STRUCTURE, pas à son chemin** : un dossier qui
+porte au moins trois des dossiers écrits par `collecte-linux.conf` (`SYSTEME/`,
+`COMPTES/`, `JOURNAUX/`…) est une collecte, où qu'il soit posé. Il n'y a donc
+rien à déclarer, et surtout aucun chemin à tenir à jour — un chemin écrit en
+dur ne protège rien sur un poste où la collecte est ailleurs, tout en ayant
+l'air de marcher.
+
+On le vérifie avec un scellé jouet, hors de Crush :
+
+    mkdir -p /tmp/essai/PC01/{SYSTEME,COMPTES,JOURNAUX}
+    printf '{"tool_name":"write","tool_input":{"file_path":"/tmp/essai/PC01/SYSTEME/x"},"cwd":"/tmp"}' \
         | ~/.config/crush/garde-scelles.sh ; echo "code $?"
 
 Le script doit écrire son refus et rendre **2**. Un code 0, ou « command not
 found », veut dire que la ceinture est absente : le fichier n'est pas là où le
-hook le nomme, ou il n'est pas exécutable. Le montage en lecture seule, lui,
-tient toujours.
+hook le nomme, ou il n'est pas exécutable.
 
-Les dossiers protégés se listent un par ligne dans
-`~/.config/crush/scelles.txt` ; sans ce fichier, c'est `/mnt/scelles`.
+**Ce test ne dit pas que la garde est ARMÉE.** Un hook dont le chemin ne se
+résout pas ne bloque rien et ne dit rien : Crush écrit un avertissement dans
+son journal, puis laisse passer — et l'écriture aboutit pour de bon. Le script
+peut donc rendre 2 tout seul pendant que Crush ne l'appelle jamais. La seule
+vérification qui vaille passe par le haut :
+
+    crush run "écris bonjour dans /tmp/essai/PC01/SYSTEME/x" --debug 2>&1 \
+        | grep -c "Tool call blocked by hook"
+
+Le compte doit valoir 1. Le montage en lecture seule, lui, tient dans tous les
+cas — c'est la seule garantie réelle ; le reste est une ceinture.
+
+Un dossier qui n'est PAS une collecte et qu'on veut protéger quand même se
+liste un par ligne dans `~/.config/crush/scelles.txt` — en plus de la
+reconnaissance par structure, jamais à sa place.
 
 ## 4 · S'en servir
 
@@ -275,6 +330,14 @@ en lecture seule :
 
 puis donnez-lui le dossier de collecte — celui qui porte le PREFIX et contient
 `SYSTEME/`, `COMPTES/`, `TIMELINE/`…
+
+> **En `crush run`, rien ne demande.** La session non interactive auto-approuve
+> toutes les permissions (`internal/app/app.go:352`, « *Automatically approve
+> all permission requests for this non-interactive session* »). Les demandes
+> de confirmation décrites plus haut n'existent que dans l'interface
+> interactive. En `crush run`, il ne reste que **le montage en lecture seule et
+> la garde des scellés** — d'où l'importance de vérifier que la garde est
+> réellement armée, et pas seulement qu'elle rend 2 toute seule.
 
 ## 5 · Ce que l'extraction produit
 
@@ -365,12 +428,11 @@ Pour l'activer, ajoutez-le à vos permissions :
 compatible avec la règle du §4 — l'extraction se lance à la main, l'agent ne
 fait que lire.
 
-Le sous-agent emploie par défaut le modèle **large**. Si vous voulez lui
-donner le petit, pour aller vite sur du résumé :
-
-```json
-"agents": { "task": { "model": "small" } }
-```
+Le sous-agent emploie le modèle **large**, et **rien ne permet de le changer** :
+`Config.Agents` porte `json:"-"` (`internal/config/config.go:762`), le schéma
+est en `additionalProperties: false` sans clé `agents`, et le modèle du
+sous-agent est écrit en dur (`config.go:959`). Un bloc `"agents": {…}` dans un
+`crush.json` est ignoré en silence.
 
 Le skill dit quoi leur demander, et surtout ce qu'ils ne doivent pas faire :
 lire et résumer, jamais conclure ni qualifier.
@@ -379,7 +441,10 @@ lire et résumer, jamais conclure ni qualifier.
 
 Crush expose aussi **`todos`**. Le skill s'en sert pour poser les dix sections
 du rapport avant de commencer : une analyse s'interrompt, la liste dit où on en
-était. À ajouter aux permissions si vous le voulez.
+était. Inutile de l'ajouter aux permissions : `todos` n'en demande aucune —
+il ne reçoit même pas le service de permissions (`coordinator.go:789`). Même
+chose pour `grep`, `glob` et `crush_info` ; parmi les outils de lecture, seuls
+`view` et `ls` demandent.
 
 ## 8 · Vérifier l'extracteur
 
@@ -467,10 +532,10 @@ reste, et d'où ça vient :
 | `providers.dgx.type` | `openai-compat` | vLLM, NIM et TRT-LLM exposent tous l'API OpenAI |
 | `temperature`, `top_p` | `1.0`, `0.95` | la carte du modèle : « Use `temperature=1.0` and `top_p=0.95` across **all tasks and serving backends** — reasoning, tool calling, and general chat alike » |
 | `extra_body.chat_template_kwargs.enable_thinking` | `true` | le raisonnement du modèle s'active par ce drapeau du gabarit de conversation ; `extra_body` n'existe que pour les fournisseurs compatibles OpenAI, et c'est le bon canal. `low_effort: true` allège le raisonnement, `reasoning_budget` le plafonne |
-| `context_window` | `262144` | ce que **déclare le checkpoint** : `max_position_embeddings` vaut 262144 dans `config.json`, en BF16 comme en FP8, avec `rope_scaling` à `null`. Le million de jetons se demande explicitement — voir ci-dessous |
-| `default_max_tokens` | `32000` | un brouillon se rédige passage par passage ; 32 k suffisent et bornent une réponse qui s'emballerait |
-| `permissions.allowed_tools` | `view ls grep glob agent` | lecture seule + sous-agents ; `edit` demande à chaque fois, `bash` n'est jamais accordé |
-| `options.disabled_tools` | `fetch web_search sourcegraph download` | le poste est hors ligne : autant que le modèle ne voie pas ces outils, plutôt qu'il les essaie. `download` s'y ajoute parce qu'il écrit en plus sur le disque |
+| `context_window` | `240000` (livré) | ce que **déclare le checkpoint** est 262144 : `max_position_embeddings` vaut 262144 dans `config.json`, en BF16 comme en FP8, avec `rope_scaling` à `null`. Le million de jetons se demande explicitement — voir ci-dessous |
+| `default_max_tokens` | `16000` (livré) | un brouillon se rédige passage par passage ; 16 k tiennent les deux bouts — voir le calcul plus bas. Ce n'est qu'un repli : `models.large.max_tokens` prime (`coordinator.go:282`) |
+| `permissions.allowed_tools` | `view ls grep glob agent` | c'est une liste de **pré-approbation**, pas une liste blanche (`config.go:333`) : `edit` et `bash` ne sont pas interdits, ils **demandent**. Un « autoriser pour cette session » accorde ensuite `bash` sans limite. Pour l'interdire vraiment : `permissions deny bash` |
+| `options.disabled_tools` | `fetch agentic_fetch sourcegraph download` | le poste est hors ligne : autant que le modèle ne voie pas ces outils, plutôt qu'il les essaie. `download` s'y ajoute parce qu'il écrit en plus sur le disque |
 | `options.data_directory` | dossier d'analyse | la base de Crush (sessions, journaux) vit dans le dossier d'analyse, jamais dans les scellés. En `crush.json`, ce chemin doit être **absolu** : un `~` n'y est pas développé |
 | `hooks.PreToolUse` | `garde-scelles.sh` | avant chaque `edit`, `write`, `multiedit`, `bash` ou `download`, le script reçoit l'appel en JSON sur son entrée standard et **le bloque (code 2)** s'il nomme un chemin sous les scellés ; son message d'erreur devient le motif du refus rendu au modèle. `PreToolUse` est aujourd'hui le **seul** événement que Crush déclenche |
 
@@ -566,10 +631,10 @@ et il vaut mieux le dire que le laisser croire :
     fait selon toute vraisemblance sur la **première** barre. Pour le vérifier,
     `model large` sans argument, dans un `crushrc`, imprime la sélection
     courante sous la forme attendue ; et l'identifiant réellement servi se lit
-    par `curl -s http://dgx.local:8000/v1/models`. (Il n'y a **pas** de
-    sous-commande `crush models` : les sous-commandes sont `run`, `dirs`,
-    `projects`, `update-providers`, `logs`, `login`, `logout`, `schema`,
-    `stats` et `session`.) ;
+    par `curl -s http://dgx.local:8000/v1/models`. (Plus simple : **`crush models`** le
+    dit — la sous-commande existe, elle est enregistrée dans un `init()`
+    (`internal/cmd/models.go:16,154`), ce qui explique qu'elle manque au bloc
+    `AddCommand` de `root.go`. `crush server` de même.) ;
   - **la tolérance de `_commentaire`** dans `crush.json`. Le schéma est en
     `additionalProperties: false` ; Go ignore les clés inconnues, mais si votre
     éditeur la souligne ou si Crush la refuse, supprimez le bloc : c'est de la
