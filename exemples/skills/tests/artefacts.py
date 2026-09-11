@@ -1177,6 +1177,50 @@ def fausses_accusations(base):
                bool(pris) and attribue == attendu,
                "le chemin complet est dans le fait demandeur : il faut l'exiger")
 
+    # ── 3 bis · un plafond de citation ne mord pas en silence ──
+    # Trente homonymes précédaient le VRAI fichier dans la timeline : les trois
+    # premiers emplacements étaient cités, le bon était évincé, et la note
+    # annonçait « 3 emplacements portent ce nom » quand il y en avait 31. Le
+    # fichier réellement téléchargé par le compte n'apparaissait donc nulle
+    # part. En dessous, 400 chemins sensibles pour un plafond de 300, sans un
+    # mot.
+    r = collecte("plafonds", "COMPTES", "TIMELINE")
+    buf = _io.BytesIO()
+    with _tf.open(fileobj=buf, mode="w") as tf:
+        ti = _tf.TarInfo("home/jdupont/.config/google-chrome/Default/History")
+        ti.size = len(blob)
+        tf.addfile(ti, _io.BytesIO(blob))
+    with open(os.path.join(r, "COMPTES",
+                           "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"), "wb") as fh:
+        fh.write(_gz.compress(buf.getvalue()))
+    lignes = ["Date,Size,Type,Mode,UID,GID,Meta,File Name"]
+    lignes += [f"Mon Mar 04 2024 10:00:00,120,m...,r/rrr,0,0,{1000 + i},"
+               f"/usr/share/doc/p{i}/facture.pdf" for i in range(30)]
+    lignes.append("Mon Mar 04 2024 11:00:00,120,m...,r/rrr,1000,1000,4242,"
+                  "/home/jdupont/Documents/facture.pdf")
+    lignes += [f"Mon Mar 04 2024 12:00:00,10,m...,r/rrr,0,0,{9000 + i},"
+               f"/root/secret{i}.txt" for i in range(400)]
+    with open(os.path.join(r, "TIMELINE", "PC42_B12_ARTE_ubuntu_mactime.csv"),
+              "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lignes) + "\n")
+    sortie = os.path.join(coin, "plafonds.jsonl")
+    subprocess.run([sys.executable, EXTRAIRE_S, r, "-o", sortie],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(sortie, encoding="utf-8") as fh:
+        fs = [json.loads(l) for l in fh if l.strip()]
+    yield ("plafond : le bon chemin n'est pas évincé",
+           any(x["categorie"] == "timeline" and x.get("acteur") == "jdupont"
+               and x.get("confiance") == "certaine"
+               and str(x.get("valeur", "")).startswith("/home/jdupont/") for x in fs),
+           "il arrivait 31e, derrière trente homonymes")
+    yield ("plafond : le compte annoncé est le vrai",
+           any("31 emplacements" in str(x.get("note", "")) for x in fs),
+           "« 3 emplacements » quand il y en a 31 est un compte faux")
+    yield ("plafond : la coupe se dit",
+           any(x["categorie"] == "limite" and "plafond de citation" in x["fait"]
+               for x in fs),
+           "un plafond tu se lit comme une absence")
+
     # ── 4 · une règle SANS indice n'est pas « conforme » ──
     # C'est un acquittement prononcé sans instruction : la règle n'a jamais été
     # cherchée, et « conforme » est justement ce que le décompte des manquements

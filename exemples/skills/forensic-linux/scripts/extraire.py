@@ -2006,7 +2006,16 @@ def timeline(c):
     tz = c.un("_fuseau_timeline.txt", "TIMELINE")
     fuseau = c.texte(tz).strip() if tz else None
     fichiers, montages = _questions_timeline()
+    # Les chemins que les faits demandeurs annoncent : un emplacement qui
+    # correspond EXACTEMENT à l'un d'eux ne doit jamais être évincé par le
+    # plafond des trois emplacements cités.
+    annonces = {a for demandeurs in fichiers.values()
+                for a in (_chemin_annonce(x) for x in demandeurs) if a}
     trouves, sous_montage = {}, {}
+    # Ce qui a été VU, par opposition à ce qui a été cité : sans ce compte, un
+    # plafond atteint ne se distingue pas d'une absence, et le rapport annonce
+    # « 3 emplacements portent ce nom » quand il y en a trente.
+    combien, coupes = collections.Counter(), {}
     total, vus = 0, 0
 
     for ligne in c.lignes(chemin):
@@ -2024,17 +2033,27 @@ def timeline(c):
             # le même nom peut vivre à deux endroits — dans le dossier de
             # téléchargement ET sur la clé USB : les deux sont des faits
             ou = trouves.setdefault(base, [])
-            if len(ou) < 3 and not any(x[3] == fichier for x in ou):
-                ou.append((quand, genre, inode, fichier))
+            if not any(x[3] == fichier for x in ou):
+                combien[base] += 1
+                if len(ou) < 3:
+                    ou.append((quand, genre, inode, fichier))
+                elif fichier.lower() in annonces:
+                    # Le chemin ANNONCÉ passe devant : le plafond évinçait
+                    # justement l'emplacement pour lequel la question était
+                    # posée, dès que trois homonymes le précédaient.
+                    ou[-1] = (quand, genre, inode, fichier)
         for prefixe, _ in montages:
             if fichier.startswith(prefixe + "/"):
                 vise = True
                 liste = sous_montage.setdefault(prefixe, [])
+                coupes[prefixe] = coupes.get(prefixe, 0) + 1
                 if len(liste) < MAX_PAR_SUPPORT:
                     liste.append((quand, genre, fichier))
         # la pêche large ne redit pas ce qu'une question précise dira mieux
-        if not vise and vus < MAX_SENSIBLES and SENSIBLES.search(fichier):
+        if not vise and SENSIBLES.search(fichier):
             vus += 1
+            if vus > MAX_SENSIBLES:
+                continue
             fait("timeline", "activité sur un chemin sensible", fichier, c.rel(chemin),
                  "chemins d'intérêt dans la timeline mactime",
                  horodatage=_date_timeline(quand, fuseau), genre=genre, inode=inode or None,
@@ -2045,6 +2064,22 @@ def timeline(c):
          note="corps lus sur le périphérique quand un lecteur existait"
               + (f" ; dates écrites dans le fuseau {fuseau}" if fuseau else
                  " ; fuseau de la timeline inconnu — TZ_MACTIME n'a pas été relevé"))
+
+    # Trois plafonds mordaient en SILENCE. Un plafond tu se lit comme une
+    # absence : « 40 fichiers sur la clé » et « les 40 premiers sur 3 000 » ne
+    # disent pas la même chose, et c'est la seconde phrase qui est vraie.
+    if vus > MAX_SENSIBLES:
+        fait("limite", "chemins sensibles : le plafond de citation est atteint",
+             str(vus), c.rel(chemin), "chemins d'intérêt dans la timeline mactime",
+             note=f"{vus} entrées correspondent, {MAX_SENSIBLES} sont citées. Les "
+                  "suivantes ne sont PAS dans l'analyse : resserrez la question, "
+                  "ou relisez la timeline sur le chemin qui vous intéresse")
+    for prefixe, n in sorted(coupes.items()):
+        if n > MAX_PAR_SUPPORT:
+            fait("limite", "support amovible : le plafond de citation est atteint",
+                 prefixe, c.rel(chemin), f"chemins sous « {prefixe}/ » dans la timeline",
+                 note=f"{n} entrées sous ce point de montage, {MAX_PAR_SUPPORT} "
+                      "citées. Le compte ci-dessus est complet ; la liste ne l'est pas")
 
     # ── ce que la timeline confirme, ou pas ──
     for base, demandeurs in sorted(fichiers.items()):
@@ -2073,8 +2108,10 @@ def timeline(c):
                                 + ". Deux fichiers peuvent porter le même nom sans "
                                   "avoir de rapport : à confirmer par l'inode ou la "
                                   "taille avant d'attribuer celui-ci à qui que ce soit")
-                    if len(trouves[base]) > 1:
-                        note += f" ; {len(trouves[base])} emplacements portent ce nom"
+                    if combien[base] > 1:
+                        note += (f" ; {combien[base]} emplacements portent ce nom"
+                                 + (f", dont {len(trouves[base])} cités ici"
+                                    if combien[base] > len(trouves[base]) else ""))
                     fait("timeline", "fichier retrouvé sur le disque" if meme
                          else "fichier de MÊME NOM sur le disque",
                          fichier, c.rel(chemin),
