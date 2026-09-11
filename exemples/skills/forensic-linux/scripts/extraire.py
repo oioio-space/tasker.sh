@@ -2472,31 +2472,74 @@ def trouver_plaso(c):
     return [x for x in nommes + autres if _est_plaso(x)]
 
 
-def _plaso_horo(e):
-    """L'horodatage d'un événement plaso, en ISO UTC — ou None.
+# Un plaso récent sérialise « date_time » comme un objet dfdatetime, et son
+# « __class_name__ » dit L'UNITÉ du champ timestamp. Le supposer en secondes —
+# ce qui n'est vrai que pour PosixTime — donne une date absurde, et pour
+# PosixTimeInMicroseconds une ValueError « year 56014984 is out of range » qui
+# emportait la phase entière. (diviseur vers les secondes, origine en secondes
+# depuis 1970.)
+_1601 = -11644473600            # 1601-01-01, l'origine de Windows
+_DFDATETIME = {
+    "PosixTime": (1, 0),
+    "PosixTimeInMilliseconds": (10 ** 3, 0),
+    "PosixTimeInMicroseconds": (10 ** 6, 0),
+    "PosixTimeInNanoseconds": (10 ** 9, 0),
+    "JavaTime": (10 ** 3, 0),
+    "Filetime": (10 ** 7, _1601),          # intervalles de 100 ns
+    "WebKitTime": (10 ** 6, _1601),
+    "CocoaTime": (1, 978307200),           # 2001-01-01
+    "HFSTime": (1, -2082844800),           # 1904-01-01
+}
+# Hors de ces bornes, ce n'est pas une date : c'est une unité mal devinée.
+# Mieux vaut compter la ligne comme NON DATÉE que publier une date fausse — une
+# date est ce qu'un rapport cite en premier.
+PLASO_MIN, PLASO_MAX = 315532800, 4102444800      # 1980 → 2100
 
-    Trois formes rencontrées selon la version de plaso. On les essaie dans
-    l'ordre du plus précis au moins précis.
+
+def _plaso_iso(brut):
+    """Les secondes depuis 1970 d'une chaîne ISO, ou None."""
+    try:
+        d = datetime.fromisoformat(brut.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d).timestamp()
+
+
+def _plaso_secondes(e):
+    """Les secondes depuis 1970 d'un événement plaso, ou None.
+
+    Le « timestamp » de premier niveau est la forme NORMALISÉE de plaso —
+    microsecondes depuis 1970 — et c'est la plus sûre : on la préfère. Le
+    « date_time » n'est lu qu'à défaut, avec l'unité que sa classe déclare.
     """
     ts = e.get("timestamp")
     if isinstance(ts, (int, float)) and ts:
-        # microsecondes depuis 1970 : la forme de psort depuis toujours. Un
-        # seuil grossier distingue les secondes des microsecondes, parce que
-        # certaines versions ont écrit l'une pour l'autre.
-        return _epoch_iso(ts / 1_000_000 if abs(ts) > 10 ** 12 else ts)
+        # Un seuil grossier distingue les secondes des microsecondes : 10¹² µs
+        # font onze jours après 1970, et 10¹² secondes l'an 33658. Aucune date
+        # réelle n'est ambiguë.
+        return ts / 10 ** 6 if abs(ts) > 10 ** 12 else ts
     dt = e.get("date_time")
-    if isinstance(dt, dict) and isinstance(dt.get("timestamp"), (int, float)):
-        return _epoch_iso(dt["timestamp"])
-    brut = e.get("datetime")
-    if isinstance(brut, str) and brut:
-        try:
-            d = datetime.fromisoformat(brut.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        return d.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(dt, dict):
+        brut = dt.get("timestamp")
+        if isinstance(brut, (int, float)):
+            diviseur, origine = _DFDATETIME.get(str(dt.get("__class_name__")),
+                                                (1, 0))
+            return brut / diviseur + origine
+        # TimeElements et consorts portent une chaîne plutôt qu'un entier.
+        if isinstance(dt.get("string"), str):
+            return _plaso_iso(dt["string"])
     return None
+
+
+def _plaso_horo(e):
+    """L'horodatage d'un événement plaso, en ISO UTC — ou None."""
+    s = _plaso_secondes(e)
+    if s is None:
+        brut = e.get("datetime")
+        s = _plaso_iso(brut) if isinstance(brut, str) and brut else None
+    if s is None or not PLASO_MIN <= s <= PLASO_MAX:
+        return None
+    return _epoch_iso(s)
 
 
 def _plaso_chemin(e):
@@ -2574,6 +2617,11 @@ def plaso(c):
     par_session = collections.Counter()          # id du fait d'ouverture → n
     par_compte = {}                              # compte → [n, premier, dernier]
     jours = set()                                # les journées qui portent une trace
+    # Le SCHÉMA réellement lu : les classes dfdatetime rencontrées et les
+    # champs du premier événement. C'est ce qui permet de dire, sans rien
+    # demander à personne, quelle forme la version installée de plaso produit —
+    # et de voir tout de suite si une unité inconnue a été devinée.
+    classes, champs = collections.Counter(), None
 
     for chemin in chemins:
         for ligne in _plaso_lignes(chemin):
@@ -2591,6 +2639,11 @@ def plaso(c):
             if not isinstance(e, dict):
                 illisibles += 1
                 continue
+            if champs is None:
+                champs = sorted(e)
+            dt = e.get("date_time")
+            if isinstance(dt, dict):
+                classes[str(dt.get("__class_name__") or "?")] += 1
             genres[str(e.get("data_type") or "?")] += 1
             analyseurs[str(e.get("parser") or "?")] += 1
             quand = _plaso_horo(e)
@@ -2675,13 +2728,29 @@ def plaso(c):
              note=f"{len(genres)} familles au total, les 25 plus nombreuses sont "
                   "citées. Les autres se lisent par « jq -r .data_type | sort | "
                   "uniq -c » sur le fichier")
+    # Le schéma lu, toujours posé : c'est lui qui permet de vérifier une date
+    # plutôt que de la croire, et de voir si une classe dfdatetime inconnue a
+    # été lue avec l'unité par défaut — donc peut-être à tort.
+    inconnues = [k for k in classes if k not in _DFDATETIME and k != "?"]
+    fait("plaso", "forme du fichier plaso", ", ".join(sorted(classes)) or "sans date_time",
+         source, "champs du premier événement et classes dfdatetime rencontrées",
+         note="champs : " + ", ".join(champs or ["aucun"])
+              + (f" ; CLASSES INCONNUES lues en secondes, ce qui peut être "
+                 f"faux : {', '.join(sorted(inconnues))}" if inconnues else
+                 " ; toutes les classes de date sont connues")
+              + f". Dates retenues entre {_epoch_iso(PLASO_MIN)[:4]} et "
+                f"{_epoch_iso(PLASO_MAX)[:4]} : hors de là, c'est une unité mal "
+                "devinée, et la ligne est comptée comme non datée",
+         confiance="certaine")
     if illisibles or sans_date:
         fait("limite", "lignes plaso non exploitées", str(illisibles + sans_date),
              source, "lecture ligne à ligne du JSON",
              note=f"{illisibles} ligne(s) illisibles, {sans_date} sans date "
-                  "reconnue. Le format de « psort -o json_line » varie selon la "
-                  "version de plaso : si ce compte est élevé, l'horodatage n'est "
-                  "ni « timestamp », ni « date_time.timestamp », ni « datetime »")
+                  "retenue. Le format de « psort -o json_line » varie selon la "
+                  "version de plaso : si ce compte est élevé, voyez le fait "
+                  "« forme du fichier plaso » ci-dessus, puis une ligne du "
+                  "fichier — l'horodatage n'est alors ni « timestamp », ni "
+                  "« date_time », ni « datetime »")
     # ── ce que plaso RECOUPE avec le reste ──
     for ident, n in sorted(par_session.items()):
         w = next((x for x in fenetres if x[3] == ident), None)

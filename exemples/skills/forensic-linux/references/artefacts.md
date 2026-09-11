@@ -506,14 +506,39 @@ super-timeline vaut plus que la somme de ses lignes :
 Sans `jq`, `grep '"data_type": "syslog:line"'` fait l'affaire : une ligne est un
 événement, le fichier se découpe au `grep` sans rien casser.
 
-**Le piège du format.** Le schéma de `psort -o json_line` a CHANGÉ selon les
-versions de plaso : l'horodatage est tantôt `timestamp` en microsecondes depuis
-1970, tantôt `date_time.timestamp` en secondes, tantôt une chaîne ISO dans
-`datetime`. L'extraction accepte les trois et COMPTE ce qu'elle n'a pas su
-dater. Si le fait « lignes plaso non exploitées » annonce un nombre élevé, c'est
-que votre version écrit une quatrième forme : regardez une ligne
-(`head -1 PLASO/*.jsonl | python3 -m json.tool`) avant de conclure quoi que ce
-soit sur le contenu.
+**Le piège du format, et il est sérieux.** Le schéma de `psort -o json_line` a
+changé selon les versions. Un plaso récent — celui des dépôts log2timeline sur
+Ubuntu 24.04, par exemple — sérialise `date_time` comme un objet **dfdatetime**,
+dont le `__class_name__` dit l'**unité** du champ `timestamp` :
+
+| classe | unité | origine |
+|---|---|---|
+| `PosixTime` | secondes | 1970 |
+| `PosixTimeInMilliseconds`, `JavaTime` | millisecondes | 1970 |
+| `PosixTimeInMicroseconds` | microsecondes | 1970 |
+| `PosixTimeInNanoseconds` | nanosecondes | 1970 |
+| `Filetime` | intervalles de 100 ns | **1601** |
+| `WebKitTime` | microsecondes | **1601** |
+| `CocoaTime` | secondes | **2001** |
+| `HFSTime` | secondes | **1904** |
+
+Lire ce champ comme des secondes — ce qui n'est vrai que de `PosixTime` — donne
+une date absurde, et pour `PosixTimeInMicroseconds` une erreur « year 56014984
+is out of range ». L'extraction convertit donc chaque classe, **préfère** le
+`timestamp` de premier niveau (la forme normalisée de plaso, toujours en
+microsecondes depuis 1970), accepte une chaîne ISO dans `datetime` ou
+`date_time.string`, et **écarte toute date hors de 1980-2100** : au-delà, ce
+n'est pas une date, c'est une unité mal devinée, et la ligne est comptée comme
+non datée plutôt que publiée.
+
+Le fait « **forme du fichier plaso** » dit ce qui a été réellement lu : les
+classes rencontrées, les champs du premier événement, et un avertissement si une
+classe inconnue a été lue avec l'unité par défaut. C'est par là qu'il faut
+commencer pour vérifier une date plutôt que la croire — et si le fait « lignes
+plaso non exploitées » annonce un nombre élevé, regardez une ligne
+(`head -1 … | python3 -m json.tool`) et comparez.
+
+La version exacte se lit par `psort.py --version`, ou `dpkg -l | grep plaso`.
 
 **Le chemin.** `display_name` porte le préfixe du conteneur — `TSK:/etc/passwd`,
 `GZIP:/var/log/x`, `OS:/home/…`. L'extraction le retire pour pouvoir comparer

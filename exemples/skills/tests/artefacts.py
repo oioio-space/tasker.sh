@@ -26,6 +26,7 @@ import sys, tarfile, tempfile, time
 ICI = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.dirname(ICI)
 sys.path.insert(0, os.path.join(SKILLS, "forensic-linux", "scripts"))
+import extraire                                                        # noqa: E402
 from extraire import UTMP                                              # noqa: E402
 
 P = "PC42_B12_ARTE_ubuntu"
@@ -851,7 +852,6 @@ def blocs_bornes():
     """
     import gzip, hashlib, io
     sys.path.insert(0, os.path.join(SKILLS, "forensic-linux", "scripts"))
-    import extraire
 
     ligne = b"Jan  8 14:02:11 pc01 systemd[1]: Started Session 4231 of jdupont.\n"
     clair = ligne * (24 * 1024 * 1024 // len(ligne))
@@ -1243,6 +1243,41 @@ def pieces_abimees(base):
                and "2026-01-05" in str(f.get("valeur")) for f in pl),
            "la synthèse des périodes ne voit pas dans la super-timeline")
 
+    # ── 6 quinquies · les unités de dfdatetime ──
+    # Un plaso récent sérialise « date_time » comme un objet dfdatetime, dont le
+    # « __class_name__ » dit L'UNITÉ. La supposer en secondes n'est vrai que
+    # pour PosixTime : pour PosixTimeInMicroseconds cela levait une ValueError
+    # « year 56014984 is out of range », non rattrapée, qui emportait la PHASE
+    # ENTIÈRE. Une date fausse dans un rapport est pire encore qu'une absence.
+    for classe, ts in (("PosixTime", 1767600000),
+                       ("PosixTimeInMicroseconds", 1767600000 * 10 ** 6),
+                       ("PosixTimeInMilliseconds", 1767600000 * 10 ** 3),
+                       ("JavaTime", 1767600000 * 10 ** 3)):
+        vu = extraire._plaso_horo({"date_time": {"__class_name__": classe,
+                                                 "timestamp": ts}})
+        yield (f"plaso : l'unité {classe[:22]}", vu == "2026-01-05T08:00:00Z",
+               f"lu {vu}")
+    yield ("plaso : une date aberrante n'est pas publiée",
+           extraire._plaso_horo({"timestamp": 99999999999999999999}) is None,
+           "hors des bornes, c'est une unité mal devinée — pas une date")
+    # Et le rapport DIT ce qu'il a lu, pour qu'on puisse le vérifier.
+    r3 = collecte("plaso-dfdatetime", "PLASO")
+    with open(os.path.join(r3, "PLASO", "plaso.jsonl"), "w", encoding="utf-8") as fh:
+        for i in range(4):
+            fh.write(json.dumps({
+                "__container_type__": "event", "data_type": "fs:stat",
+                "parser": "filestat", "timestamp_desc": "mtime",
+                "date_time": {"__class_name__": "PosixTimeInMicroseconds",
+                              "timestamp": (1767600000 + i) * 10 ** 6},
+                "filename": f"/home/jdupont/x{i}.odt"}) + "\n")
+    _, f3 = tourner(EXTRAIRE, r3, os.path.join(coin, "plaso-df.jsonl"))
+    forme = next((x for x in f3 if x["fait"] == "forme du fichier plaso"), {})
+    recens = next((x for x in f3 if "événements dans" in x["fait"]), {})
+    yield ("plaso : la forme lue est publiée",
+           forme.get("valeur") == "PosixTimeInMicroseconds"
+           and "2026-01-05T08:00:00Z" in str(recens.get("note")),
+           f"classe dite : {forme.get('valeur')}")
+
     # Ce qui n'est PAS du plaso ne doit pas être pris pour tel : la collecte
     # porte du JSON qui n'en est pas — snapd, nos propres sorties.
     r2 = collecte("plaso-faux", "PERSISTANCE")
@@ -1481,7 +1516,6 @@ def ce_que_le_rapport_montre(base):
     import importlib.util
 
     sys.path.insert(0, os.path.join(SKILLS, "forensic-linux", "scripts"))
-    import extraire
     spec = importlib.util.spec_from_file_location(
         "brouillon_f", os.path.join(SKILLS, "forensic-linux", "scripts", "brouillon.py"))
     brouillon = importlib.util.module_from_spec(spec)
