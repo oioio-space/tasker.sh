@@ -2,8 +2,13 @@
   "$schema": "https://charm.land/crush.json",
   "_commentaire": [
     "Configuration Crush pour les deux skills, avec Nemotron 3 Super servi en local",
-    "(vLLM, NIM ou TRT-LLM, tous compatibles OpenAI). À copier dans ~/.config/crush/crush.json",
-    "ou dans le dossier de travail de l'analyse (~/analyse/crush.json), jamais dans les scellés.",
+    "(vLLM, NIM ou TRT-LLM, tous compatibles OpenAI). À copier dans ~/.config/crush/crush.json.",
+    "",
+    "CE FICHIER EST GLOBAL, ET IL NE PORTE PAS DE HOOK. C'est voulu : la garde des scellés",
+    "se pose dans le dossier d'analyse d'UNE machine, avec le script à côté — deux fichiers,",
+    "et ce sont les SEULS qui se copient par affaire. Un bloc « hooks » ici s'appliquerait à",
+    "tous vos autres projets Crush. Voir crush-projet.json, qui se copie en",
+    "<affaire>/.crush.json, et README.md, « Où va quoi ».",
     "",
     "ATTENTION au dossier : ~/.config/crush/ est la CONFIGURATION, ~/.local/share/crush/ est",
     "l'ÉTAT de Crush. Il y écrit un fichier qui s'appelle aussi crush.json — et ce fichier",
@@ -26,11 +31,12 @@
     "LE ~ N'EST PAS TRAITÉ PAREIL SELON LE CHAMP. Vérifié dans la source de Crush, pas",
     "déduit de la doc :",
     "",
-    "  - hooks[].command : le ~ MARCHE. La commande passe par le shell POSIX embarqué",
-    "    (internal/hooks/runner.go : « Execution goes through Crush's embedded POSIX shell",
-    "    (shell.Run) »), qui développe le ~ comme n'importe quel shell. La consigne du",
-    "    « chemin absolu » dans docs/hooks/ vise les chemins RELATIFS (./mon-hook.sh),",
-    "    résolus depuis le dossier de travail et non depuis la configuration.",
+    "  - hooks[].command : le ~ MARCHE, et $CRUSH_PROJECT_DIR aussi. La commande passe par",
+    "    le shell POSIX embarqué (internal/hooks/runner.go : « Execution goes through",
+    "    Crush's embedded POSIX shell (shell.Run) »), qui les développe comme n'importe",
+    "    quel shell. La consigne du « chemin absolu » dans docs/hooks/ vise les chemins",
+    "    RELATIFS (./mon-hook.sh), résolus depuis le dossier de travail. C'est ce qui",
+    "    permet à crush-projet.json de ne poser aucun chemin en dur.",
     "",
     "  - options.data_directory : le ~ NE MARCHE PAS. load.go applique SmartJoin(dossier de",
     "    travail, valeur), et SmartJoin ne teste que filepath.IsAbs : « ~/x » n'étant pas",
@@ -172,15 +178,5 @@
     ],
     "disable_provider_auto_update": true,
     "disable_metrics": true
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "name": "garde des scellés",
-        "matcher": "^(edit|write|multiedit|bash|download|lsp_rename|lsp_replace_symbol)$",
-        "command": "~/.config/crush/garde-scelles.sh",
-        "timeout": 5
-      }
-    ]
   }
 }

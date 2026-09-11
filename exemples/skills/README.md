@@ -20,9 +20,15 @@ Format **Agent Skills** (`SKILL.md`), lu tel quel par Claude Code et par Crush.
 
 ## Où va quoi — l'arborescence
 
-Trois endroits, et un seul est à vous : le dossier de travail. Le dépôt est la
-source, `~/.config/crush/` reçoit ce qui ne bouge plus, et `~/analyse/<PREFIX>/`
-est l'affaire en cours.
+**La règle tient en une phrase : tout est global, sauf deux fichiers.** Les
+skills, le modèle, les permissions vivent dans `~/.config/crush/` et servent à
+toutes les affaires. Seuls **le hook et le script de la garde** se copient dans
+le dossier d'une machine — parce qu'un hook global s'appliquerait à tous vos
+autres projets Crush, et parce que le hook doit être là où vous lancez Crush
+pour être lu du tout.
+
+Le reste de ce que vous verrez dans un dossier d'affaire n'est pas copié : c'est
+monté, ou produit par les scripts.
 
 ### 1 · Ce que le dépôt donne
 
@@ -62,20 +68,22 @@ s'y trouve **prime** sur le vôtre (§2).
 ### 3 · L'affaire en cours : un dossier par machine
 
     ~/analyse/PC01_B13_SYCOBS_LINUX/   ← on lance « crush » ICI
-      .crush.json                ← copié de exemples/skills/crush-projet.json
-      outils/
-        garde-scelles.sh         ← copié de exemples/skills/, rendu exécutable
-      scelle/                    ← LA COLLECTE, montée en bind,ro
-      mnt/                       ← L'IMAGE, montée en ro
-      faits.jsonl                ← produit par extraire.py
-      faits.csv  faits-manifeste.json  faits-reprise.jsonl
-      constats.jsonl             ← produit par controles.py
-      constats.csv  constats-manifeste.json
-      rapport-forensic.md        ← produit par brouillon.py, à compléter
-      rapport-conformite.md
-      .crush/                    ← créé par Crush : sessions et journal
 
-Rien de ce dossier n'est écrit en dur dans les scripts. `scelle/` et `mnt/` sont
+      ── ce que VOUS y copiez : deux fichiers, pas un de plus ──
+      .crush.json                ← exemples/skills/crush-projet.json
+      outils/garde-scelles.sh    ← exemples/skills/garde-scelles.sh, +x
+
+      ── ce qui s'y MONTE ──
+      scelle/                    ← la collecte, en bind,ro
+      mnt/                       ← l'image, en ro
+
+      ── ce qui s'y PRODUIT tout seul ──
+      faits.jsonl  faits.csv  faits-manifeste.json  faits-reprise.jsonl
+      constats.jsonl  constats.csv  constats-manifeste.json
+      rapport-forensic.md  rapport-conformite.md
+      .crush/                    ← Crush : sessions et journal
+
+Aucun de ces noms n'est écrit en dur dans les scripts. `scelle/` et `mnt/` sont
 une convention : la garde les reconnaît à leur **structure**, jamais à leur
 chemin (§3). Montez-les ailleurs, dites-le au modèle, ça marche pareil.
 
@@ -84,9 +92,9 @@ chemin (§3). Montez-les ailleurs, dites-le au modèle, ça marche pareil.
 | ce que vous copiez | où | pourquoi là |
 |---|---|---|
 | `forensic-linux/`, `conformite-linux/` | `~/.config/crush/skills/` | Crush y cherche d'office ; les deux skills servent à toutes les affaires |
-| `crush.json` | `~/.config/crush/crush.json` | le modèle et les permissions ne changent pas d'une affaire à l'autre |
-| `garde-scelles.sh` | `<affaire>/outils/` | le hook doit être à côté du `.crush.json` qui l'appelle |
+| `crush.json` | `~/.config/crush/crush.json` | le modèle et les permissions ne changent pas d'une affaire à l'autre. **Il ne porte aucun hook**, et c'est voulu |
 | `crush-projet.json` | `<affaire>/.crush.json` | **doit** être dans le dossier où vous lancez Crush, sinon il n'est pas lu (voir « les quatre pièges », plus bas) |
+| `garde-scelles.sh` | `<affaire>/outils/` | le hook l'appelle par `$CRUSH_PROJECT_DIR/outils/`, donc à côté du `.crush.json` |
 | `crushrc` | — | l'alternative au `crush.json` global. Si vous utilisez le JSON, ignorez-le |
 | `tests/`, `artefacts/`, `matrice/` | — | le banc d'essai du dépôt, sans usage sur le poste |
 
@@ -109,11 +117,10 @@ l'arborescence ci-dessus dit où chaque fichier atterrit.
         | tar -x -C "$C/skills/"
     cp exemples/skills/crush.json "$C/crush.json"
 
-Puis **deux retouches à la main** dans `"$C/crush.json"` :
-
-1. `base_url` → l'adresse de votre serveur (§9) ;
-2. **supprimez le bloc `"hooks"`** — la garde se pose par affaire, à l'étape B.
-   Laissé là, il s'appliquerait à tous vos autres projets Crush.
+**Une seule retouche à la main** dans `"$C/crush.json"` : `base_url` → l'adresse
+de votre serveur (§9). Le fichier livré ne porte **aucun hook**, et c'est voulu :
+la garde se pose par affaire, à l'étape B — globale, elle s'appliquerait à tous
+vos autres projets Crush.
 
 Vous devez voir :
 
@@ -367,16 +374,15 @@ Pour Crush, une fois pour toutes :
     # copie posée.
     tar -c --exclude=__pycache__ -C exemples/skills forensic-linux conformite-linux \
         | tar -x -C "$K/"
-    cp exemples/skills/garde-scelles.sh "$C/" && chmod +x "$C/garde-scelles.sh"
     cp exemples/skills/crushrc    "$C/crushrc"             # puis adaptez base_url
 
-Ou seulement pour un dossier de travail — c'est le plus simple si vous voulez
-un jeu de skills par affaire :
+Les skills se posent **une fois**, globalement, et servent à toutes les
+affaires : Crush peut aussi les chercher dans un `.crush/skills/` du dossier de
+travail, mais ce serait un jeu à maintenir par machine analysée, pour rien. Ce
+qui se copie par affaire, et rien d'autre, c'est le hook et son script — voyez
+« Où va quoi » et la fiche.
 
-    mkdir -p ~/analyse/.crush/skills
-    cp -r exemples/skills/forensic-linux ~/analyse/.crush/skills/
-
-Dans les deux cas, Crush doit voir les deux skills. Il n'existe pas de
+Crush doit voir les deux skills. Il n'existe pas de
 sous-commande `crush skills` pour le demander ; la façon sûre de le vérifier,
 **et elle marche hors ligne** — la découverte est journalisée avant tout appel
 au modèle :
@@ -475,19 +481,23 @@ du modèle.
 
 ### Le hook dans le seul dossier d'analyse
 
-Le cas courant : la configuration reste globale — `~/.config/crush/crush.json`,
-avec le fournisseur, le modèle, les permissions —, et **seul le hook** est posé
-dans le dossier d'analyse, avec le script à côté. Rien d'autre ne bouge, et le
-Crush du poste reste utilisable pour tout le reste.
+C'est la seule chose qui se copie par affaire, et c'est exprès : la
+configuration reste globale — `~/.config/crush/crush.json`, avec le
+fournisseur, le modèle, les permissions —, et **seuls le hook et son script**
+sont posés dans le dossier de la machine analysée. Le Crush du poste reste
+utilisable pour tout le reste.
 
-    ~/.config/crush/crush.json     ← inchangé, et SANS bloc "hooks"
-    ~/analyse/
+    ~/.config/crush/
+      crush.json                   ← le modèle, les permissions. AUCUN "hooks"
+      skills/                      ← les deux skills, pour toutes les affaires
+
+    ~/analyse/PC01_B13_SYCOBS_LINUX/
       .crush.json                  ← le hook, et rien d'autre
       outils/garde-scelles.sh      ← le script
-      PC01_B13_SYCOBS_LINUX/       ← le scellé
-      mnt/                         ← l'image montée
+      scelle/  mnt/                ← les deux montages en lecture seule
 
-`~/analyse/.crush.json` tient en huit lignes :
+Le fichier est livré : `exemples/skills/crush-projet.json`, à copier en
+`.crush.json`. Il tient en huit lignes :
 
 ```json
 {
@@ -523,13 +533,14 @@ Trois choses à savoir, toutes vérifiées sur la source et en exécution :
 
 Vérifié de bout en bout contre Crush compilé, avec un `crush.json` global sans
 aucun `hooks` : un `write` d'une pièce neuve dans le scellé est refusé — une
-ligne `"decision":"deny"` au journal, aucun fichier créé —, et les skills
-continuent d'être chargés depuis la configuration globale. Testé aussi avec un
-dépôt git au-dessus du dossier d'analyse : même résultat.
+ligne `Hook completed … decision=deny` au journal, aucun fichier créé —, et les
+skills continuent d'être chargés depuis la configuration globale. Testé aussi
+avec un dépôt git au-dessus du dossier d'analyse : même résultat.
 
-Le `crushrc` livré, lui, fait la même chose en une ligne `hook add PreToolUse`,
-et le même découpage s'applique : `~/analyse/.crushrc` ne portant que cette
-ligne suffit.
+Le `crushrc` livré ne déclare **pas** ce hook non plus, pour la même raison. Si
+vous préférez ce format, le même découpage s'applique : un `<affaire>/.crushrc`
+ne portant que la ligne `hook add PreToolUse` suffit, et elle est recopiée en
+commentaire à la fin du `crushrc` livré.
 
 ## 3 · Protéger les scellés
 
@@ -562,7 +573,7 @@ On le vérifie avec un scellé jouet, hors de Crush :
 
     mkdir -p /tmp/essai/PC01/{SYSTEME,COMPTES,JOURNAUX}
     printf '{"tool_name":"write","tool_input":{"file_path":"/tmp/essai/PC01/SYSTEME/x"},"cwd":"/tmp"}' \
-        | ~/.config/crush/garde-scelles.sh ; echo "code $?"
+        | ~/analyse/PC01_B13_SYCOBS_LINUX/outils/garde-scelles.sh ; echo "code $?"
 
 Le script doit écrire son refus et rendre **2**. Un code 0, ou « command not
 found », veut dire que la ceinture est absente : le fichier n'est pas là où le

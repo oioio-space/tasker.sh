@@ -110,21 +110,28 @@ permissions deny fetch agentic_fetch sourcegraph download
 # visible, et parce que c'est le seul moyen d'en poser ailleurs.
 option skill-path "$CONFIG/skills"
 
-# L'état de session de Crush : dans le dossier d'analyse, jamais dans les
-# scellés, qui sont montés en lecture seule de toute façon.
-option data-directory "$HOME/analyse/.crush"
+# L'état de session de Crush. Sans ce réglage, il crée un « .crush/ » dans
+# le dossier de travail — ce qui est exactement ce qu'on veut ici, un par
+# affaire. Ne le posez QUE si vous voulez tout regrouper ailleurs, et
+# jamais sur un chemin qui tombe dans les scellés.
+# option data-directory "/chemin/absolu/vers/etat-crush"
 
 # Poste hors ligne : ni mise à jour de catalogue, ni métriques.
 option provider-auto-update false
 option metrics false
 
-# ── la ceinture ───────────────────────────────────────────────────────
-# La seule garantie qui tienne reste « mount -o bind,ro » (README.md §3).
-# Ceci est une ceinture de plus, qui a le mérite d'EXPLIQUER au modèle
-# pourquoi il ne peut pas écrire. Le script refuse par un code 2, et son
-# message sur stderr devient le motif du refus.
-hook add PreToolUse \
-    --name "garde des scellés" \
-    --matcher '^(edit|write|multiedit|bash|download|lsp_rename|lsp_replace_symbol)$' \
-    --command "$CONFIG/garde-scelles.sh" \
-    --timeout 5
+# ── la ceinture : PAS ICI ─────────────────────────────────────────────
+# Le hook n'est volontairement pas déclaré dans cette configuration
+# globale. Il se pose dans le dossier d'analyse d'UNE machine, avec le
+# script à côté — c'est le seul endroit où quelque chose se copie par
+# affaire, et ça garde le Crush du poste utilisable pour tout le reste.
+# Un « hooks » global s'appliquerait à tous vos autres projets.
+#
+# Voir README.md, « Où va quoi » : exemples/skills/crush-projet.json se
+# copie en <affaire>/.crush.json, et garde-scelles.sh en
+# <affaire>/outils/. En crushrc, la même chose tient en une ligne dans
+# un <affaire>/.crushrc :
+#
+#   hook add PreToolUse --name "garde des scellés" \
+#       --matcher '^(edit|write|multiedit|bash|download|lsp_rename|lsp_replace_symbol)$' \
+#       --command "$CRUSH_PROJECT_DIR/outils/garde-scelles.sh" --timeout 5
