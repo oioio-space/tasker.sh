@@ -166,6 +166,35 @@ depuis_ailleurs() {             # <libellé> <code attendu> <json>
 depuis_ailleurs "outils/scelles.txt, lu depuis un autre dossier" 2 \
   "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/nas_rh/x\"}}"
 
+# LES CHEMINS RELATIFS, résolus depuis le FICHIER qui les porte — et non
+# depuis le dossier courant. « ../scelle » dans <affaire>/outils/scelles.txt
+# doit désigner <affaire>/scelle, que la garde soit appelée d'où qu'on veuille.
+mkdir -p "$travail/aff-rel/outils" "$travail/aff-rel/coffre"
+cp "$garde" "$travail/aff-rel/outils/garde-scelles.sh"
+printf '../coffre\n' > "$travail/aff-rel/outils/scelles.txt"
+d_ailleurs() {                  # <libellé> <code attendu> <depuis> <json>
+    local code
+    ( cd "$3" && printf '%s' "$4" \
+        | bash "$travail/aff-rel/outils/garde-scelles.sh" >/dev/null 2>&1 )
+    code=$?
+    if [[ "$code" == "$2" ]]; then printf "  ok      %s\n" "$1"
+    else printf "  MANQUE  %s — code=%d, attendu %d\n" "$1" "$code" "$2"
+         manques=$((manques + 1)); fi
+}
+j_coffre="{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/aff-rel/coffre/x\"}}"
+d_ailleurs "« ../coffre » depuis le dossier d'affaire" 2 "$travail/aff-rel" "$j_coffre"
+d_ailleurs "« ../coffre » depuis /"                    2 "/"                "$j_coffre"
+d_ailleurs "« ../coffre » depuis /tmp"                 2 "/tmp"             "$j_coffre"
+# Le piège qu'une résolution depuis le dossier courant aurait créé : un
+# « ../coffre » lu depuis /tmp/leurre aurait visé /tmp/coffre — donc rien.
+mkdir -p "$travail/leurre/coffre" "$travail/leurre/sous"
+d_ailleurs "un homonyme ailleurs n'est PAS protégé" 0 "$travail/leurre/sous" \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/leurre/coffre/x\"}}"
+# Et un chemin ABSOLU dans le même fichier continue de marcher.
+printf '../coffre\n%s\n' "$travail/nas_rh" > "$travail/aff-rel/outils/scelles.txt"
+d_ailleurs "un chemin absolu, dans le même fichier" 2 "/" \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/nas_rh/x\"}}"
+
 # Un fichier de liste absent n'est PAS une erreur : c'est le cas courant.
 CRUSH_SCELLES="$travail/rien-du-tout.txt:$travail/non-plus.txt" \
   essai "des listes absentes ne cassent rien" 0 \

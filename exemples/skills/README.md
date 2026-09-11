@@ -656,6 +656,34 @@ courant.
     # ~/analyse/PC01_B13_SYCOBS_LINUX/outils/scelles.txt
     /mnt/nas_sycobs/partage_rh
     ~/Documents/affaire-2026-014
+    ../extraction-a-part
+
+**Un chemin relatif se lit depuis le dossier du fichier qui le porte**, jamais
+depuis le dossier courant. Dans `outils/scelles.txt`, `../extraction-a-part`
+désigne donc `<affaire>/extraction-a-part`, que la garde soit lancée par Crush
+ou à la main depuis n'importe où. C'est la seule règle qui ne surprenne pas :
+résolu contre le dossier courant, le même `..` viserait un dossier différent à
+chaque appel — et ne protégerait rien, sans un mot. Le `~` est développé, et un
+chemin absolu reste absolu.
+
+**Mais ne déclarez ni `../scelle` ni `../mnt`** — c'est le réflexe, et il coûte :
+
+- `scelle/` est **déjà** reconnu à sa structure. Le déclarer n'ajoute rien.
+- `mnt/` est reconnu comme une **image**, régime où tout ce qui lit est permis,
+  `cat`, `strings` et `sqlite3` par bash compris. Le déclarer le fait basculer
+  en régime **scellé**, donc strict : vous perdez exactement ce pour quoi vous
+  aviez monté l'image.
+
+`--essai` le dit maintenant, plutôt que de vous le laisser découvrir :
+
+    liste lue : …/outils/scelles.txt
+      déclaré : …/mnt
+          ↑ c'est une IMAGE, reconnue à sa structure. La déclarer la rend STRICTE :
+            plus de cat, strings ni sqlite3 par bash dessus. Retirez-la de la liste
+            pour garder la lecture libre.
+
+La liste sert aux dossiers que la **structure ne peut pas reconnaître** : un
+partage NAS, un dossier d'affaire, une extraction posée à part.
 
 `CRUSH_SCELLES` remplace les deux et accepte plusieurs chemins séparés par
 `:`, comme `PATH`. Ce que la garde a lu se voit dans `--essai` :

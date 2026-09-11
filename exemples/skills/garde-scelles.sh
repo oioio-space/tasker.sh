@@ -241,12 +241,52 @@ for f in os.environ.get("TK_SCELLES", "").split(os.pathsep):
     if not f or f in lus:
         continue
     lus.add(f)
+    # Un chemin RELATIF se lit depuis le dossier du FICHIER qui le porte, et
+    # non depuis le dossier courant du processus. C'est la seule règle qui ne
+    # surprenne pas : dans <affaire>/outils/scelles.txt, « ../scelle » désigne
+    # <affaire>/scelle, que la garde soit lancée par Crush ou à la main depuis
+    # n'importe où. Résolu contre le dossier courant, le même « ../scelle »
+    # aurait désigné un dossier différent à chaque appel — et n'aurait rien
+    # protégé, sans un mot.
+    base = os.path.dirname(os.path.abspath(f))
     try:
         with open(f, encoding="utf-8") as fh:
-            declares += [os.path.abspath(os.path.expanduser(l.strip().rstrip("/")))
-                         for l in fh if l.strip() and not l.lstrip().startswith("#")]
+            for ligne in fh:
+                ligne = ligne.strip()
+                if not ligne or ligne.startswith("#"):
+                    continue
+                ligne = os.path.expanduser(ligne.rstrip("/"))
+                declares.append(os.path.abspath(
+                    ligne if os.path.isabs(ligne) else os.path.join(base, ligne)))
     except OSError:
         pass
+
+# « --essai » demande ce que la garde a VRAIMENT retenu : les listes lues, et
+# les dossiers qu'elles désignent une fois résolus. Un fichier posé au mauvais
+# endroit, ou un « ../scelle » qui ne tombe pas où l'on croit, ne se devine
+# pas — et c'est le même code qui répond, pas une seconde lecture en Bash.
+if os.environ.get("TK_LISTER"):
+    for d in declares:
+        if not os.path.isdir(d):
+            print("  DÉCLARÉ MAIS ABSENT : " + d)
+            continue
+        print("  déclaré : " + d)
+        # Déclarer un dossier le rend STRICT — le régime du scellé. Sur une
+        # image montée, c'est une perte : la garde y laisse normalement TOUT
+        # ce qui lit, y compris par bash, et c'est l'intérêt même de l'avoir
+        # montée. La déclaration prime sur la reconnaissance par structure ;
+        # autant que ce soit un choix, et pas une surprise.
+        if est_image(d):
+            print("      ↑ c'est une IMAGE, reconnue à sa structure. La "
+                  "déclarer la rend STRICTE :")
+            print("        plus de cat, strings ni sqlite3 par bash dessus. "
+                  "Retirez-la de la liste")
+            print("        pour garder la lecture libre.")
+        elif est_collecte(d):
+            print("      ↑ c'est déjà une COLLECTE, reconnue à sa structure : "
+                  "la déclarer")
+            print("        n'ajoute rien.")
+    sys.exit(0 if all(os.path.isdir(d) for d in declares) else 1)
 
 commande = entree.get("command") if isinstance(entree.get("command"), str) else ""
 vises = [v for k in ("file_path", "path") for v in (entree.get(k),) if isinstance(v, str)]
@@ -335,9 +375,19 @@ if [ "${1:-}" = "--essai" ]; then
     lues=0
     IFS=: read -ra _listes <<< "$TK_SCELLES"
     for f in "${_listes[@]}"; do
-        [ -f "$f" ] && { printf '  liste déclarée : %s\n' "$f"; lues=1; }
+        [ -f "$f" ] && { printf '  liste lue : %s\n' "$f"; lues=1; }
     done
-    [ "$lues" -eq 0 ] && printf '  aucune liste déclarée — la structure suffit\n'
+    if [ "$lues" -eq 0 ]; then
+        printf '  aucune liste déclarée — la structure suffit\n'
+    else
+        # C'est le programme lui-même qui dit ce qu'il a retenu : les chemins
+        # relatifs y sont résolus une seule fois, au même endroit que pour un
+        # vrai appel.
+        if ! printf '{"tool_name":"view","tool_input":{},"cwd":"%s"}' "$dossier" \
+                | TK_LISTER=1 python3 -c "$garde"; then
+            souci=1
+        fi
+    fi
     echo
     scelles=0 images=0 souci=0
     for d in "$dossier"/*/; do
