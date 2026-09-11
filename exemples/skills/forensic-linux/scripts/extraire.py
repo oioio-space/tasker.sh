@@ -2359,6 +2359,209 @@ def documents(c):
                   "--indicateurs")
 
 
+# ── 9 ter · la super-timeline de plaso ────────────────────────────────
+# psort rend un événement par ligne de JSON. C'est la pièce la plus riche
+# d'une collecte : là où mactime ne connaît que les dates du système de
+# fichiers, plaso ouvre les bases de navigateur, les journaux, les caches, les
+# fichiers de configuration, et rend TOUT sur une seule échelle de temps.
+#
+# Ce lecteur n'en fait PAS un fait par événement : une super-timeline compte
+# des millions de lignes, et les recopier n'apprendrait rien. Il répond à trois
+# questions, et c'est tout :
+#
+#   1. de quoi cette super-timeline est-elle faite — combien d'événements, sur
+#      quelle période, par quel analyseur, et pour quelles familles d'artefact ?
+#      C'est ce qui dit à l'analyste ce que la pièce PEUT répondre ;
+#   2. les fichiers et les points de montage que les autres faits ont déjà mis
+#      en question s'y retrouvent-ils — exactement comme timeline() le fait sur
+#      mactime, et avec la même exigence de chemin ;
+#   3. les chemins sensibles, bornés, et la borne se dit.
+#
+# Le schéma de « psort -o json_line » a CHANGÉ selon les versions : l'horodatage
+# est tantôt « timestamp » en microsecondes, tantôt « date_time.timestamp » en
+# secondes, tantôt une chaîne ISO dans « datetime ». Le lecteur accepte les
+# trois et COMPTE ce qu'il n'a pas su dater : une ligne muette est un aveu, pas
+# un silence.
+PLASO_MAX_SENSIBLES = 300
+
+
+def _plaso_horo(e):
+    """L'horodatage d'un événement plaso, en ISO UTC — ou None.
+
+    Trois formes rencontrées selon la version de plaso. On les essaie dans
+    l'ordre du plus précis au moins précis.
+    """
+    ts = e.get("timestamp")
+    if isinstance(ts, (int, float)) and ts:
+        # microsecondes depuis 1970 : la forme de psort depuis toujours. Un
+        # seuil grossier distingue les secondes des microsecondes, parce que
+        # certaines versions ont écrit l'une pour l'autre.
+        return _epoch_iso(ts / 1_000_000 if abs(ts) > 10 ** 12 else ts)
+    dt = e.get("date_time")
+    if isinstance(dt, dict) and isinstance(dt.get("timestamp"), (int, float)):
+        return _epoch_iso(dt["timestamp"])
+    brut = e.get("datetime")
+    if isinstance(brut, str) and brut:
+        try:
+            d = datetime.fromisoformat(brut.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return None
+
+
+def _plaso_chemin(e):
+    """Le chemin que l'événement désigne. « display_name » porte le préfixe du
+    conteneur (« TSK:/etc/passwd », « GZIP:/var/log/x ») : on le retire, sans
+    quoi aucun chemin ne correspondrait jamais à ceux des autres faits."""
+    for cle in ("filename", "pathspec_location", "display_name"):
+        v = e.get(cle)
+        if isinstance(v, str) and v:
+            if cle == "display_name" and ":" in v[:12]:
+                v = v.split(":", 1)[1]
+            return v
+    return ""
+
+
+def plaso(c):
+    """La super-timeline, si la collecte en porte une."""
+    chemins = c.chercher(".jsonl", "PLASO") or c.chercher(".json", "PLASO")
+    if not chemins:
+        return
+    fichiers, montages = _questions_timeline()
+    annonces = {a for demandeurs in fichiers.values()
+                for a in (_chemin_annonce(x) for x in demandeurs) if a}
+    genres, analyseurs = collections.Counter(), collections.Counter()
+    total = illisibles = sans_date = vus = 0
+    premier = dernier = None
+    trouves, sous_montage, coupes = {}, {}, collections.Counter()
+
+    for chemin in chemins:
+        for ligne in c.lignes(chemin):
+            if not ligne.strip():
+                continue
+            total += 1
+            try:
+                e = json.loads(ligne)
+            except json.JSONDecodeError:
+                illisibles += 1
+                continue
+            if not isinstance(e, dict):
+                illisibles += 1
+                continue
+            genres[str(e.get("data_type") or "?")] += 1
+            analyseurs[str(e.get("parser") or "?")] += 1
+            quand = _plaso_horo(e)
+            if quand is None:
+                sans_date += 1
+            else:
+                premier = quand if premier is None or quand < premier else premier
+                dernier = quand if dernier is None or quand > dernier else dernier
+            ou = _plaso_chemin(e)
+            if not ou:
+                continue
+            base, vise = ou.rsplit("/", 1)[-1].lower(), False
+            if base in fichiers:
+                vise = True
+                liste = trouves.setdefault(base, [])
+                if not any(x[2] == ou for x in liste):
+                    coupes[base] += 1
+                    if len(liste) < 3:
+                        liste.append((quand, e.get("timestamp_desc"), ou))
+                    elif ou.lower() in annonces:
+                        liste[-1] = (quand, e.get("timestamp_desc"), ou)
+            for prefixe, _ in montages:
+                if ou.startswith(prefixe + "/"):
+                    vise = True
+                    sous = sous_montage.setdefault(prefixe, [])
+                    coupes[prefixe] += 1
+                    if len(sous) < MAX_PAR_SUPPORT:
+                        sous.append((quand, e.get("timestamp_desc"), ou))
+            if not vise and SENSIBLES.search(ou):
+                vus += 1
+                if vus <= PLASO_MAX_SENSIBLES:
+                    fait("plaso", "activité sur un chemin sensible", ou,
+                         c.rel(chemin), f"événement {e.get('data_type') or '?'} "
+                         f"de la super-timeline plaso",
+                         horodatage=quand, genre=e.get("timestamp_desc") or None,
+                         note=_coupe(str(e.get("message") or ""), 200) or None)
+
+    source = c.rel(chemins[0]) if len(chemins) == 1 else "PLASO/"
+    fait("plaso", "événements dans la super-timeline plaso", str(total), source,
+         "psort -o json_line, une ligne par événement",
+         note=(f"du {premier} au {dernier}" if premier else "aucun événement daté")
+              + f" ; {len(genres)} familles d'artefact, {len(analyseurs)} analyseurs"
+              + ". plaso ouvre les bases, les journaux et les caches que mactime "
+                "ne regarde pas : ce qui manque ailleurs peut se trouver ici")
+    # Le recensement par famille : c'est lui qui dit ce que la pièce PEUT
+    # répondre. Sans lui, l'analyste ne sait pas quoi lui demander.
+    for genre, n in genres.most_common(25):
+        fait("plaso", "famille d'artefact dans la super-timeline", genre, source,
+             "compte des « data_type » du fichier plaso", occurrences=n,
+             note=f"{n} événement(s)")
+    if len(genres) > 25:
+        fait("limite", "familles d'artefact plaso non listées",
+             str(len(genres) - 25), source, "compte des « data_type »",
+             note=f"{len(genres)} familles au total, les 25 plus nombreuses sont "
+                  "citées. Les autres se lisent par « jq -r .data_type | sort | "
+                  "uniq -c » sur le fichier")
+    if illisibles or sans_date:
+        fait("limite", "lignes plaso non exploitées", str(illisibles + sans_date),
+             source, "lecture ligne à ligne du JSON",
+             note=f"{illisibles} ligne(s) illisibles, {sans_date} sans date "
+                  "reconnue. Le format de « psort -o json_line » varie selon la "
+                  "version de plaso : si ce compte est élevé, l'horodatage n'est "
+                  "ni « timestamp », ni « date_time.timestamp », ni « datetime »")
+    if vus > PLASO_MAX_SENSIBLES:
+        fait("limite", "chemins sensibles plaso : le plafond est atteint",
+             str(vus), source, "chemins d'intérêt dans la super-timeline",
+             note=f"{vus} événements correspondent, {PLASO_MAX_SENSIBLES} sont "
+                  "cités. Les suivants ne sont PAS dans l'analyse")
+
+    # Les questions déjà posées par les autres faits, répondues sur plaso —
+    # avec la même exigence que sur mactime : le NOM ne fait pas le fichier.
+    for base, demandeurs in sorted(fichiers.items()):
+        if base not in trouves:
+            continue
+        for f in demandeurs:
+            annonce = _chemin_annonce(f)
+            for quand, genre, ou in trouves[base]:
+                meme = annonce is not None and ou.lower() == annonce
+                fait("plaso", "fichier retrouvé dans la super-timeline" if meme
+                     else "fichier de MÊME NOM dans la super-timeline",
+                     ou, source,
+                     ("chemin" if meme else "nom") +
+                     f" du fichier de {f['id']} cherché dans la super-timeline",
+                     horodatage=quand, acteur=f.get("acteur") if meme else None,
+                     confiance="certaine" if meme else "à vérifier",
+                     confirme=f["id"], genre=genre or None,
+                     note=(f"{genre or 'date'} — au chemin annoncé par {f['id']}"
+                           if meme else
+                           f"MÊME NOM que le fichier de {f['id']}"
+                           + (f", mais pas le même chemin : « {annonce} »"
+                              if annonce else "")
+                           + ". À confirmer avant d'attribuer celui-ci à qui que "
+                             "ce soit")
+                          + (f" ; {coupes[base]} emplacements portent ce nom"
+                             if coupes[base] > 1 else ""))
+    for prefixe, entrees in sorted(sous_montage.items()):
+        f = next((x for p, x in montages if p == prefixe), None)
+        for quand, genre, ou in entrees:
+            fait("plaso", "fichier vu sous un support amovible", ou, source,
+                 f"chemins sous « {prefixe}/ » dans la super-timeline",
+                 horodatage=quand, acteur=f.get("acteur") if f else None,
+                 confirme=f["id"] if f else None, genre=genre or None,
+                 note=f"{genre or 'date'} — plaso date l'événement ; ce que le "
+                      "fichier FAISAIT là demande la pièce elle-même")
+        if coupes[prefixe] > MAX_PAR_SUPPORT:
+            fait("limite", "support amovible plaso : le plafond est atteint",
+                 prefixe, source, f"chemins sous « {prefixe}/ »",
+                 note=f"{coupes[prefixe]} événements sous ce point de montage, "
+                      f"{MAX_PAR_SUPPORT} cités")
+
+
 # ── 9 · les synthèses ─────────────────────────────────────────────────
 # Celles-ci ne lisent aucune pièce : elles relisent les FAITS déjà établis.
 # C'est voulu. Un tableau de synthèse qui irait rechercher ses propres données
@@ -2926,6 +3129,11 @@ ATTENDU = [
      "le périphérique, ou le montage", "Timeline mactime", None),
     ("TIMELINE", ("_body.mactime", "_mactime.csv"), "le corps de la timeline",
      "le périphérique", "Corps de la timeline", None),
+    # Facultative, mais c'est la pièce la plus riche quand elle est là : son
+    # absence doit se lire comme un choix de collecte, pas comme un oubli.
+    ("PLASO", ".jsonl", "la super-timeline plaso",
+     "le périphérique, ou le montage",
+     "log2timeline puis psort -o json_line", None),
 ]
 
 
@@ -3900,7 +4108,8 @@ def main():
                     ("historique des paquets", historique_paquets),
                     ("persistance", persistance), ("supprimés", supprimes),
                     ("chaînes des disques", chaines),
-                    ("documents rendus", documents), ("timeline", timeline)):
+                    ("documents rendus", documents), ("timeline", timeline),
+                    ("super-timeline plaso", plaso)):
         etape(nom, fn)
     # Un seul parcours de la collecte pour les deux listes : celle de l'outil,
     # cherchée à chaque fois, et celle de l'analyste quand il en donne une.

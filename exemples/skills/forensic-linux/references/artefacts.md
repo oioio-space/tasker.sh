@@ -24,6 +24,7 @@ coûte, pour une réponse qui tient dans une seule.
 | `## La timeline mactime` | `mactime.csv`, les drapeaux `macb`, les inodes |
 | `## Les pièces qu'on oublie` | `machine-id`, `adjtime`, `localtime`, les journaux d'installation |
 | `## STRINGS/` | les chaînes lisibles des périphériques, et leurs extraits |
+| `## PLASO/ — la super-timeline` | `plaso.jsonl`, `psort`, `log2timeline`, les `data_type` |
 
 ---
 
@@ -426,6 +427,66 @@ mérite d'être lue.
 | **disques de machines virtuelles** (`.vmdk`, `.qcow2`…) | `MACHINES/` | qu'une VM vit sur ce poste : **elle emporte son propre système**, et ce qu'on y a fait n'est dans aucune de ces pièces | son contenu, qui demande une collecte à part |
 
 
+
+## PLASO/ — la super-timeline
+
+`log2timeline` parcourt l'image et rend un **événement daté par artefact
+reconnu** ; `psort -o json_line` les écrit à la suite, un JSON par ligne. C'est
+la pièce la plus riche d'une collecte.
+
+**Ce qu'elle apporte par rapport à `mactime`.** mactime ne connaît que les
+quatre dates du système de fichiers (`macb`). plaso, lui, OUVRE les pièces :
+bases de navigateur, journaux systemd et syslog, caches d'applications,
+fichiers de configuration, corbeilles, historiques de connexion. Une question
+sans réponse ailleurs — « quand ce signet a-t-il été posé », « qu'est-ce qui a
+tourné à 3 h du matin » — a souvent la sienne ici.
+
+**Ce qu'elle ne prouve pas.** Un événement plaso est une LECTURE d'un artefact,
+avec les mêmes limites que l'artefact lui-même : un `fs:stat` ne dit pas qui a
+écrit le fichier, un `syslog:line` porte l'heure du poste sans fuseau. Le champ
+`timestamp_desc` dit CE QUE la date signifie (`mtime`, `crtime`, « Start
+Time »…) : il n'est pas décoratif, et deux événements du même fichier à deux
+dates différentes sont deux faits différents.
+
+**Ce que l'extraction en fait — et ne fait pas.** Une super-timeline compte des
+millions de lignes ; les recopier en faits n'apprendrait rien et noierait le
+rapport. `extraire.py` en tire quatre choses :
+
+1. un **recensement** — combien d'événements, sur quelle période, combien de
+   familles d'artefact (`data_type`) et d'analyseurs (`parser`), avec les 25
+   familles les plus nombreuses. C'est lui qui dit ce que la pièce PEUT
+   répondre : lisez-le avant de lui demander quoi que ce soit ;
+2. les **questions déjà posées** par les autres faits — un fichier téléchargé,
+   un point de montage amovible — rejouées sur plaso, avec la même exigence que
+   sur mactime : « fichier retrouvé » vaut **au chemin annoncé**, « fichier de
+   MÊME NOM » est une homonymie, sans acteur ;
+3. les **chemins sensibles**, bornés à 300, et la borne se dit ;
+4. un fait `limite` comptant les lignes qu'il n'a pas su lire ou dater.
+
+**Pour le reste, interrogez le fichier vous-même.** Il est fait pour :
+
+    jq -r .data_type PLASO/*.jsonl | sort | uniq -c | sort -rn | head -30
+    jq -r 'select(.data_type=="chrome:history:page_visited") | [.timestamp, .url] | @tsv' PLASO/*.jsonl
+    jq -r 'select(.timestamp > 1767600000000000 and .timestamp < 1767686400000000) | .message' PLASO/*.jsonl
+
+Sans `jq`, `grep '"data_type": "syslog:line"'` fait l'affaire : une ligne est un
+événement, le fichier se découpe au `grep` sans rien casser.
+
+**Le piège du format.** Le schéma de `psort -o json_line` a CHANGÉ selon les
+versions de plaso : l'horodatage est tantôt `timestamp` en microsecondes depuis
+1970, tantôt `date_time.timestamp` en secondes, tantôt une chaîne ISO dans
+`datetime`. L'extraction accepte les trois et COMPTE ce qu'elle n'a pas su
+dater. Si le fait « lignes plaso non exploitées » annonce un nombre élevé, c'est
+que votre version écrit une quatrième forme : regardez une ligne
+(`head -1 PLASO/*.jsonl | python3 -m json.tool`) avant de conclure quoi que ce
+soit sur le contenu.
+
+**Le chemin.** `display_name` porte le préfixe du conteneur — `TSK:/etc/passwd`,
+`GZIP:/var/log/x`, `OS:/home/…`. L'extraction le retire pour pouvoir comparer
+avec les chemins des autres faits ; si vous comparez à la main, retirez-le
+aussi, sans quoi rien ne correspondra jamais.
+
+---
 ## STRINGS/ — les chaînes lisibles des périphériques
 
 Un jeu de fichiers par volume monté sous le point de montage de l'analyse, la

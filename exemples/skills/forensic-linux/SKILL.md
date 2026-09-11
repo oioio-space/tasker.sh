@@ -47,9 +47,9 @@ de la pièce :
 | `trouve: false` | fait d'**absence** : la valeur est ce qu'on a cherché SANS le trouver. La lire comme une trouvaille est le pire contresens possible ici |
 | un `…` final | valeur **coupée** : ne la citez pas comme une phrase entière, et ne lisez pas une adresse collée au `…` — elle est peut-être tranchée |
 
-Il écrit aussi `faits-manifeste.json` : l'empreinte SHA-256 de chaque pièce
-lue, de l'extracteur, des listes de recherche, et la `provenance_sha256` qui
-les résume — **quels octets**, **par quel outil**, **pour quelles questions**.
+Il écrit aussi `faits-manifeste.json` : l'empreinte SHA-256 de chaque pièce lue,
+de l'extracteur, des listes de recherche, et la `provenance_sha256` qui les
+résume — **quels octets**, **par quel outil**, **pour quelles questions**.
 
 Les historiques de navigation ne sont **pas bornés** : pages, téléchargements,
 marque-pages, recherches, saisies de formulaire — tout ce que la base porte
@@ -59,7 +59,7 @@ milliers de faits `navigation` ; le tableau du rapport, lui, reste réglable par
 `--lignes`. Les sites à mot de passe enregistré sont relevés — **le site
 seul**, jamais le secret.
 
-Le même contenu sort en `faits.csv`. Et si l'on sait déjà ce que l'on cherche —
+Le même contenu sort en `faits.csv`. Si l'on sait déjà ce que l'on cherche —
 empreinte, adresse, nom —, `--indicateurs fichier.txt` le cherche dans toute la
 collecte : `references/indicateurs.md`.
 
@@ -86,9 +86,9 @@ jetons ; une de ses onze sections, six cents.
 ### Les pièces qui n'ont ni date ni auteur
 
 Trois sources disent ce qu'il y a **sans dire quand ni par qui** : les chaînes
-des disques (`STRINGS/`), ce que photorec et `xfs_undelete` rendent sans nom,
-et les motifs que l'outil repère seul (catégorie `interet`). Leurs faits
-portent tous `provenance`.
+des disques (`STRINGS/`), ce que photorec et `xfs_undelete` rendent sans nom, et
+les motifs que l'outil repère seul (`interet`). Leurs faits portent tous
+`provenance`.
 
 **La règle vaut pour les trois, sans exception :** le contenu est établi, la
 provenance ne l'est pas. « L'adresse figure dans les octets du volume racine »
@@ -97,7 +97,7 @@ le porte. **Ouvrez la pièce citée avant d'en écrire un mot**, et rayez le res
 en disant pourquoi.
 
 `SUPPRIMES/` n'existe que pour un volume **xfs** ; ailleurs les fichiers rendus
-viennent seulement de photorec, et un fait le dit — ce n'est pas une collecte
+viennent de photorec seul, et un fait le dit — ce n'est pas une collecte
 incomplète.
 
 Pour chercher : `--textes fichier` prend **une chaîne par ligne, sans syntaxe** ;
@@ -122,17 +122,22 @@ ligne citant les identifiants dont elle sort.
 - **Les adresses réseau** — IP, MAC, hôtes web —, chacune avec la colonne
   **« vue dans »**, qui est ce qui compte : la même IP dans un profil réseau et
   dans le slack d'un disque ne raconte pas la même chose. Deux pièges que la
-  colonne « portée » signale : une IP **privée** ne prouve rien seule, et une
-  MAC **« administrée localement »** est tirée au hasard — **elle n'identifie
-  pas un matériel**. Détail dans `references/artefacts.md`.
+  colonne « portée » signale : une IP **privée** ne prouve rien seule, et une MAC
+  **« administrée localement »** est tirée au hasard — **elle n'identifie pas un
+  matériel**. Détail : `references/artefacts.md`.
+
+**Un dossier `PLASO/`** est une super-timeline — plaso ouvre les bases, les
+journaux et les caches que mactime ne regarde pas. L'extraction n'en recopie pas
+les millions d'événements : elle en fait le RECENSEMENT, qui dit ce que la pièce
+peut répondre. `grep -A 30 'super-timeline' references/artefacts.md`.
 
 **Si l'extraction plante, relancez la même commande** : elle reprend où elle
 s'était arrêtée.
 
-**Avant un `grep` sur la collecte**, vérifiez `ripgrep` (`command -v rg`) :
-sans lui l'outil se rabat sur un parcours qui **ignore son propre délai de
-garde** et ne rend jamais la main sur une timeline de plusieurs gigaoctets.
-Visez toujours un sous-dossier, jamais la racine de la collecte.
+**Avant un `grep` sur la collecte**, vérifiez `ripgrep` (`command -v rg`) : sans
+lui l'outil se rabat sur un parcours qui **ignore son propre délai de garde** et
+ne rend jamais la main sur une timeline de plusieurs gigaoctets. Visez un
+sous-dossier, jamais la racine.
 
 ### 2 · Vérifier avant d'écrire
 
@@ -189,22 +194,14 @@ doute demeure :
 ### 3 · Répartir, quand la collecte est grosse
 
 Un `faits.jsonl` de dizaines de milliers de lignes ne tient pas dans une
-fenêtre de contexte. **N'en chargez jamais la totalité pour « voir ».**
-
-Comptez d'abord, sans lire :
+fenêtre de contexte. **N'en chargez jamais la totalité pour « voir ».** Comptez
+d'abord, sans lire :
 
 ```bash
 cut -d'"' -f8 faits.jsonl | sort | uniq -c | sort -rn   # faits par catégorie
-wc -l faits.jsonl
 ```
 
-Puis, selon le volume :
-
-- **Quelques milliers de faits** : lisez par catégorie, avec `grep`.
-
-      grep '"categorie":"evenement"' faits.jsonl
-      grep '"categorie":"suspect"'   faits.jsonl
-
+- **Quelques milliers** : lisez par catégorie, au `grep`.
 - **Au-delà** : répartissez sur des **sous-agents** si l'outil `agent` est
   disponible. Crush les lance en parallèle et les restreint aux outils de
   **lecture seule** — un sous-agent ne peut, par construction, rien écrire
@@ -242,9 +239,9 @@ sources à chaque fois :
   fait `confirme: F0123`. Lisez le libellé : « fichier retrouvé » vaut **au
   chemin annoncé** ; « fichier de MÊME NOM » n'est qu'une homonymie, sans
   acteur. Un fichier non retrouvé se dit aussi ;
-- une **adresse IP** vue dans un `Accepted password ... from` et les comptes
-  qui s'en servent ;
-- un **compte de domaine** trouvé dans le cache sss et une session à son nom ;
+- une **adresse IP** vue dans un `Accepted password … from` et les comptes qui
+  s'en servent ;
+- un **compte de domaine** du cache sss et une session à son nom ;
 - un **domaine ayant posé un cookie** mais absent de l'historique : les deux
   bases sont indépendantes, et vider l'historique ne touche pas aux cookies.
   Le signaler quand le cas se présente — c'est une visite dont la trace
@@ -331,16 +328,15 @@ de tâches s'il y en a un (Crush a `todos`) : une analyse longue s'interrompt.
 Distinguez les deux, et dites-le dans l'annexe :
 
 - **L'extraction est reproductible à l'octet près.** Même collecte, même
-  extracteur, même `faits.jsonl` — l'ordre est fixé, les dates sont lues sans
-  dépendre de la langue du poste, rien n'est daté de l'exécution. Le manifeste,
-  lui, porte la date du jour : il décrit l'exécution, pas les pièces. Deux
-  analystes qui comparent leurs `faits_sha256` doivent trouver la même valeur ;
-  s'ils ne la trouvent pas, la collecte a bougé.
-- **Le rapport ne l'est pas** : c'est un texte, il variera d'une rédaction à
-  l'autre. Ce qui doit être stable, c'est sa **structure** — les dix sections
-  ci-dessus, dans cet ordre — et ses **appuis** : chaque affirmation renvoie à
-  un identifiant `F0123`, donc à une ligne vérifiable. Un lecteur ne relit pas
-  votre prose, il rejoue vos faits.
+  extracteur, même `faits.jsonl` : l'ordre est fixé, les dates ne dépendent pas
+  de la langue du poste, rien n'est daté de l'exécution. Le manifeste, lui,
+  porte la date du jour — il décrit l'exécution, pas les pièces. Deux analystes
+  qui comparent leurs `faits_sha256` doivent trouver la même valeur ; sinon, la
+  collecte a bougé.
+- **Le rapport ne l'est pas** : c'est un texte. Ce qui doit être stable, c'est
+  sa **structure** — les dix sections, dans cet ordre — et ses **appuis** :
+  chaque affirmation renvoie à un `F0123`, donc à une ligne vérifiable. Un
+  lecteur ne relit pas votre prose, il rejoue vos faits.
 
 ## Ce qu'il ne faut pas faire
 
@@ -348,8 +344,8 @@ Distinguez les deux, et dites-le dans l'annexe :
   le 8 » ne veut pas dire « personne n'a utilisé la machine » : `wtmp` peut
   avoir été tourné, ou effacé. Écrivez ce que vous voyez, et ce que ça exclut.
 - **N'attribuez pas une action à une personne.** Un compte a agi. Qui tenait le
-  clavier est une question que la collecte ne tranche pas — dites-le une fois
-  et tenez-vous-y.
+  clavier est une question que la collecte ne tranche pas — dites-le une fois et
+  tenez-vous-y.
 - **Ne classez pas « suspect » ce qui est banal.** `sudo yum install` un mardi
   matin n'est pas une intrusion. Gardez le mot pour ce qui le mérite, et
   justifiez-le chaque fois.

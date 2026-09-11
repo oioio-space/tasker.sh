@@ -58,7 +58,7 @@ import json, os, re, sys
 # Les dossiers que collecte-linux.conf écrit sous PREFIX/.
 DOSSIERS = {"SYSTEME", "PAQUETS", "COMPTES", "CONNEXIONS", "RESEAU",
             "PERSISTANCE", "JOURNAUX", "TIMELINE", "MACHINES", "SUPPRIMES",
-            "PHOTOREC", "STRINGS"}
+            "PHOTOREC", "STRINGS", "PLASO"}
 # Trois, et non un : un dossier qui s'appellerait « RESEAU » sans être une
 # collecte ne doit pas geler le poste de l'analyste.
 ASSEZ = 3

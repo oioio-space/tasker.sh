@@ -1038,6 +1038,92 @@ def pieces_abimees(base):
                for f in faits),
            "son silence se lisait « aucun historique »")
 
+    # ── 6 ter · la super-timeline plaso ──
+    # psort -o json_line a écrit l'horodatage sous TROIS formes selon la version
+    # de plaso. Le lecteur les accepte toutes et compte ce qu'il n'a pas su
+    # dater : une ligne muette est un aveu, pas un silence.
+    r = collecte("plaso", "PLASO", "COMPTES", "JOURNAUX")
+    telech = os.path.join(coin, "Hplaso")
+    cx = sqlite3.connect(telech)
+    cx.executescript(
+        "CREATE TABLE downloads(id INTEGER, start_time INTEGER, "
+        "target_path TEXT, tab_url TEXT);"
+        "INSERT INTO downloads VALUES(1, 13350000000000000, "
+        "'/home/jdupont/Documents/facture.pdf', 'https://f.example/f');")
+    cx.commit()
+    cx.close()
+    with open(telech, "rb") as fh:
+        blob_p = fh.read()
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        ti = tarfile.TarInfo(
+            "home/jdupont/.config/google-chrome/Default/History")
+        ti.size = len(blob_p)
+        tf.addfile(ti, io.BytesIO(blob_p))
+    with open(os.path.join(r, "COMPTES",
+                           "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"),
+              "wb") as fh:
+        fh.write(gzip.compress(buf.getvalue()))
+    with open(os.path.join(r, "JOURNAUX", "PC42_B12_ARTE_ubuntu_journal.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("2026-01-05T09:00:00+0100 pc42 systemd[1]: "
+                 "Mounted /run/media/jdupont/CLE_USB\n")
+    US = 1_000_000
+    evts = [
+        # forme 1 : « timestamp » en microsecondes
+        {"data_type": "fs:stat", "parser": "filestat", "timestamp": 1767600000 * US,
+         "timestamp_desc": "mtime",
+         "filename": "/home/jdupont/Documents/facture.pdf"},
+        {"data_type": "fs:stat", "parser": "filestat", "timestamp": 1767600001 * US,
+         "timestamp_desc": "crtime",
+         "display_name": "TSK:/usr/share/doc/ex/facture.pdf"},
+        # forme 2 : « date_time.timestamp » en secondes
+        {"data_type": "chrome:history:file_downloaded", "parser": "chrome_history",
+         "date_time": {"__type__": "DateTimeValues", "timestamp": 1767600100},
+         "timestamp_desc": "Start Time",
+         "filename": "/home/jdupont/Documents/facture.pdf"},
+        # forme 3 : une chaîne ISO dans « datetime »
+        {"data_type": "syslog:line", "parser": "syslog",
+         "datetime": "2026-01-05T09:00:00+01:00",
+         "timestamp_desc": "Content Modification Time",
+         "filename": "/var/log/syslog"},
+        # une ligne SANS date reconnue : elle doit être comptée, pas ignorée
+        {"data_type": "olecf:item", "parser": "olecf",
+         "filename": "/home/jdupont/x.doc"},
+    ]
+    evts += [{"data_type": "fs:stat", "parser": "filestat",
+              "timestamp": (1767600200 + i) * US, "timestamp_desc": "crtime",
+              "filename": f"/run/media/jdupont/CLE_USB/doc{i}.odt"}
+             for i in range(60)]
+    with open(os.path.join(r, "PLASO", "PC42_B12_ARTE_ubuntu_plaso.jsonl"),
+              "w", encoding="utf-8") as fh:
+        for e in evts:
+            fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+        fh.write("{ceci n'est pas du JSON\n")      # illisible, à compter aussi
+    _, faits = tourner(EXTRAIRE, r, os.path.join(coin, "plaso.jsonl"))
+    pl = [f for f in faits if f["categorie"] == "plaso"]
+    recens = next((f for f in pl if "événements dans" in f["fait"]), {})
+    yield ("plaso : les trois formes de date sont lues",
+           "2026-01-05T08:00:00Z" in str(recens.get("note"))
+           and "4 familles" in str(recens.get("note")),
+           str(recens.get("note", "AUCUN recensement"))[:70])
+    yield ("plaso : le chemin annoncé est attribué",
+           any(f["fait"] == "fichier retrouvé dans la super-timeline"
+               and f.get("acteur") == "jdupont" for f in pl)
+           and any(f["fait"] == "fichier de MÊME NOM dans la super-timeline"
+                   and not f.get("acteur") for f in pl),
+           "une homonymie n'attribue rien, ici non plus")
+    yield ("plaso : le plafond par support se dit",
+           any(f["categorie"] == "limite" and "support amovible plaso" in f["fait"]
+               for f in faits)
+           and sum(1 for f in pl if f["fait"] == "fichier vu sous un support "
+                   "amovible") == 40,
+           "60 événements sous le point de montage, 40 cités")
+    yield ("plaso : les lignes muettes sont comptées",
+           any(f["categorie"] == "limite" and f["fait"] == "lignes plaso non exploitées"
+               and f.get("valeur") == "2" for f in faits),
+           "une illisible, une sans date")
+
     # ── 7 · une correspondance à cheval sur deux blocs : comptée UNE fois ──
     # La déduplication se faisait sur la FIN de la correspondance, qui bouge
     # dès que le motif a une queue gourmande — six des onze motifs d'INTERETS.
