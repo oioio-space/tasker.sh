@@ -1034,6 +1034,119 @@ def pieces_abimees(base):
            "la recherche par domaine ne doit pas emporter le reste de la phase")
 
 
+def fausses_accusations(base):
+    """Un constat de conformité met en cause QUELQU'UN. Trois façons dont il
+    le faisait à tort, toutes mesurées sur le code d'avant."""
+    import gzip, io, tarfile
+
+    coin = os.path.join(base, "accusations")
+    CONTROLES = os.path.join(SKILLS, "conformite-linux", "scripts", "controles.py")
+    REGLES_LIVREES = os.path.join(SKILLS, "conformite-linux", "references",
+                                  "regles", "usage-non-professionnel.regles")
+
+    def collecte(nom, *dossiers):
+        r = os.path.join(coin, nom, "PC42_B12_ARTE_ubuntu")
+        for d in dossiers:
+            os.makedirs(os.path.join(r, d), exist_ok=True)
+        return r
+
+    def profil(racine, octets):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            ti = tarfile.TarInfo(
+                "home/jdupont/.mozilla/firefox/ab.default/places.sqlite")
+            ti.size = len(octets)
+            t.addfile(ti, io.BytesIO(octets))
+        with open(os.path.join(racine, "COMPTES",
+                               "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"),
+                  "wb") as fh:
+            fh.write(gzip.compress(buf.getvalue()))
+
+    def tourner(racine, sortie, *reste):
+        subprocess.run([sys.executable, CONTROLES, racine, "-o", sortie, *reste],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(sortie, encoding="utf-8") as fh:
+            return [json.loads(l) for l in fh if l.strip()]
+
+    # ── 1 · un domaine reconnu dans le CHEMIN d'une URL ──
+    # RE_HOTE garde jusqu'à 120 caractères de chemin, et le motif de la règle
+    # courait sur le tout. Une page d'intranet professionnel nommée
+    # « netflix.etude-de-cas.pdf » sortait « domaine présent dans une base de
+    # navigateur » au nom de la règle « streaming au travail ».
+    r = collecte("domaine-chemin", "COMPTES")
+    profil(r, b"\x00https://intranet.societe.example/docs/netflix.etude-de-cas.pdf\x00")
+    regle = os.path.join(coin, "streaming.regles")
+    with open(regle, "w", encoding="utf-8") as fh:
+        fh.write("regle: R03\ntitre: streaming au travail\n"
+                 "texte: Les services de streaming sont interdits.\n"
+                 "theme: usage\ndomaine: netflix[.]\n")
+    cs = tourner(r, os.path.join(coin, "domaine-chemin.jsonl"), "--regles", regle)
+    yield ("domaine dans le chemin : aucune accusation",
+           not any(c.get("regle") == "R03" and c["theme"] == "usage" for c in cs),
+           "un nom de fichier n'est pas un domaine visité")
+
+    # Mais plusieurs règles LIVRÉES visent le chemin exprès — « amazon\.fr/gp »
+    # distingue l'achat de la simple mention. Elles doivent continuer de mordre.
+    r = collecte("domaine-ancre", "COMPTES")
+    profil(r, b"\x00https://www.amazon.fr/gp/cart/view.html\x00https://x.com/home\x00")
+    cs = tourner(r, os.path.join(coin, "domaine-ancre.jsonl"),
+                 "--regles", REGLES_LIVREES)
+    vus = {c.get("valeur") for c in cs if c["constat"].startswith("domaine")}
+    yield ("domaine ancré sur l'hôte : toujours vu",
+           {"amazon.fr/gp", "x.com/home"} <= vus,
+           "les règles livrées qui visent le chemin gardent leur effet")
+
+    # ── 2 · un paquet RETIRÉ annoncé comme installé ──
+    # L'historique du gestionnaire garde les poses ET les retraits. Le constat
+    # annonçait « programme installé sur le poste » en citant la ligne
+    # « Commandline: apt remove teamviewer », alors que la liste des paquets
+    # installés ne le portait plus.
+    r = collecte("paquet-retire", "PAQUETS")
+    with open(os.path.join(r, "PAQUETS", "PC42_B12_ARTE_ubuntu_paquets.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("openssh-server\nvim\n")
+    hist = (b"Start-Date: 2024-03-01  10:00:00\n"
+            b"Commandline: apt remove teamviewer\n"
+            b"Remove: teamviewer:amd64 (15.40.8)\n")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        ti = tarfile.TarInfo("history.log")
+        ti.size = len(hist)
+        tf.addfile(ti, io.BytesIO(hist))
+    with open(os.path.join(r, "PAQUETS",
+                           "PC42_B12_ARTE_ubuntu_historique.tar.gz"), "wb") as fh:
+        fh.write(gzip.compress(buf.getvalue()))
+    regle = os.path.join(coin, "distant.regles")
+    with open(regle, "w", encoding="utf-8") as fh:
+        fh.write("regle: R05\ntitre: prise en main a distance\n"
+                 "texte: Les outils de prise en main a distance sont interdits.\n"
+                 "theme: usage\nprogramme: teamviewer\n")
+    cs = tourner(r, os.path.join(coin, "paquet-retire.jsonl"), "--regles", regle)
+    dits = [c["constat"] for c in cs if c.get("valeur") == "teamviewer"]
+    yield ("paquet retiré : jamais dit « installé »",
+           dits and not any("installé sur le poste" in d for d in dits),
+           f"le constat dit : « {dits[0] if dits else 'AUCUN'} »")
+
+    # ── 3 · une règle SANS indice n'est pas « conforme » ──
+    # C'est un acquittement prononcé sans instruction : la règle n'a jamais été
+    # cherchée, et « conforme » est justement ce que le décompte des manquements
+    # écarte.
+    r = collecte("regle-muette", "PAQUETS")
+    with open(os.path.join(r, "PAQUETS", "PC42_B12_ARTE_ubuntu_paquets.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("vim\n")
+    regle = os.path.join(coin, "muette.regles")
+    with open(regle, "w", encoding="utf-8") as fh:
+        fh.write("regle: R04\ntitre: chiffrement du disque\n"
+                 "texte: Le disque d un poste nomade doit etre chiffre.\n"
+                 "theme: durcissement\n")
+    cs = tourner(r, os.path.join(coin, "regle-muette.jsonl"), "--regles", regle)
+    themes = {c["theme"] for c in cs if c.get("regle") == "R04"}
+    yield ("règle sans indice : jamais « conforme »",
+           "conforme" not in themes and "limite" in themes,
+           f"thème posé : {', '.join(sorted(themes)) or 'AUCUN'}")
+
+
 def main():
     base = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "artefacts")
     shutil.rmtree(base, ignore_errors=True)
@@ -1081,6 +1194,11 @@ def main():
 
     print("\n── PIÈCES ABÎMÉES : LE TROU SE DIT ──")
     for artefact, ok, detail in pieces_abimees(base):
+        manques += not ok
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:38s} {detail}")
+
+    print("\n── CE QU'UN CONSTAT NE DOIT PAS DIRE ──")
+    for artefact, ok, detail in fausses_accusations(base):
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:38s} {detail}")
 

@@ -578,6 +578,18 @@ RE_HOTE = re.compile(
     rb'(?:[/?#][^\x00\s"\'<>]{0,120})?', re.I)
 
 
+RE_SCHEMA = re.compile(r'^[a-z][a-z0-9+.-]{1,10}://', re.I)
+RE_DEBUT_CHEMIN = re.compile(r'[/?#]')
+
+
+def _fin_hote(hote):
+    """Où s'arrête le nom d'hôte dans ce que RE_HOTE a capturé."""
+    schema = RE_SCHEMA.match(hote)
+    depart = schema.end() if schema else 0
+    coupe = RE_DEBUT_CHEMIN.search(hote, depart)
+    return coupe.start() if coupe else len(hote)
+
+
 def _interesse(nom):
     base = os.path.basename(nom)
     return (base in BASES_NAVIGATEUR or base in FICHIERS_SECRETS
@@ -618,8 +630,23 @@ class Balayage:
         hotes = collections.Counter(m.group(0).lower().decode("latin-1")
                                     for m in RE_HOTE.finditer(blob))
         for hote, n in hotes.items():
+            fin = _fin_hote(hote)
             for ident, rx in self.motifs:
                 for m in rx.finditer(hote):
+                    # La correspondance doit COMMENCER dans le nom d'hôte.
+                    # RE_HOTE garde jusqu'à 120 caractères de chemin, et le
+                    # motif d'une règle courait sur le tout : une page
+                    # d'intranet professionnel nommée « netflix.etude-de-cas.pdf »
+                    # sortait « domaine présent dans une base de navigateur »
+                    # au nom de la règle « streaming au travail ». C'est une
+                    # accusation, portée contre quelqu'un, sur un nom de
+                    # fichier. Le chemin reste lu, car plusieurs règles
+                    # livrées s'en servent exprès — « amazon\.[a-z]{2,3}/gp »
+                    # distingue l'achat de la simple mention — mais elles
+                    # ancrent toutes sur l'hôte, et c'est cet ancrage qu'on
+                    # exige.
+                    if m.start() >= fin:
+                        continue
                     trouve = par[ident][m.group(0).lower()]
                     trouve[0] += n
                     trouve[1].add(hote[:80])
@@ -754,7 +781,7 @@ def lire_paquets(c):
     """
     out = []
     for f in c.chercher("_paquets.txt", "PAQUETS"):
-        out.append((c.rel(f), "la liste des paquets installés",
+        out.append((c.rel(f), METHODE_LISTE,
                     [(l, None) for l in c.lignes(f) if l.strip()]))
     for arch in c.chercher("_historique.tar.gz", "PAQUETS"):
         for nom, blob in c.membres_tar(arch, lambda n: not n.endswith((".sqlite", ".json"))
@@ -1032,8 +1059,10 @@ CLES_INDICE = ("domaine", "programme", "fichier", "commande", "wifi", "horaire",
 PREUVE = {
     "domaine": "une CONSULTATION du site à la date que porte l'historique — "
                "ni un téléchargement, ni un envoi de données",
-    "programme": "la PRÉSENCE du programme, pas son exécution ni l'usage qui "
-                 "en a été fait",
+    "programme": "ce que dit la pièce citée — la liste des paquets établit la "
+                 "PRÉSENCE, l'historique du gestionnaire seulement qu'une pose "
+                 "ou un RETRAIT a eu lieu ; ni l'une ni l'autre ne dit que le "
+                 "programme a servi",
     "fichier": "la PRÉSENCE d'un fichier dans le dossier du compte, pas qui "
                "l'y a mis ni ce qu'il contient",
     "commande": "qu'une commande a été SAISIE dans l'interpréteur de ce compte "
@@ -1200,17 +1229,43 @@ def _chercher_inventaire(pieces, motif, brut, ident, quoi):
                             "affiche : modification, sans année si récente")
 
 
+# « apt remove », « dnf erase », « pacman -R », « Remove: paquet:amd64 » : une
+# ligne d'historique qui dit le CONTRAIRE d'une installation.
+RE_RETRAIT = re.compile(r'(?:\b(?:remove|purge|erase|uninstall|autoremove)\b'
+                        r'|\bpacman\b[^\n]*\s-[A-Za-z]*R)', re.I)
+METHODE_LISTE = "la liste des paquets installés"
+
+
 def _chercher_programme(pieces, motif, brut, ident):
     if not pieces["paquets"] and not pieces["inventaires"]:
         raise Absente("ni liste de paquets ni inventaire")
     for source, methode, lignes in pieces["paquets"]:
+        installee = methode == METHODE_LISTE
         for v, (n, ex, dates) in sorted(_grouper(lignes, motif).items()):
-            yield dict(quoi="programme installé sur le poste", valeur=v, source=source,
+            ligne = ex[0][0].strip()[:120]
+            if installee:
+                quoi = "programme installé sur le poste"
+                note = ("la liste des paquets ne dit pas quel compte a demandé "
+                        "l'installation : la portée est le poste. Ligne : " + ligne)
+            else:
+                # L'historique garde la trace des poses ET des retraits. Le
+                # constat annonçait « programme installé sur le poste » pour une
+                # ligne « Commandline: apt remove teamviewer », alors que la
+                # liste des paquets installés, elle, ne le portait plus : le
+                # rapport accusait quelqu'un d'avoir un logiciel interdit en
+                # citant la ligne qui prouve qu'il l'a RETIRÉ.
+                retrait = bool(RE_RETRAIT.search(ligne))
+                quoi = ("programme RETIRÉ, d'après l'historique du gestionnaire"
+                        if retrait else
+                        "programme posé, d'après l'historique du gestionnaire")
+                note = ("l'historique dit ce qui a été FAIT, pas ce qui est là "
+                        "aujourd'hui : c'est la liste des paquets installés qui "
+                        "en décide" + (" — et cette ligne-ci est un RETRAIT"
+                                       if retrait else "") + ". Ligne : " + ligne)
+            yield dict(quoi=quoi, valeur=v, source=source,
                        portee="poste", date=dates[-1] if dates else None,
                        methode=f"motif « {brut} » cherché dans {methode}",
-                       note="la liste des paquets ne dit pas quel compte a demandé "
-                            "l'installation : la portée est le poste. Ligne : "
-                            + ex[0][0].strip()[:120])
+                       note=note)
     if pieces["inventaires"]:
         yield from _chercher_inventaire(pieces, motif, brut, ident,
                                         "programme présent dans le dossier personnel")
@@ -1332,6 +1387,20 @@ def appliquer_regles(c, regles, pieces):
     """
     for r in regles:
         poses, absentes, deja = 0, [], set()
+        if not r["indices"]:
+            # Une règle SANS indice n'a jamais été cherchée : la dire
+            # « conforme » est un acquittement prononcé sans instruction. Le
+            # cas se présente dès qu'on recopie une phrase de la charte en
+            # remettant sa traduction à plus tard — et « conforme » est
+            # justement ce que le décompte des manquements écarte.
+            constat("limite", f"règle {r['regle']} : aucun indice à chercher",
+                    r["titre"], c.prefix, "lecture du fichier de règles",
+                    regle=r["regle"],
+                    note="cette règle n'a pas été traduite en quelque chose que "
+                         "l'on cherche dans la collecte : elle n'a donc PAS été "
+                         "vérifiée. Ajoutez-lui un indice, ou retirez-la du "
+                         "fichier de règles")
+            continue
         for cle, motif, etiquette, brut in r["indices"]:
             if cle == "controle":
                 poses += _adosser(r, motif)
