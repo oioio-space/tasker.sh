@@ -239,13 +239,29 @@ hook le nomme, ou il n'est pas exécutable.
 résout pas ne bloque rien et ne dit rien : Crush écrit un avertissement dans
 son journal, puis laisse passer — et l'écriture aboutit pour de bon. Le script
 peut donc rendre 2 tout seul pendant que Crush ne l'appelle jamais. La seule
-vérification qui vaille passe par le haut :
+vérification qui vaille passe par le haut, et elle se lit dans le JOURNAL de
+Crush — **pas** sur la sortie de `crush run` : le motif du refus part au modèle,
+pas au terminal.
 
-    crush run "écris bonjour dans /tmp/essai/PC01/SYSTEME/x" --debug 2>&1 \
-        | grep -c "Tool call blocked by hook"
+    D="$(crush dirs | sed -n 2p)"          # ou la valeur d'« option data-directory »
+    rm -f /tmp/essai/PC01/SYSTEME/x
+    crush run "écris bonjour dans /tmp/essai/PC01/SYSTEME/x" >/dev/null 2>&1
+    grep -c '"Hook completed".*"decision":"deny"' "$D/logs/crush.log"
+    ls /tmp/essai/PC01/SYSTEME/x
 
-Le compte doit valoir 1. Le montage en lecture seule, lui, tient dans tous les
-cas — c'est la seule garantie réelle ; le reste est une ceinture.
+Le compte doit valoir **1**, et `ls` doit dire « No such file ». Les deux
+comptent : mesuré, hook retiré du `crushrc`, le compte tombe à 0 **et le
+fichier est créé**. `--debug` n'est pas nécessaire — la ligne est de niveau
+INFO.
+
+La même vérification vaut pour l'image montée, avec les deux moitiés de la
+règle — ce qui doit passer, et ce qui ne doit pas :
+
+    crush run "lis mnt/etc/os-release, puis copie /etc/hosts dans mnt/etc/" >/dev/null 2>&1
+    ls ~/analyse/mnt/etc/hosts          # doit dire « No such file »
+
+Le montage en lecture seule, lui, tient dans tous les cas — c'est la seule
+garantie réelle ; le reste est une ceinture.
 
 Un dossier qui n'est PAS une collecte et qu'on veut protéger quand même se
 liste un par ligne dans `~/.config/crush/scelles.txt` — en plus de la
