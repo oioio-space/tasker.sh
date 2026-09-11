@@ -198,6 +198,36 @@ lancez pas Crush dans un dossier dont vous n'avez pas lu la configuration.
 `garde-scelles.sh` est la ceinture décrite au §3 ; le §9 explique les réglages
 du modèle.
 
+### Tout dans le dossier d'analyse, rien de global
+
+Le `crushrc` ci-dessus se pose dans `~/.config/crush/`, donc pour TOUS les
+projets. On peut aussi ne rien mettre de global : Crush cherche `.crushrc` puis
+`crushrc` dans le dossier de travail — en remontant jusqu'à la racine git —, et
+**les configurations de projet priment sur les globales** (`load.go:928-955`).
+Un poste qui sert aussi à autre chose garde alors son Crush intact.
+
+    ~/analyse/
+      .crushrc              ← la configuration ET le hook
+      garde-scelles.sh      ← la garde
+      .crush/skills/        ← les deux skills (.agents/, .claude/, .cursor/ marchent aussi)
+      .crush/               ← l'état de session (data-directory)
+      PC01_B13_SYCOBS_LINUX/  ← le scellé
+      mnt/                  ← l'image montée en lecture seule
+
+Deux lignes du `crushrc` livré changent, et une disparaît :
+
+    CONFIG="$PWD"                             # au lieu de ~/.config/crush
+    option data-directory "$PWD/.crush"
+    # option skill-path : à supprimer — .crush/skills est déjà regardé
+
+`$PWD` est le dossier d'où `crush` est lancé : lancez-le depuis le dossier
+d'analyse. Depuis un sous-dossier, `.crushrc` serait bien trouvé mais `$PWD`
+pointerait ailleurs — donnez alors le chemin absolu.
+
+Vérifié de bout en bout, `~/.config/crush` inexistant : les deux skills sont
+chargés, et un `write` d'une pièce neuve dans le scellé est refusé (1 ligne
+`"decision":"deny"` au journal, aucun fichier créé).
+
 ## 3 · Protéger les scellés
 
 **La seule garantie qui tienne est celle du noyau.** Une permission dans un
