@@ -276,6 +276,9 @@ PAM = [
     ("pam_faillock.so", "pam_tally2.so", "aucun blocage du compte après des échecs répétés",
      "la charte impose-t-elle un verrouillage après plusieurs échecs ?"),
 ]
+# Copie conforme du motif de forensic-linux/scripts/extraire.py : les deux
+# skills doivent nommer le même support de la même façon.
+RE_MEDIA = re.compile(r'(?:/run)?/media/([^/\s]+)/([^\s,;:]*[^\s,;:.])')
 RE_NULLOK = re.compile(r'^\s*[^#\n]*\bnullok\b', re.M)
 RE_MINLEN = re.compile(r'\bminlen\s*=\s*(\d+)')
 
@@ -936,8 +939,17 @@ def usage(c, pieces):
     # Supports amovibles : le journal les porte, avec le compte dans le chemin.
     j = c.un("_journal.txt", "JOURNAUX")
     if j:
-        for compte, etiquette in sorted(set(re.findall(r'/run/media/([^/\s]+)/(\S+)',
-                                                       c.texte(j)))):
+        # En FLUX, et non c.texte(j) : celui-ci décode la pièce entière et la
+        # garde sous lru_cache jusqu'à la fin du processus — un pic de l'ordre
+        # du gigaoctet sur un gros journal, pour une expression qui n'a besoin
+        # que d'une ligne à la fois. Le motif est celui du skill forensic, au
+        # caractère près : le point final de « Mounted /run/media/x/CLE. » ne
+        # doit pas entrer dans l'étiquette, sans quoi les deux rapports
+        # nomment le même support différemment.
+        vus = set()
+        for ligne in c.lignes(j):
+            vus.update(RE_MEDIA.findall(ligne))
+        for compte, etiquette in sorted(vus):
             constat("usage", "support amovible monté", etiquette,
                     c.rel(j), "chemins /run/media/<compte>/ dans le journal",
                     acteur=compte,

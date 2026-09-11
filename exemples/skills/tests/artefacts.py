@@ -18,7 +18,7 @@ l'ajouter ici, c'est ne pas la tester.
 
 Sort 0 si tout est trouvé, 1 sinon, en disant ce qui manque.
 """
-import calendar, gzip, io, json, os, re, shutil, sqlite3, subprocess, zipfile
+import bz2, calendar, gzip, io, json, os, re, shutil, sqlite3, subprocess, zipfile
 import sys, tarfile, tempfile, time
 
 ICI = os.path.dirname(os.path.abspath(__file__))
@@ -833,6 +833,47 @@ def blocs_bornes():
            f"{rendu / 1048576:.0f} Mo rendus, etat={etat.get('tronque') or 'AUCUN'}")
     yield ("gz : empreinte complète", h.hexdigest() == hashlib.sha256(comp := bombe).hexdigest(),
            "sha256 du fichier entier malgré la troncature")
+
+    # Le plafond vaut pour les CINQ compresseurs, pas pour le seul .gz. Un .xz
+    # comprime bien mieux qu'un gzip : c'est la bombe la plus efficace des
+    # quatre, et c'était justement celle qui passait par lzma.decompress d'un
+    # bloc, sans aucune borne.
+    import lzma as _lz
+    plafond = extraire.PLAFOND_ARCHIVE
+    try:
+        extraire.PLAFOND_ARCHIVE = 1 << 20
+        avant = len(extraire.FAITS)
+        for suffixe, comprimer in ((".xz", _lz.compress), (".bz2", bz2.compress),
+                                   (".gz", gzip.compress)):
+            rendu = extraire.decomprimer("syslog.1" + suffixe,
+                                         comprimer(b"\0" * (64 << 20)))
+            yield (f"bombe {suffixe} : bornée",
+                   rendu is not None and len(rendu) <= (1 << 20),
+                   f"{len(rendu or b'') / 1048576:.2f} Mio rendus (plafond 1,00)")
+        dits = [x for x in extraire.FAITS[avant:] if x["categorie"] == "limite"]
+        yield ("bombes : la coupe se dit", len(dits) == 3,
+               f"{len(dits)} fait(s) « limite » pour trois bombes")
+        del extraire.FAITS[avant:]
+    finally:
+        extraire.PLAFOND_ARCHIVE = plafond
+
+    # Un .gz dont le corps est abîmé APRÈS un secret : le contenu sain qui
+    # précède doit sortir, et UNE seule fois. zlib lève pour tout l'appel, si
+    # bien qu'un mégaoctet d'entrée d'un coup faisait perdre tout le sain ;
+    # puis le rattrapage relisait le fichier depuis le début et comptait deux
+    # fois ce qui précédait la corruption. Mesuré : 2 occurrences pour une.
+    secret = b"\npassword=SuperMotDePasse2024\n"
+    brut = os.urandom(200_000) + secret + os.urandom(2_000_000)
+    gz = bytearray(gzip.compress(brut))
+    gz[len(gz) - 300_000] ^= 0xFF
+    etat, morceaux = {}, []
+    for _, clair in extraire._blocs("s.gz", lambda: io.BytesIO(bytes(gz)), etat):
+        morceaux.append(clair)
+    tout = b"".join(morceaux)
+    yield ("gz abîmé : le préfixe sain sort UNE fois",
+           tout.count(secret) == 1 and "illisible" in etat,
+           f"{tout.count(secret)} occurrence(s) du secret, "
+           f"{len(tout) / 1048576:.1f} Mio sauvés sur 2,1")
 
 
 def pieces_abimees(base):

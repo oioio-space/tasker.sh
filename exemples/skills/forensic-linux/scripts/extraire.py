@@ -1811,7 +1811,7 @@ def historique_paquets(c):
                                               "dans le fichier, ligne à ligne")
             continue
         for l in txt.splitlines():
-            if re.search(r'\b(Erased|Removed|remove|purge)\b', l):
+            if RE_RETRAIT.search(l):
                 m = re.match(r'^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)', l)
                 fait("paquet", "paquet retiré", _coupe(l.strip(), 160),
                      f"{c.rel(t)} → {nom}",
@@ -2971,7 +2971,12 @@ def _zstd(fh):
 
 
 def _borne(fh, nom):
-    """Les octets d'un flux comprimé, jusqu'au plafond d'archive."""
+    """Les octets d'un flux comprimé, jusqu'au plafond d'archive.
+
+    Le plafond vaut pour les cinq compresseurs : un .gz de 64 Ko rendant
+    64 Mio faisait un pic mesuré de 141 Mio, et un journal tourné se comprime
+    d'un facteur trois cents.
+    """
     with contextlib.closing(fh):
         clair = fh.read(PLAFOND_ARCHIVE + 1)
     if len(clair) > PLAFOND_ARCHIVE:
@@ -2990,29 +2995,38 @@ def decomprimer(nom, blob):
     l'appelant en fait un fait, pour que le silence ne passe pas pour une
     absence de preuve.
     """
-    # Un plafond, comme _blocs en a un : gzip.decompress d'un .gz de 64 Ko
-    # rendant 64 Mio faisait un pic mesuré de 141 Mio, sans aucune borne, et un
-    # journal tourné se comprime d'un facteur trois cents. On décompresse donc
-    # en flux, et on s'arrête en le DISANT.
-    try:
-        if nom.endswith(".gz"):
-            return _borne(gzip.GzipFile(fileobj=io.BytesIO(blob)), nom)
-        if nom.endswith((".xz", ".lzma")):
-            return lzma.decompress(blob)
-        if nom.endswith(".bz2"):
-            return bz2.decompress(blob)
-        if nom.endswith(".zst"):
-            fh = _zstd(io.BytesIO(blob))
-            return fh.read() if fh is not None else None
-    except (OSError, EOFError, lzma.LZMAError, ValueError, zlib.error):
-        # zlib.error n'hérite d'AUCUNE des quatre autres, et c'est pourtant
-        # l'exception normale d'un .gz dont l'en-tête est valide et le corps
-        # deflate abîmé — la corruption la plus courante. Elle remontait donc
-        # jusqu'à etape(), qui arrêtait la phase journaux ENTIÈRE : mesuré,
-        # 1 fait au lieu de 52, la connexion SSH du membre SUIVANT l'archive
-        # abîmée n'étant jamais lue.
-        return None
+    # UNE table de compresseurs, celle de _FLUX, et pas une seconde en if/elif.
+    # Le commentaire de _FLUX promet qu'« ajouter un compresseur ici le rend
+    # lisible partout » : cette fonction-ci était l'endroit où ce n'était pas
+    # vrai. Elle avait sa propre liste, et surtout le plafond n'y couvrait que
+    # le .gz — .xz, .lzma et .bz2 passaient par lzma.decompress/bz2.decompress
+    # d'un seul bloc, sans aucune borne. Or un .xz comprime BIEN mieux qu'un
+    # gzip : la bombe de décompression qu'on croyait désamorcée restait entière
+    # sur le compresseur le plus dangereux des quatre.
+    bas = nom.lower()
+    for suffixe, lecteur in _FLUX:
+        if not bas.endswith(suffixe):
+            continue
+        try:
+            fh = lecteur(io.BytesIO(blob))
+            return _borne(fh, nom) if fh is not None else None
+        except (OSError, EOFError, lzma.LZMAError, ValueError, zlib.error):
+            # zlib.error n'hérite d'AUCUNE des quatre autres, et c'est pourtant
+            # l'exception normale d'un .gz dont l'en-tête est valide et le corps
+            # deflate abîmé — la corruption la plus courante. Elle remontait
+            # jusqu'à etape(), qui arrêtait la phase journaux ENTIÈRE : mesuré,
+            # 1 fait au lieu de 52, la connexion SSH du membre SUIVANT
+            # l'archive abîmée n'étant jamais lue.
+            return None
     return blob
+
+
+# « apt remove », « dnf erase », « pacman -R », « Remove: paquet:amd64 ». Copie
+# conforme du motif de conformite-linux/scripts/controles.py : sans lui,
+# « apt autoremove teamviewer » était un RETRAIT pour l'un des deux skills et
+# rien du tout pour l'autre — « \bremove\b » ne mord pas dans « autoremove ».
+RE_RETRAIT = re.compile(r'(?:\b(?:remove|purge|erase|uninstall|autoremove|Erased'
+                        r'|Removed)\b|\bpacman\b[^\n]*\s-[A-Za-z]*R)', re.I)
 
 
 # ── les fichiers de connexion en binaire ─────────────────────────────
@@ -3489,6 +3503,13 @@ def _decomprime(nom, ouvrir, etat):
     return None
 
 
+# Le pas d'entrée du décompresseur. Court, parce que zlib lève pour TOUT
+# l'appel : c'est la quantité de contenu sain qu'on accepte de perdre autour
+# d'un octet abîmé. Assez long, cependant, pour que la boucle Python reste
+# négligeable devant le travail de zlib.
+PAS_DEFLATE = 1 << 15
+
+
 def _blocs(nom, ouvrir, etat=None, bloc=1 << 20):
     """Rend (brut, clair) : les octets de la source, et son contenu lisible.
 
@@ -3529,21 +3550,28 @@ def _blocs(nom, ouvrir, etat=None, bloc=1 << 20):
                 yield brut, b""
                 continue
             entree, premier = brut, brut
-            while True:
+            while entree:
+                tranche, reste = entree[:PAS_DEFLATE], entree[PAS_DEFLATE:]
                 try:
-                    clair = dec.decompress(entree, bloc)
+                    # L'ENTRÉE est découpée, et pas seulement la sortie. zlib
+                    # lève pour tout l'appel : si on lui donne le mégaoctet
+                    # d'un coup, un octet abîmé à la fin fait perdre le
+                    # mégaoctet entier de contenu SAIN qui le précède. Mesuré :
+                    # un mot de passe placé avant la corruption ne sortait pas
+                    # du tout. Avec un pas court, seule la tranche abîmée est
+                    # perdue, et tout ce qui précède a déjà été rendu.
+                    clair = dec.decompress(tranche, bloc)
                 except zlib.error as e:
-                    # Un flux deflate abîmé. L'exception remontait jusqu'à
-                    # lire_source, qui l'avalait SANS RIEN NOTER : le fichier
-                    # disparaissait en entier de l'analyse — et son EMPREINTE
-                    # avec lui, alors qu'elle ne dépend d'aucune décompression.
-                    # Une empreinte recherchée sortait donc « ABSENTE » pour un
-                    # fichier bel et bien là. On continue à lire les octets
-                    # bruts, pour que l'empreinte porte sur le fichier entier.
+                    # L'exception remontait jusqu'à lire_source, qui l'avalait
+                    # SANS RIEN NOTER : le fichier disparaissait en entier de
+                    # l'analyse — et son EMPREINTE avec lui, alors qu'elle ne
+                    # dépend d'aucune décompression. On continue donc à lire
+                    # les octets bruts, pour que l'empreinte porte sur le
+                    # fichier entier ; mais PAS de second passage, qui relirait
+                    # depuis le début et compterait deux fois ce qui précède.
                     etat["illisible"] = f"flux comprimé abîmé ({e})"
                     yield premier, b""
-                    dec = None
-                    comprime = True      # le second passage tentera sa chance
+                    dec, comprime = None, False
                     break
                 rendu += len(clair)
                 # « premier » ne sort qu'une fois : répéter les octets bruts
@@ -3553,20 +3581,20 @@ def _blocs(nom, ouvrir, etat=None, bloc=1 << 20):
                 if rendu > PLAFOND_ARCHIVE:
                     etat["tronque"] = "plafond d'archive atteint"
                     break
+                # Un .gz peut porter PLUSIEURS membres — « cat a.gz b.gz »,
+                # « gzip -c f1 f2 », des rotations concaténées. decompressobj
+                # s'arrête au premier ; le mot-clé rangé dans le second sortait
+                # « ABSENT ». unused_data porte alors ce qui reste à ouvrir.
+                # unconsumed_tail et unused_data ne portent que ce qui reste
+                # de la TRANCHE : le reste de l'entrée s'y ajoute, il ne s'y
+                # substitue pas. L'écrire autrement perdait des octets — 9,6 Mo
+                # rendus sur 25, ce que la régression a vu tout de suite.
                 if dec.eof:
-                    # Un .gz peut porter PLUSIEURS membres — « cat a.gz b.gz »,
-                    # « gzip -c f1 f2 », des rotations concaténées. decompressobj
-                    # s'arrête au premier ; gzip.decompress, lui, les lit tous.
-                    # Le mot-clé rangé dans le second membre sortait « ABSENT ».
-                    reste_gz = dec.unused_data
-                    if not reste_gz:
-                        break
-                    dec = zlib.decompressobj(16 + zlib.MAX_WBITS)
-                    entree = reste_gz
-                    continue
-                entree = dec.unconsumed_tail
-                if not entree:
-                    break
+                    entree = dec.unused_data + reste
+                    if entree:
+                        dec = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                else:
+                    entree = dec.unconsumed_tail + reste
     if comprime:
         for morceau in _decomprime(nom, ouvrir, etat) or ():
             yield b"", morceau
