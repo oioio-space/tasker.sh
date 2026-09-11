@@ -140,7 +140,64 @@ def main():
     T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/messages": "Jan  6 21:00:00 pc05 daemon.info sudo: alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/sbin/apk add transmission-cli\nJan  6 21:01:00 pc05 auth.info sshd[12]: Accepted publickey for alice from 10.0.0.7 port 5000 ssh2\n"})
     T(f"RESEAU/{P}_reseau.tar.gz", {"etc/wpa_supplicant/wpa_supplicant.conf": 'network={\n    ssid="ibis-hotel-wifi"\n}\n', "etc/ssh/sshd_config": "PermitRootLogin prohibit-password\n"})
     print("matrice :", sorted(os.listdir(B)))
+    return verifier(B)
+
+
+# Ce que chaque famille DOIT donner. Jusqu'ici ce fichier posait cinq collectes
+# et n'en tirait rien : il n'avait aucune assertion, et il passait aussi bien
+# sur un extracteur cassé que sur un extracteur juste. Les attentes sont celles
+# que les commentaires de chaque bloc annoncent déjà.
+ATTENDUS = {
+    "PC01_A1_MAT_fedora":   ["rpm", "dnf"],
+    "PC02_A1_MAT_debian":   ["dpkg", "apt"],
+    "PC03_A1_MAT_opensuse": ["zypp", "rpm"],
+    "PC04_A1_MAT_arch":     ["pacman"],
+    "PC05_A1_MAT_alpine":   ["apk"],
+}
+
+
+def verifier(base):
+    """Sur chacune des cinq : l'extraction tourne, rend des faits, et la
+    famille se reconnaît à la source des paquets."""
+    import subprocess
+    ici = os.path.dirname(os.path.abspath(__file__))
+    extraire = os.path.join(ici, "..", "forensic-linux", "scripts", "extraire.py")
+    controles = os.path.join(ici, "..", "conformite-linux", "scripts", "controles.py")
+    manques = 0
+    for prefixe, marqueurs in sorted(ATTENDUS.items()):
+        racine = os.path.join(base, prefixe)
+        faits = os.path.join(base, prefixe + "-faits.jsonl")
+        p = subprocess.run([sys.executable, extraire, racine, "-o", faits],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        constats = os.path.join(base, prefixe + "-constats.jsonl")
+        q = subprocess.run([sys.executable, controles, racine, "-o", constats,
+                            "--faits", faits],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        lus = []
+        if os.path.exists(faits):
+            with open(faits, encoding="utf-8") as fh:
+                lus = [json.loads(l) for l in fh if l.strip()]
+        # Un traceback pendant une PHASE ne fait pas échouer le programme :
+        # etape() le rattrape. On regarde donc aussi stderr.
+        plante = [l for l in p.stderr.decode("utf-8", "replace").splitlines()
+                  if l.startswith("  ! ")]
+        utiles = [x for x in lus if x["categorie"] != "limite"]
+        sources = " ".join(str(x.get("source", "")) + " " + str(x.get("methode", ""))
+                           for x in lus)
+        ok = (p.returncode == 0 and q.returncode == 0 and not plante
+              and len(utiles) >= 5 and any(m in sources for m in marqueurs))
+        manques += not ok
+        detail = (f"{len(utiles)} faits hors limite"
+                  if ok else
+                  f"code {p.returncode}/{q.returncode}, {len(utiles)} faits utiles"
+                  + (f", phases en erreur : {plante[0][:60]}" if plante else "")
+                  + ("" if any(m in sources for m in marqueurs)
+                     else f", aucun marqueur {marqueurs}"))
+        print(f"  {'ok ' if ok else 'MANQUE'}  {prefixe:24s} {detail}")
+    if manques:
+        print(f"{manques} famille(s) mal traitée(s).", file=sys.stderr)
+    return 1 if manques else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

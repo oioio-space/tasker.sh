@@ -189,11 +189,27 @@ class Collecte:
         return t[0] if t else None
 
     @functools.lru_cache(maxsize=None)
-    def texte(self, chemin, limite=8_000_000):
+    def texte(self, chemin, limite=400_000_000):
+        """Le contenu d'une pièce, avec un plafond qui SE DIT s'il mord.
+
+        Il était à 8 Mo, en silence. usage() cherche les supports amovibles
+        dans le journal avec ce texte-là : au-delà, le journal était coupé sans
+        un mot et les montages de la fin disparaissaient. Mesuré sur un journal
+        de 9 Mo, une clé branchée en début de fichier ressortait, celle de la
+        fin non. Le skill forensic lit la même pièce avec 400 Mo : la divergence
+        entre les deux skills valait un facteur cinquante.
+        """
         try:
             with open(chemin, "rb") as fh:
                 self.lus.add(chemin)
-                return fh.read(limite).decode("utf-8", "replace")
+                brut = fh.read(limite)
+                if len(brut) == limite and os.path.getsize(chemin) > limite:
+                    constat("limite", "pièce lue en partie seulement",
+                            self.rel(chemin), self.rel(chemin),
+                            f"lecture bornée à {limite // 1_000_000} Mo",
+                            portee="poste",
+                            note="ce qui suit n'est PAS dans l'analyse")
+                return brut.decode("utf-8", "replace")
         except OSError:
             return ""
 
