@@ -164,7 +164,7 @@ Puis **trois contrôles**, et aucun n'est décoratif :
             || echo "PAS EN LECTURE SEULE : $m"
     done
 
-    # 2 · la garde mord-elle ?
+    # 2 · la garde mord-elle ?  (et « --verdict <chemin> » pour un cas précis)
     outils/garde-scelles.sh --essai
 
     # 3 · Crush voit-il les skills ? (hors ligne : c'est journalisé avant
@@ -599,11 +599,42 @@ ordre et 1 sinon. Rien à taper, donc rien à mal taper : un chemin écrit à la
 main qui ne désigne aucun dossier existant fait rendre 0 à la garde, très
 correctement, et ce 0 se lit « elle ne mord pas ».
 
-Avec un scellé jouet, hors de tout montage :
+Pour interroger **un chemin précis**, `--verdict` le prend comme vous l'écrivez
+au shell, résolu depuis le dossier courant :
 
-    mkdir -p /tmp/essai/PC01/{SYSTEME,COMPTES,JOURNAUX}
-    printf '{"tool_name":"write","tool_input":{"file_path":"/tmp/essai/PC01/SYSTEME/x"},"cwd":"/tmp"}' \
-        | ~/analyse/PC01_B13_SYCOBS_LINUX/outils/garde-scelles.sh ; echo "code $?"
+    cd ~/analyse/PC01_B13_SYCOBS_LINUX
+    outils/garde-scelles.sh --verdict scelle mnt rapport-forensic.md
+
+      scelle
+        → /home/…/PC01_B13_SYCOBS_LINUX/scelle
+        → SCELLÉ : écriture refusée. Pour lire, servez-vous de
+          view, grep, ls, ou lancez extraire.py / controles.py dessus.
+      mnt
+        → /home/…/PC01_B13_SYCOBS_LINUX/mnt
+        → IMAGE : écriture refusée, LECTURE libre — cat, strings,
+          sqlite3, find, y compris par bash.
+      rapport-forensic.md
+        → /home/…/PC01_B13_SYCOBS_LINUX/rapport-forensic.md   (n'existe pas encore)
+        → libre : la garde laisse écrire ici.
+
+Il affiche **le chemin résolu**, et c'est tout l'intérêt : une erreur se voit à
+la ligne suivante. Il rend 1 quand un chemin ne désigne rien — ni lui, ni son
+dossier parent.
+
+**N'écrivez pas le JSON à la main.** Le `cwd` qu'on y met est celui que la
+garde croit, et c'est là qu'on se trompe :
+
+    printf '{…"file_path":"scelle"…,"cwd":"/tmp"}' | outils/garde-scelles.sh
+      → code 0
+
+`scelle` avec `cwd` `/tmp` désigne `/tmp/scelle`, qui n'existe pas — donc rien
+n'est protégé, donc `0`. La garde a raison ; c'est la question qui était mal
+posée. Mesuré, sur les quatre formes :
+
+    file_path=scelle       cwd=/tmp     → 0
+    file_path=scelle       cwd=$PWD     → 2
+    file_path=./scelle     cwd=$PWD     → 2
+    file_path=<absolu>     cwd=/tmp     → 2
 
 Le script doit écrire son refus et rendre **2**. Un code 0, ou « command not
 found », veut dire que la ceinture est absente : le fichier n'est pas là où le

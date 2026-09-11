@@ -341,6 +341,54 @@ sys.exit(0)
 PY
 )
 
+# ── « --verdict CHEMIN… » : que dit la garde de CE chemin ? ───────────
+# Écrire le JSON à la main est un piège à soi tout seul : le « cwd » qu'on y
+# met est celui que la garde croit, et un « scelle » avec cwd « /tmp » désigne
+# /tmp/scelle — qui n'existe pas, qui n'est donc protégé par rien, et qui rend
+# 0. Très correctement, mais on lit « la garde ne mord pas ». Vu deux fois.
+# Ici le chemin se donne comme au shell, il est résolu depuis le dossier
+# courant, et la réponse dit AUSSI ce qu'il est devenu et s'il existe.
+if [ "${1:-}" = "--verdict" ]; then
+    shift
+    [ "$#" -gt 0 ] || { echo "usage : garde-scelles.sh --verdict <chemin>…" >&2
+                        exit 1; }
+    motif=$(mktemp); trap 'rm -f "$motif"' EXIT
+    manque=0
+    for c in "$@"; do
+        abs=$(python3 -c 'import os,sys
+print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$c")
+        # Un chemin absent n'est pas forcément une faute : un rapport à créer
+        # n'existe pas encore. Ce qui trahit la faute de frappe, c'est que le
+        # DOSSIER PARENT n'existe pas non plus — plus rien alors ne désigne
+        # quoi que ce soit, et « libre » ne veut plus rien dire.
+        etat=existe
+        [ -e "$abs" ] || { [ -d "$(dirname "$abs")" ] && etat=a_creer || etat=nulle_part; }
+        printf '  %s\n    → %s' "$c" "$abs"
+        case "$etat" in
+          existe)     printf '\n' ;;
+          a_creer)    printf '   (n\x27existe pas encore)\n' ;;
+          nulle_part) printf '   ← NE DÉSIGNE RIEN : son dossier parent n\x27existe pas\n'
+                      manque=1 ;;
+        esac
+        if printf '{"tool_name":"write","tool_input":{"file_path":"%s"},"cwd":"%s"}' \
+              "$abs" "$PWD" | python3 -c "$garde" 2>"$motif"; then
+            printf '    → libre : la garde laisse écrire ici.\n'
+            [ "$etat" = nulle_part ] && printf '%s\n%s\n' \
+              "      Et c'est normal : un chemin qui ne désigne rien n'est" \
+              "      protégé par rien. C'est ce qui fait croire à une garde muette."
+        elif grep -q "est un scellé" "$motif"; then
+            printf '    → SCELLÉ : écriture refusée. Pour lire, servez-vous de\n'
+            printf '      view, grep, ls, ou lancez extraire.py / controles.py dessus.\n'
+        elif grep -q "IMAGE EXAMINÉE" "$motif"; then
+            printf '    → IMAGE : écriture refusée, LECTURE libre — cat, strings,\n'
+            printf '      sqlite3, find, y compris par bash.\n'
+        else
+            printf '    → refusé, motif :\n'; sed 's/^/      /' "$motif"
+        fi
+    done
+    exit "$manque"
+fi
+
 # ── « --essai » : la garde se contrôle elle-même ──────────────────────
 # Un « code 2 » tapé à la main ne prouve rien : il suffit d'une faute de
 # frappe dans le chemin — « scelles » pour « scelle », un cwd qui n'est

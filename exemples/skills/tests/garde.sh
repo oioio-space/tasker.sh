@@ -206,6 +206,36 @@ CRUSH_SCELLES="$travail/rien-du-tout.txt:$travail/non-plus.txt" \
 # d'analyse —, et ce 0 se lisait « la garde ne mord pas ». Vu en vrai. Le
 # mode --essai sonde chaque sous-dossier avec le VRAI programme : il n'y a
 # plus de chemin à taper, donc plus rien à mal taper.
+# ── « --verdict » : un chemin, comme on l'écrit au shell ──────────────
+# Le JSON tapé à la main porte un « cwd » qu'on choisit soi-même, et c'est là
+# qu'on se trompe : « scelle » avec cwd « /tmp » désigne /tmp/scelle. Vu deux
+# fois sur un poste réel. --verdict résout depuis le dossier courant, et DIT
+# ce que le chemin est devenu.
+echo "── UN VERDICT SUR UN CHEMIN ──"
+v_aff="$travail/aff-verdict"
+mkdir -p "$v_aff"/{outils,scelle/{SYSTEME,COMPTES,JOURNAUX},mnt/{etc,usr,var,bin,lib}}
+cp "$garde" "$v_aff/outils/garde-scelles.sh"
+verdict_dit() {                 # <libellé> <chemin> <motif attendu>
+    local sortie
+    sortie=$( cd "$v_aff" && bash outils/garde-scelles.sh --verdict "$2" 2>&1 )
+    if grep -qF "$3" <<< "$sortie"; then printf "  ok      %s\n" "$1"
+    else printf "  MANQUE  %s — attendu « %s », obtenu :\n%s\n" "$1" "$3" "$sortie"
+         manques=$((manques + 1)); fi
+}
+verdict_dit "« scelle » relatif est reconnu"      "scelle"   "SCELLÉ"
+verdict_dit "« ./scelle » aussi"                  "./scelle" "SCELLÉ"
+verdict_dit "« mnt » est une IMAGE, pas un scellé" "mnt"     "IMAGE"
+verdict_dit "le chemin RÉSOLU est affiché"        "scelle"   "$v_aff/scelle"
+verdict_dit "un rapport à créer reste libre"      "rapport.md" "libre"
+verdict_dit "un parent absent est DIT"            "nulle/part/x" "NE DÉSIGNE RIEN"
+# Et le code de sortie : 1 seulement quand un chemin ne désigne rien.
+( cd "$v_aff" && bash outils/garde-scelles.sh --verdict scelle >/dev/null 2>&1 )
+[[ $? == 0 ]] && printf "  ok      un chemin réel rend 0\n" \
+  || { printf "  MANQUE  un chemin réel devrait rendre 0\n"; manques=$((manques + 1)); }
+( cd "$v_aff" && bash outils/garde-scelles.sh --verdict nulle/part/x >/dev/null 2>&1 )
+[[ $? == 1 ]] && printf "  ok      un chemin qui ne désigne rien rend 1\n" \
+  || { printf "  MANQUE  un chemin vide devrait rendre 1\n"; manques=$((manques + 1)); }
+
 echo "── LA GARDE SE CONTRÔLE ELLE-MÊME ──"
 aff="$travail/affaire-essai"
 mkdir -p "$aff"/{outils,scelle,mnt}
