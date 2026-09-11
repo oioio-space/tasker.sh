@@ -18,7 +18,7 @@ l'ajouter ici, c'est ne pas la tester.
 
 Sort 0 si tout est trouvé, 1 sinon, en disant ce qui manque.
 """
-import calendar, gzip, io, json, os, shutil, sqlite3, subprocess, zipfile
+import calendar, gzip, io, json, os, re, shutil, sqlite3, subprocess, zipfile
 import sys, tarfile, tempfile, time
 
 ICI = os.path.dirname(os.path.abspath(__file__))
@@ -662,9 +662,16 @@ ATTENDUS_CHAMPS = [
 ]
 
 
-# Les bornes de la spécification Agent Skills pour le CORPS d'un SKILL.md.
-# Le compte en jetons est approché comme le fait Crush : quatre octets par
-# jeton. C'est grossier, et c'est justement pour ça qu'on garde une marge.
+# Ce que Crush REFUSE, repris de Skill.Validate (internal/skills/skills.go).
+# Tout est compté en OCTETS : ce sont des len() sur des chaînes Go, et en
+# français chaque accent en pèse deux. Un skill que Crush refuse disparaît de
+# l'agent avec une simple pastille rouge — d'où l'intérêt de le voir ici.
+NOM_MAX, DESCRIPTION_MAX, COMPATIBILITE_MAX = 64, 1024, 500
+RE_NOM_SKILL = re.compile(r'^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$')
+
+# Le corps, lui, n'est PAS borné par Crush : c'est une convention du projet,
+# tirée de la spécification Agent Skills. Elle compte quand même, parce que le
+# corps entier entre dans le contexte du modèle à chaque activation.
 CORPS_MAX_JETONS = 5000
 CORPS_MAX_LIGNES = 500
 
@@ -707,6 +714,31 @@ def frontmatter_sain(racine):
         if corps.count("\n") > CORPS_MAX_LIGNES:
             ennuis.append((chemin, f"corps de {corps.count(chr(10))} lignes : "
                                    f"au-dessus des {CORPS_MAX_LIGNES}"))
+        # Les quatre refus de Crush. Les vérifier ICI et pas seulement « le
+        # frontmatter s'analyse » : un scalaire valide mais trop long, ou un
+        # nom qui ne colle pas au dossier, passait pour bon et faisait
+        # disparaître le skill.
+        entete = {}
+        for ligne in texte[4:].split("\n---", 1)[0].splitlines():
+            cle, _, valeur = ligne.partition(":")
+            if valeur and cle == cle.strip() and cle.strip():
+                entete[cle.strip()] = valeur.strip().strip("\"'")
+        if not entete.get("description"):
+            ennuis.append((chemin, "« description » absente — Crush refuse le skill"))
+        for cle, borne in (("name", NOM_MAX), ("description", DESCRIPTION_MAX),
+                           ("compatibility", COMPATIBILITE_MAX)):
+            taille = len(entete.get(cle, "").encode("utf-8"))
+            if taille > borne:
+                ennuis.append((chemin, f"« {cle} » fait {taille} octets, Crush "
+                                       f"refuse au-delà de {borne}"))
+        if not RE_NOM_SKILL.match(entete.get("name", "")):
+            ennuis.append((chemin, f"« name » = {entete.get('name')!r} : Crush "
+                                   "attend des lettres, des chiffres et des "
+                                   "traits d'union simples"))
+        elif entete["name"].lower() != nom.lower():
+            ennuis.append((chemin, f"« name » = {entete['name']!r} mais le "
+                                   f"dossier est {nom!r} — Crush exige l'égalité"))
+
         for ligne in texte[4:].split("\n---", 1)[0].splitlines():
             if not ligne.strip() or ligne.lstrip().startswith("#"):
                 continue

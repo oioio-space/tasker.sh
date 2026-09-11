@@ -164,7 +164,7 @@
     ],
     "disabled_tools": [
       "fetch",
-      "web_search",
+      "agentic_fetch",
       "sourcegraph",
       "download"
     ],
@@ -176,7 +176,7 @@
     "PreToolUse": [
       {
         "name": "garde des scellés",
-        "matcher": "^(edit|write|multiedit|bash|download)$",
+        "matcher": "^(edit|write|multiedit|bash|download|lsp_rename|lsp_replace_symbol)$",
         "command": "~/.config/crush/garde-scelles.sh",
         "timeout": 5
       }

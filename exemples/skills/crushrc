@@ -100,7 +100,7 @@ permissions allow view ls grep glob agent
 # Coupés net, et cachés du modèle. Les quatre touchent au réseau : sur un
 # poste d'analyse hors ligne ils ne peuvent qu'échouer bruyamment ou, pire,
 # réussir. « download » écrit en plus sur le disque.
-permissions deny fetch web_search sourcegraph download
+permissions deny fetch agentic_fetch sourcegraph download
 
 # ── les chemins ───────────────────────────────────────────────────────
 # skill-path n'est pas indispensable : $CONFIG/skills est déjà l'un des
@@ -124,6 +124,6 @@ option metrics false
 # message sur stderr devient le motif du refus.
 hook add PreToolUse \
     --name "garde des scellés" \
-    --matcher '^(edit|write|multiedit|bash|download)$' \
+    --matcher '^(edit|write|multiedit|bash|download|lsp_rename|lsp_replace_symbol)$' \
     --command "$CONFIG/garde-scelles.sh" \
     --timeout 5
