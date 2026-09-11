@@ -1127,7 +1127,57 @@ def fausses_accusations(base):
            dits and not any("installé sur le poste" in d for d in dits),
            f"le constat dit : « {dits[0] if dits else 'AUCUN'} »")
 
-    # ── 3 · une règle SANS indice n'est pas « conforme » ──
+    # ── 3 · la timeline n'attribue pas un fichier sur une HOMONYMIE ──
+    # « facture.pdf » téléchargé par jdupont et « facture.pdf » sous
+    # /usr/share/doc portent le même nom et n'ont rien à voir. Le fait sortait
+    # pourtant « fichier retrouvé sur le disque », confiance CERTAINE, avec
+    # jdupont pour acteur : le rapport attribuait un fichier à quelqu'un sur un
+    # nom. Le chemin complet est pourtant dans le fait demandeur.
+    EXTRAIRE_S = os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py")
+    import gzip as _gz, io as _io, sqlite3, tarfile as _tf
+    telech = os.path.join(coin, "History")
+    cx = sqlite3.connect(telech)
+    cx.executescript(
+        "CREATE TABLE downloads(id INTEGER, start_time INTEGER, "
+        "target_path TEXT, tab_url TEXT);"
+        "INSERT INTO downloads VALUES(1, 13350000000000000, "
+        "'/home/jdupont/Documents/facture.pdf', 'https://fournisseur.example/f');")
+    cx.commit()
+    cx.close()
+    with open(telech, "rb") as fh:
+        blob = fh.read()
+    for nom, chemin_timeline, attendu in (
+            ("homonyme", "/usr/share/doc/exemple/facture.pdf", False),
+            ("le bon",   "/home/jdupont/Documents/facture.pdf", True)):
+        r = collecte("timeline-" + nom.replace(" ", "-"), "COMPTES", "TIMELINE")
+        buf = _io.BytesIO()
+        with _tf.open(fileobj=buf, mode="w") as tf:
+            ti = _tf.TarInfo("home/jdupont/.config/google-chrome/Default/History")
+            ti.size = len(blob)
+            tf.addfile(ti, _io.BytesIO(blob))
+        with open(os.path.join(r, "COMPTES",
+                               "PC42_B12_ARTE_ubuntu_jdupont_profils.tar.gz"),
+                  "wb") as fh:
+            fh.write(_gz.compress(buf.getvalue()))
+        with open(os.path.join(r, "TIMELINE", "PC42_B12_ARTE_ubuntu_mactime.csv"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("Date,Size,Type,Mode,UID,GID,Meta,File Name\n"
+                     "Mon Mar 04 2024 10:00:00,120,m...,r/rrr,0,0,4242,"
+                     + chemin_timeline + "\n")
+        sortie = os.path.join(coin, f"timeline-{nom}.jsonl")
+        subprocess.run([sys.executable, EXTRAIRE_S, r, "-o", sortie],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(sortie, encoding="utf-8") as fh:
+            fs = [json.loads(l) for l in fh if l.strip()]
+        pris = [x for x in fs if x["categorie"] == "timeline"
+                and "facture.pdf" in str(x.get("valeur", ""))]
+        attribue = any(x.get("acteur") and x.get("confiance") == "certaine"
+                       for x in pris)
+        yield (f"timeline « {nom} » : attribué = {attendu}",
+               bool(pris) and attribue == attendu,
+               "le chemin complet est dans le fait demandeur : il faut l'exiger")
+
+    # ── 4 · une règle SANS indice n'est pas « conforme » ──
     # C'est un acquittement prononcé sans instruction : la règle n'a jamais été
     # cherchée, et « conforme » est justement ce que le décompte des manquements
     # écarte.

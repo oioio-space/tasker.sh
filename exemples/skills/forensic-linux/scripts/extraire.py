@@ -1979,7 +1979,24 @@ def _questions_timeline():
 
 
 SENSIBLES = re.compile(r'/(\.ssh/|Downloads?/|T[ée]l[ée]chargements?/|media/|run/media/'
-                       r'|tmp/\.|\.bash_history|authorized_keys|/root/)', re.I)
+                       # « /root/ » écrit ici aurait demandé « //root/ » : la
+                       # parenthèse s'ouvre déjà après une barre oblique. Le
+                       # dossier de l'administrateur était donc INATTEIGNABLE.
+                       r'|tmp/\.|\.bash_history|authorized_keys|root/)', re.I)
+
+
+def _chemin_annonce(f):
+    """Le chemin absolu qu'un fait annonce, en minuscules — ou None.
+
+    Un téléchargement et un « fichier ouvert récemment » portent tous deux le
+    chemin COMPLET : « file:///home/jdupont/Téléchargements/facture.pdf ». La
+    timeline peut donc être interrogée sur le chemin, et pas seulement sur le
+    nom.
+    """
+    v = urllib.parse.unquote(str(f.get("valeur") or ""))
+    if v.lower().startswith("file://"):
+        v = urllib.parse.urlparse(v).path
+    return v.rstrip("/").lower() if v.startswith("/") else None
 
 
 def timeline(c):
@@ -2033,15 +2050,41 @@ def timeline(c):
     for base, demandeurs in sorted(fichiers.items()):
         for f in demandeurs:
             if base in trouves:
+                annonce = _chemin_annonce(f)
                 for quand, genre, inode, fichier in trouves[base]:
-                    fait("timeline", "fichier retrouvé sur le disque", fichier, c.rel(chemin),
-                         f"nom du fichier de {f['id']} cherché dans la timeline",
-                         horodatage=_date_timeline(quand, fuseau), acteur=f.get("acteur"),
+                    # Le NOM seul ne fait pas le fichier. « facture.pdf » dans
+                    # les téléchargements d'un compte et « facture.pdf » sous
+                    # /usr/share/doc portent le même nom et n'ont rien à voir :
+                    # le fait sortait pourtant « certaine », avec l'ACTEUR du
+                    # fait demandeur, et le rapport attribuait à quelqu'un un
+                    # fichier sur une homonymie. Quand le chemin annoncé est
+                    # connu, on l'exige ; sinon le fait le dit, ne porte pas
+                    # d'acteur, et reste à vérifier.
+                    meme = annonce is not None and fichier.lower() == annonce
+                    reste = _GENRES.get(genre.replace(".", "") or "", "dates du fichier")
+                    if meme:
+                        note = (f"{reste} — le fichier annoncé par {f['id']} existe "
+                                "bien sur le disque, au chemin annoncé")
+                    else:
+                        note = (f"{reste} — MÊME NOM que le fichier de {f['id']}"
+                                + (f", mais pas le même chemin : {f['id']} annonce "
+                                   f"« {annonce} »" if annonce else
+                                   f" ({f['id']} n'annonce aucun chemin)")
+                                + ". Deux fichiers peuvent porter le même nom sans "
+                                  "avoir de rapport : à confirmer par l'inode ou la "
+                                  "taille avant d'attribuer celui-ci à qui que ce soit")
+                    if len(trouves[base]) > 1:
+                        note += f" ; {len(trouves[base])} emplacements portent ce nom"
+                    fait("timeline", "fichier retrouvé sur le disque" if meme
+                         else "fichier de MÊME NOM sur le disque",
+                         fichier, c.rel(chemin),
+                         ("chemin" if meme else "nom") +
+                         f" du fichier de {f['id']} cherché dans la timeline",
+                         horodatage=_date_timeline(quand, fuseau),
+                         acteur=f.get("acteur") if meme else None,
+                         confiance="certaine" if meme else "à vérifier",
                          confirme=f["id"], genre=genre, inode=inode or None,
-                         note=f"{_GENRES.get(genre.replace('.', '') or '', 'dates du fichier')}"
-                              f" — le fichier annoncé par {f['id']} existe bien sur le disque"
-                              + (f" ; {len(trouves[base])} emplacements portent ce nom"
-                                 if len(trouves[base]) > 1 else ""))
+                         note=note)
             else:
                 fait("timeline", "fichier NON retrouvé sur le disque", base, c.rel(chemin),
                      f"nom du fichier de {f['id']} cherché dans la timeline",
