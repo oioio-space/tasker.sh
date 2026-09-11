@@ -237,7 +237,12 @@ milliers de fichiers de `PHOTOREC/`. Des heures sur un gros scellé, c'est
 normal ; tout ce qui précède se compte en minutes. Elle écrit son avancement
 toutes les quinze secondes, en nommant le dossier en cours :
 
-      lecture : PHOTOREC/recup_12 — 148302 pièces, 51 min 20 s
+      lecture : STRINGS/PC01_sda.txt — 148302 pièces, 3.4 Go, 51 min 20 s
+
+Elle avance **par pièce et par bloc** : un `STRINGS/` de plusieurs gigaoctets
+tient dans un seul fichier, et une ligne qui n'avancerait qu'entre deux fichiers
+s'y figerait aussi longtemps que le journal de reprise — qui, lui, ne se remplit
+qu'une fois la pièce finie.
 
 Depuis un autre terminal, le journal de reprise dit la même chose — il est vidé
 sur le disque après **chaque** pièce :
@@ -254,6 +259,13 @@ compris.
 | `--indicateurs fichier` | vous cherchez une empreinte, une adresse, un nom précis (§4) |
 | `--regles fichier.regles` | vos règles internes sont écrites — à relire contre la charte |
 | `--sans-reprise` | vous voulez tout reparcourir |
+
+**Donnez vos listes dès le premier passage.** Ajouter un `--textes` ou un
+`--indicateurs` invalide le journal de reprise et refait tout, et c'est voulu :
+la signature du journal couvre l'empreinte de chaque liste. Ce n'est pas une
+occasion manquée — chercher un mot de plus oblige de toute façon à relire
+chaque octet. Ce qui est perdu à la reprise, ce sont seulement les empreintes
+et les noms déjà calculés, une part négligeable du temps.
 
 ### D · Rédiger, avec Crush
 

@@ -4182,6 +4182,37 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
     par_valeur = {x["valeur"]: x for x in liste}
     nouveaux = []      # les valeurs trouvées, dans l'ordre, pour le journal
 
+    # L'avancement, sur stderr comme le reste des étapes. Compté par pièce ET
+    # par BLOC : un STRINGS/ de plusieurs gigaoctets tient dans UN fichier, et
+    # une ligne qui n'avance qu'entre deux fichiers s'y fige aussi longtemps
+    # que le journal de reprise. Or c'est exactement là que le temps passe —
+    # mesuré, 211 motifs coûtent 7,9 s par 8 Mo, soit un quart d'heure par
+    # gigaoctet pour une seule pièce.
+    tty = sys.stderr.isatty()
+    depart = time.monotonic()
+    avance = {"pieces": 0, "octets": 0, "ou": "", "quand": depart}
+
+    def volume(n):
+        return f"{n / (1 << 30):.1f} Go" if n >= 1 << 30 else f"{n >> 20} Mo"
+
+    def avancer(ou=None, octets=0):
+        """Une pièce de plus (ou=chemin), ou des octets de plus dans la même."""
+        if ou is not None:
+            avance["pieces"] += 1
+            avance["ou"] = ou
+        avance["octets"] += octets
+        maintenant = time.monotonic()
+        if maintenant - avance["quand"] < PAS_AVANCEMENT:
+            return
+        avance["quand"] = maintenant
+        ecoule = int(maintenant - depart)
+        ligne = (f"      lecture : {avance['ou'] or '.'} — {avance['pieces']} "
+                 f"pièce{'s' if avance['pieces'] > 1 else ''}, "
+                 f"{volume(avance['octets'])}, "
+                 f"{ecoule // 60} min {ecoule % 60:02d} s")
+        print(f"\r{ligne:<100.100s}" if tty else ligne,
+              end="" if tty else "\n", file=sys.stderr, flush=True)
+
     def trouve(x):
         """Note qu'un indicateur vient d'être vu — une fois, à sa découverte."""
         if not x.get("trouve"):
@@ -4248,6 +4279,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
         vus, neufs, depart = set(), set(), 0
         reste = b""
         for brut, clair in blocs:
+            avancer(octets=len(brut))
             for h in hs.values():
                 h.update(brut)
             if not clair or not motifs:
@@ -4381,26 +4413,6 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             c.lus.add(chemin)
             lire_source(rel, rel, lambda: open(chemin, "rb"))
 
-    # L'avancement, sur stderr comme le reste des étapes. Sur un terminal la
-    # ligne se réécrit sur elle-même ; ailleurs — journal, tube — elle
-    # s'ajoute, et le rythme suffit à ce que le fichier reste lisible.
-    tty = sys.stderr.isatty()
-    depart = time.monotonic()
-    avance = {"n": 0, "quand": depart}
-
-    def avancer(ou):
-        avance["n"] += 1
-        maintenant = time.monotonic()
-        if maintenant - avance["quand"] < PAS_AVANCEMENT:
-            return
-        avance["quand"] = maintenant
-        ecoule = int(maintenant - depart)
-        ligne = (f"      lecture : {ou or '.'} — {avance['n']} "
-                 f"pièce{'s' if avance['n'] > 1 else ''}, "
-                 f"{ecoule // 60} min {ecoule % 60:02d} s")
-        print(f"\r{ligne:<78.78s}" if tty else ligne,
-              end="" if tty else "\n", file=sys.stderr, flush=True)
-
     for d, sous, noms_fichiers in os.walk(c.racine):
         # os.walk n'a pas d'ordre garanti : sans ces deux tris, la reprise
         # rejouerait les faits dans un autre ordre que la première fois, et les
@@ -4415,7 +4427,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             chemin, rel = os.path.join(d, f), c.rel(os.path.join(d, f))
             if rel in soi:
                 continue
-            avancer(os.path.dirname(rel))
+            avancer(rel)
             deja = reprise.reutilisable(rel, chemin) if reprise else None
             if deja is not None:
                 for x in deja.get("trouves", ()):
