@@ -568,9 +568,14 @@ def comptes(c):
             interactif = not shell.endswith(("nologin", "false"))
             if uid_n >= 1000 and interactif:
                 humains.append(nom)
+                # « home » en CHAMP, pas seulement dans la phrase : c'est ce
+                # que le recoupement par chemin lit. Le redeviner en
+                # « /home/<nom> » rate /var/home (Silverblue), /export/home, et
+                # tout compte de domaine — sans le dire.
                 fait("compte", "compte local ouvrant une session", nom, c.rel(p),
-                     "cut -d: -f1,3,6,7 /etc/passwd",
-                     acteur=nom, note=f"uid {uid}, dossier {home}, shell {shell}")
+                     "cut -d: -f1,3,6,7 /etc/passwd", acteur=nom,
+                     role="compte-local", home=home or None,
+                     note=f"uid {uid}, dossier {home}, shell {shell}")
             elif interactif and uid_n < 1000 and nom != "root":
                 fait("compte", "compte de service avec un shell", nom, c.rel(p),
                      "cut -d: -f1,3,7 /etc/passwd", acteur=nom,
@@ -695,6 +700,12 @@ def _un_utmp(c, chemin, categorie, quoi_defaut):
              confiance="à vérifier",
              note="taille non multiple de 384 : autre architecture, ou fichier tronqué")
         return 0
+    # La fermeture est posée SUR l'ouverture, ici, où l'on tient les deux
+    # enregistrements et le tty au même instant. Ailleurs, il faut les
+    # rapparier — et deux endroits le faisaient déjà, chacun à sa façon et
+    # avec sa propre durée de repli. Le champ « fin » existe déjà : wtmp.db et
+    # la sortie de « last » le renseignent, le binaire wtmp ne le faisait pas.
+    ouvertes = {}                       # tty → le fait d'ouverture
     for e in lignes:
         note = f"tty {e['tty']}" if e["tty"] else ""
         if e["ou"]:
@@ -702,11 +713,16 @@ def _un_utmp(c, chemin, categorie, quoi_defaut):
         if e["type"] == 8:
             note = (note + ", " if note else "") + \
                 "fin de la session ouverte sur ce terminal"
-        fait(categorie, e["quoi"] if e["type"] != 7 else quoi_defaut,
-             e["qui"] or e["tty"] or e["quoi"], c.rel(chemin),
-             "lecture directe du binaire (struct utmp)",
-             horodatage=e["quand"], acteur=e["qui"] or None,
-             note=note or None, tty=e["tty"] or None, origine=e["ou"] or None)
+        f = fait(categorie, e["quoi"] if e["type"] != 7 else quoi_defaut,
+                 e["qui"] or e["tty"] or e["quoi"], c.rel(chemin),
+                 "lecture directe du binaire (struct utmp)",
+                 horodatage=e["quand"], acteur=e["qui"] or None,
+                 note=note or None, tty=e["tty"] or None, origine=e["ou"] or None,
+                 role="session-ouverture" if e["type"] == 7 else None)
+        if e["type"] == 7 and e["tty"]:
+            ouvertes[e["tty"]] = f
+        elif e["type"] == 8 and e["tty"] in ouvertes:
+            ouvertes.pop(e["tty"])["fin"] = e["quand"]
     return len(lignes)
 
 
@@ -2396,7 +2412,6 @@ def documents(c):
 # trois et COMPTE ce qu'il n'a pas su dater : une ligne muette est un aveu, pas
 # un silence.
 PLASO_MAX_SENSIBLES = 300
-PLASO_TROU_JOURS = 7        # au-delà, un intervalle vide se dit
 PLASO_MAX_TROUS = 20
 
 
@@ -2413,16 +2428,39 @@ _PLASO_CHAMPS = ("data_type", "timestamp_desc", "parser", "__container_type__",
 # Nos propres sorties : elles portent du JSON par ligne, elles aussi.
 _PAS_PLASO = ("faits.jsonl", "constats.jsonl", "-manifeste.json",
               "-reprise.jsonl")
+# raw_decode s'arrête au premier objet complet : ce qui traîne derrière — un
+# second objet de « -o json » sur la même ligne — ne gêne plus.
+_DECODEUR = json.JSONDecoder()
 
 
 def _plaso_lignes(chemin):
-    """Les lignes d'un fichier plaso, comprimé ou non, sans le charger."""
-    ouvrir = gzip.open if chemin.lower().endswith(".gz") else open
+    """Les lignes utiles d'un fichier plaso, comprimé ou non, sans le charger.
+
+    L'ouvreur vient de _FLUX, la table du fichier : une seconde liste en
+    if/else n'aurait connu que le .gz, et une super-timeline en .xz ou .zst —
+    le format naturel pour une pièce de plusieurs gigaoctets — aurait été lue
+    en texte, jugée « pas du plaso », et déclarée absente SANS UN MOT.
+
+    Aucun plafond ici, contrairement à decomprimer : une super-timeline est
+    légitimement énorme, et c'est justement pour cela qu'on la lit en flux.
+
+    « -o json » rend un unique tableau : les crochets et la virgule de fin ne
+    sont pas du JSON ligne à ligne, le reste l'est. On les retire ICI, une
+    fois — le renifleur et le lecteur voient alors exactement la même chose.
+    """
+    bas = chemin.lower()
+    lecteur = next((l for s, l in _FLUX if bas.endswith(s)), None)
     try:
-        with ouvrir(chemin, "rt", encoding="utf-8", errors="replace") as fh:
-            for ligne in fh:
-                yield ligne
-    except OSError:
+        brut = lecteur(open(chemin, "rb")) if lecteur else open(chemin, "rb")
+        if brut is None:                     # compresseur absent du poste
+            return
+        with contextlib.closing(brut) as octets:
+            for ligne in io.TextIOWrapper(octets, encoding="utf-8",
+                                          errors="replace"):
+                nue = ligne.strip().lstrip("[").rstrip("],")
+                if nue:
+                    yield nue
+    except (OSError, EOFError, ValueError, lzma.LZMAError, zlib.error):
         return
 
 
@@ -2433,15 +2471,10 @@ def _est_plaso(chemin):
     json », un unique tableau — dont la première ligne est alors « [ » ou
     « [{… ».
     """
-    for ligne in _plaso_lignes(chemin):
-        nue = ligne.strip().lstrip("[").rstrip(",")
-        if not nue:
-            continue
-        if not nue.startswith("{"):
-            return False
+    for nue in _plaso_lignes(chemin):
         try:
-            e = json.loads(nue.rstrip("]"))
-        except json.JSONDecodeError:
+            e, _ = _DECODEUR.raw_decode(nue)
+        except ValueError:
             return False
         return (isinstance(e, dict)
                 and sum(1 for k in _PLASO_CHAMPS if k in e) >= 2)
@@ -2459,8 +2492,11 @@ def trouver_plaso(c):
     for chemin in c.chercher(".json"):          # .json ET .jsonl, .gz compris
         base = os.path.basename(chemin).lower()
         rel = c.rel(chemin)
-        if any(x in base for x in _PAS_PLASO) or rel.startswith(("PHOTOREC/",
-                                                                "SUPPRIMES/")):
+        # DOSSIERS_SANS_PROVENANCE, et pas une seconde liste : STRINGS/ y est,
+        # et c'est le dossier le plus volumineux de tous — des mégaoctets de
+        # sorties de strings, où du JSON peut très bien traîner.
+        if any(x in base for x in _PAS_PLASO) \
+                or rel.startswith(DOSSIERS_SANS_PROVENANCE):
             continue
         candidats.append(chemin)
     # Le nom d'abord — un dossier ou un fichier qui se nomme —, le reste
@@ -2555,7 +2591,17 @@ def _plaso_chemin(e):
     return ""
 
 
-SESSION_MAX_PLASO = timedelta(hours=16)
+# La MÊME réserve, écrite une fois. Recopiée à la main dans trois notes, elle
+# avait déjà dérivé en trois forces différentes — « à confirmer sur la pièce »,
+# « pas une imputation », « cela ne dit toujours pas ». C'est le point qui
+# compte juridiquement : il ne doit pas dépendre de l'endroit où on le relit.
+RAPPROCHEMENT = ("C'est un RAPPROCHEMENT, pas une imputation : la coïncidence "
+                 "de temps ou de chemin ne dit pas qui a agi. À établir par "
+                 "une autre trace avant d'en tirer quoi que ce soit")
+# La même durée que le brouillon emploie : une session sans fin connue ne dure
+# pas plus. Deux constantes donnaient deux fenêtres pour la même session dans
+# le même rapport.
+SESSION_MAX_PLASO = timedelta(hours=12)
 
 
 def _fenetres_session():
@@ -2566,15 +2612,23 @@ def _fenetres_session():
     fermeture quand la pièce la donne ; sans elle, on borne, et le fait le dit.
     """
     def iso(d):
-        # La MÊME forme que _plaso_horo rend : de l'UTC suffixé Z. Deux
-        # horodatages écrits ainsi se comparent comme des chaînes, dans l'ordre
-        # du temps — ce qui évite de reconstruire un datetime par événement,
-        # et il y en a des millions.
-        return d.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        # _horo rend déjà de l'UTC NAÏF : lui appliquer astimezone revenait à
+        # l'interpréter comme l'heure locale du POSTE D'ANALYSE, et la fenêtre
+        # de session glissait alors d'un fuseau — une heure en France, treize à
+        # Auckland. Les tests ne le voyaient pas : ils tournent en UTC.
+        # On écrit, on ne convertit pas. Même forme que _plaso_horo : deux
+        # horodatages ainsi écrits se comparent comme des chaînes, dans l'ordre
+        # du temps, ce qui évite de reconstruire un datetime par événement — et
+        # il y en a des millions.
+        return d.isoformat() + "Z"
 
     out = []
     for f in FAITS:
-        if f.get("categorie") != "evenement" or "ouverture de session" not in f["fait"]:
+        # Sur le RÔLE, jamais sur le libellé français : celui-ci est du texte
+        # de rapport, il se reformule, et le dépôt a déjà payé une fois pour
+        # avoir sélectionné dessus — « le reformuler ne doit pas vider le
+        # tableau sans un mot d'erreur ».
+        if f.get("role") != "session-ouverture":
             continue
         debut = _horo(f)
         if debut is None or not f.get("acteur"):
@@ -2590,8 +2644,8 @@ def _comptes_connus():
     """{dossier personnel en minuscules : compte} — pour ranger un chemin."""
     maisons = {}
     for f in FAITS:
-        if f.get("categorie") == "compte" and f["fait"].startswith("compte local"):
-            maisons[f"/home/{str(f['valeur']).lower()}"] = str(f["valeur"])
+        if f.get("role") == "compte-local" and f.get("home"):
+            maisons[str(f["home"]).rstrip("/").lower()] = str(f["valeur"])
     maisons.setdefault("/root", "root")
     return maisons
 
@@ -2625,11 +2679,6 @@ def plaso(c):
 
     for chemin in chemins:
         for ligne in _plaso_lignes(chemin):
-            # « -o json » rend un unique tableau : les crochets et la virgule
-            # de fin ne sont pas du JSON ligne à ligne, mais le reste l'est.
-            ligne = ligne.strip().lstrip("[").rstrip("],")
-            if not ligne:
-                continue
             total += 1
             try:
                 e = json.loads(ligne)
@@ -2660,9 +2709,12 @@ def plaso(c):
                 # une imputation faible — un service peut écrire chez
                 # quelqu'un — et le fait le dira ; mais c'est la question que
                 # l'on pose en premier d'une super-timeline.
-                tete = "/".join(ou.lower().split("/", 3)[:3])
-                compte = maisons.get(tete) or (maisons.get("/root")
-                                               if ou.startswith("/root/") else None)
+                # Deux ou trois segments : « /home/jdupont/… » comme
+                # « /root/… ». Les deux mêmes get, donc plus de cas particulier
+                # pour root, et n'importe quel dossier personnel réel marche.
+                bas = ou.lower()
+                compte = (maisons.get("/".join(bas.split("/", 3)[:3]))
+                          or maisons.get("/".join(bas.split("/", 2)[:2])))
                 if compte:
                     p = par_compte.setdefault(compte, [0, None, None])
                     p[0] += 1
@@ -2709,7 +2761,11 @@ def plaso(c):
                          horodatage=quand, genre=e.get("timestamp_desc") or None,
                          note=_coupe(str(e.get("message") or ""), 200) or None)
 
-    source = c.rel(chemins[0]) if len(chemins) == 1 else "PLASO/"
+    # Plusieurs super-timelines : on cite la PREMIÈRE, qui existe, plutôt
+    # qu'un « PLASO/ » qui n'existe peut-être pas — la découverte ne se fie
+    # plus au dossier.
+    source = c.rel(chemins[0]) + ("" if len(chemins) == 1
+                                  else f" (et {len(chemins) - 1} autre(s))")
     fait("plaso", "événements dans la super-timeline plaso", str(total), source,
          "psort -o json_line, une ligne par événement",
          note=(f"du {premier} au {dernier}" if premier else "aucun événement daté")
@@ -2759,24 +2815,22 @@ def plaso(c):
         debut, fin, acteur, _id, sure = w
         fait("plaso", "activité pendant une session ouverte", str(n), source,
              f"événements plaso dans la fenêtre de la session {ident}",
-             horodatage=debut, acteur=acteur, confirme=ident, confiance="forte",
+             horodatage=debut, acteur=acteur, confirme=ident,
+             confiance="à vérifier", role="rapprochement-temporel",
              note=f"{n} événement(s) entre {debut} et {fin}"
                   + ("" if sure else " — la pièce ne donne pas la fermeture : "
                      f"la fenêtre est bornée à {SESSION_MAX_PLASO}, elle n'est "
                      "pas mesurée")
-                  + ". Un événement dans la fenêtre d'une session n'est pas "
-                    "l'oeuvre de ce compte : un service tourne aussi pendant "
-                    "qu'il est connecté. C'est un rapprochement, à confirmer "
-                    "sur la pièce")
+                  + f". Un service tourne aussi pendant qu'un compte est "
+                    f"connecté. {RAPPROCHEMENT}")
     for compte, (n, prem, dern) in sorted(par_compte.items()):
         fait("plaso", "activité dans le dossier personnel d'un compte", str(n),
              source, "chemins sous le dossier personnel, dans la super-timeline",
-             horodatage=dern, acteur=compte, confiance="forte",
+             horodatage=dern, acteur=compte, confiance="à vérifier",
+             role="rapprochement-chemin",
              note=(f"{n} événement(s), du {prem} au {dern}" if prem else
                    f"{n} événement(s), aucun daté")
-                  + ". Un chemin sous le dossier d'un compte n'est pas un acte "
-                    "de ce compte : un service y écrit aussi. C'est un "
-                    "rapprochement, pas une imputation")
+                  + f". Un service écrit aussi chez les gens. {RAPPROCHEMENT}")
     # Les trous : la synthèse des périodes ne voit que les faits que les autres
     # phases ont posés. plaso en porte des millions et peut donc CONTREDIRE un
     # « rien entre le X et le Y » — ou le confirmer, ce qui vaut bien davantage.
@@ -2786,19 +2840,28 @@ def plaso(c):
         for a_, b_ in zip(suite, suite[1:]):
             da = datetime.strptime(a_, "%Y-%m-%d")
             db = datetime.strptime(b_, "%Y-%m-%d")
-            if (db - da).days > PLASO_TROU_JOURS:
+            if (db - da).days > TROU_JOURS:
                 trous.append((a_, b_, (db - da).days))
         fait("plaso", "journées portant une trace dans la super-timeline",
              str(len(jours)), source, "dates distinctes des événements plaso",
              note=f"du {suite[0]} au {suite[-1]}"
                   + (f" ; {len(trous)} intervalle(s) de plus de "
-                     f"{PLASO_TROU_JOURS} jours sans aucun événement"
+                     f"{TROU_JOURS} jours sans aucun événement"
                      if trous else " ; aucun intervalle de plus de "
-                     f"{PLASO_TROU_JOURS} jours sans événement"))
+                     f"{TROU_JOURS} jours sans événement"))
         for a_, b_, n in trous[:PLASO_MAX_TROUS]:
-            fait("plaso", "aucune trace plaso pendant un intervalle", f"{a_} → {b_}",
-                 source, "dates distinctes des événements plaso",
-                 horodatage=a_ + "T00:00:00Z", confiance="certaine",
+            # La MÊME forme que periodes() pose : catégorie « periode », avec
+            # jours/depuis/jusqu. Le brouillon la met déjà en tableau au § 5 ;
+            # un schéma neuf aurait produit des faits que le rapport ignore.
+            fait("periode", "aucune trace dans la super-timeline plaso",
+                 f"{a_} → {b_}", source, "dates distinctes des événements plaso",
+                 # « depuis »/« jusqu » portent des IDENTIFIANTS DE FAITS dans
+                 # ce tableau — c'est la colonne « bornée par ». Un trou plaso
+                 # n'est borné par aucun fait : ses millions d'événements n'en
+                 # sont pas. On les laisse vides plutôt que d'y mettre des
+                 # dates, que la colonne ferait lire comme des identifiants.
+                 horodatage=a_ + "T00:00:00Z", jours=n,
+                 confiance="à vérifier",
                  note=f"{n} jours sans un seul événement. plaso lit les bases, "
                       "les journaux et les caches : un intervalle vide ICI pèse "
                       "plus lourd qu'un intervalle vide dans la seule timeline "

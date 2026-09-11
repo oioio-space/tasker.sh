@@ -1192,16 +1192,9 @@ def pieces_abimees(base):
         fh.write("root:x:0:0::/root:/bin/bash\n"
                  "jdupont:x:1000:1000::/home/jdupont:/bin/bash\n")
 
-    def utmp1(typ, tty, user, iso):
-        return UTMP.pack(typ, 900, tty.encode().ljust(32, b"\0"),
-                         tty[-4:].encode().ljust(4, b"\0"),
-                         user.encode().ljust(32, b"\0"), b"\0" * 256,
-                         0, 0, 0, epoch(iso), 0, b"\0" * 16, b"\0" * 20)
-
     with open(os.path.join(r, "CONNEXIONS", "wtmp"), "wb") as fh:
-        fh.write(utmp1(7, "tty1", "jdupont", "2026-01-05T09:00:00")
-                 + utmp1(8, "tty1", "", "2026-01-05T18:00:00"))
-    US = 1_000_000
+        fh.write(utmp([(7, 900, "tty1", "jdupont", "", "2026-01-05T09:00:00"),
+                       (8, 900, "tty1", "", "", "2026-01-05T18:00:00")]))
     ev = []
     ev += [{"data_type": "fs:stat", "parser": "filestat",
             "timestamp": (epoch("2026-01-05T10:00:00") + i * 60) * US,
@@ -1233,15 +1226,36 @@ def pieces_abimees(base):
            sess.get("valeur") == "25" and sess.get("acteur") == "jdupont",
            f"{sess.get('valeur')} événements dans la fenêtre "
            "(les 5 de 03:00 sont dehors)")
+    # LE MÊME, sur un poste qui n'est pas en UTC. La fenêtre de session
+    # glissait d'un fuseau — une heure en France, treize à Auckland — parce
+    # qu'un datetime naïf, déjà en UTC, était reconverti comme s'il était
+    # local. Aucun test ne le voyait : ils tournent tous en UTC.
+    ailleurs = dict(os.environ, TZ="Pacific/Auckland")
+    p = subprocess.run([sys.executable, EXTRAIRE, r, "-o",
+                        os.path.join(coin, "plaso-tz.jsonl")],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       env=ailleurs)
+    with open(os.path.join(coin, "plaso-tz.jsonl"), encoding="utf-8") as fh:
+        ftz = [json.loads(l) for l in fh if l.strip()]
+    stz = next((x for x in ftz if "pendant une session" in x["fait"]), {})
+    yield ("plaso : la session ne glisse pas d'un fuseau",
+           stz.get("valeur") == sess.get("valeur")
+           and stz.get("horodatage") == sess.get("horodatage"),
+           f"UTC : {sess.get('valeur')} à {sess.get('horodatage')} ; "
+           f"Auckland : {stz.get('valeur')} à {stz.get('horodatage')}")
     maisons = {f.get("acteur"): f.get("valeur") for f in pl
                if "dossier personnel" in f["fait"]}
     yield ("plaso : recoupé avec les comptes",
            maisons == {"jdupont": "25", "root": "3"},
            f"{maisons or 'AUCUN'}")
-    yield ("plaso : le trou de six semaines est dit",
-           any("aucune trace plaso pendant" in f["fait"]
-               and "2026-01-05" in str(f.get("valeur")) for f in pl),
-           "la synthèse des périodes ne voit pas dans la super-timeline")
+    # Le trou prend le schéma que le brouillon tabule DÉJÀ — catégorie
+    # « periode », avec jours/depuis/jusqu — sans quoi il serait produit,
+    # compté au manifeste, et invisible au rapport.
+    trou = next((f for f in faits if f["categorie"] == "periode"
+                 and "super-timeline" in f["fait"]), {})
+    yield ("plaso : le trou entre dans le tableau des périodes",
+           trou.get("jours") == 46 and trou.get("valeur") == "2026-01-05 → 2026-02-20",
+           f"{trou.get('jours')} jours, {trou.get('valeur')}")
 
     # ── 6 quinquies · les unités de dfdatetime ──
     # Un plaso récent sérialise « date_time » comme un objet dfdatetime, dont le
@@ -1562,6 +1576,20 @@ def ce_que_le_rapport_montre(base):
     bonnes = all(barres(l) == 3 for l in corps)
     yield ("tableau : la ligne garde ses trois barres", bonnes,
            "un antislash en fin de valeur mangeait la barre fermante")
+
+    # ── 2 bis · un fait produit qui n'atteint pas le rapport n'existe pas ──
+    # Toute la lecture de la super-timeline était produite, comptée au
+    # manifeste, et INVISIBLE : « plaso » n'apparaissait pas une seule fois
+    # dans brouillon.py. Un fait que le rapport ne montre pas n'a servi à
+    # personne.
+    with open(os.path.join(SKILLS, "forensic-linux", "scripts", "brouillon.py"),
+              encoding="utf-8") as fh:
+        corps = fh.read()
+    manquantes = [cat for cat in ("plaso", "timeline", "periode", "adresse")
+                  if f'"{cat}"' not in corps]
+    yield ("toute catégorie de fait est lue par le rapport", not manquantes,
+           f"absentes de brouillon.py : {manquantes}" if manquantes
+           else "plaso, timeline, periode, adresse")
 
     # ── 3 · §2 n'invente pas de comptes à partir des adresses de courriel ──
     # La valeur du fait est l'ADRESSE, pas le nom du compte : le tableau des

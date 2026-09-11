@@ -141,7 +141,7 @@ def fuseau_des_faits(faits):
 # la machine. La navigation a sa section ; la timeline du système de fichiers
 # est trop volumineuse pour un tableau et se lit à part.
 EVENEMENTS = ("evenement", "support", "telechargement", "paquet", "suspect",
-              "persistance", "usage", "timeline")
+              "persistance", "usage", "timeline", "plaso")
 SESSION_MAX = timedelta(hours=12)      # une session sans fin connue ne dure pas plus
 RE_OU = re.compile(r'(tty [^\s,]+|depuis [^\s,]+|port [\d.-]+|/run/media/\S+|/dev/sd\w+)')
 RE_VISITES = re.compile(r'(\d+) visite')
@@ -451,6 +451,34 @@ def main():
                            "qu'il faudrait pour trancher — la date de rotation de "
                            "wtmp, la rétention du journal, un congé connu. Si vous "
                            "n'avez rien, écrivez que vous n'avez rien."))
+
+    # La super-timeline, quand la collecte en porte une. Elle est posée ICI,
+    # au § des traces : c'est elle qui dit ce que les pièces couvrent
+    # réellement, et ses intervalles vides sont déjà dans le tableau ci-dessus.
+    recens = [f for f in par.get("plaso", [])
+              if f["fait"].startswith(("événements dans", "forme du fichier"))]
+    if recens:
+        S.append("\n**La super-timeline plaso** — plaso ouvre les bases, les "
+                 "journaux et les caches que la timeline du système de fichiers "
+                 "ne regarde pas. Ce tableau dit ce que cette pièce PEUT "
+                 "répondre ; le reste s'interroge par `jq` sur le fichier.\n")
+        S.append(table(["", "", "id"],
+                       [(f["fait"], f["valeur"], f["id"]) for f in recens]))
+        familles = [f for f in par.get("plaso", [])
+                    if f["fait"].startswith("famille d'artefact")]
+        if familles:
+            S.append("\n" + table(["famille d'artefact", "événements", "id"],
+                                  [(f["valeur"], f.get("occurrences"), f["id"])
+                                   for f in familles]))
+        maisons = [f for f in par.get("plaso", [])
+                   if "dossier personnel" in f["fait"]]
+        if maisons:
+            S.append("\n**Par compte**, d'après le chemin des événements :\n")
+            S.append(table(["compte", "événements", "dernier", "id"],
+                           [(f.get("acteur"), f["valeur"], quand(f), f["id"])
+                            for f in maisons]))
+            S.append("> Un service écrit aussi chez les gens : ces comptes sont "
+                     "**rapprochés** des événements, pas mis en cause.\n")
 
     S.append("## 6 · Ce qui s'est passé, session par session\n")
     S.append("Une session, c'est un compte ouvert sur un terminal entre deux instants. "
