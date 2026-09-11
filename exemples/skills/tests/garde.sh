@@ -147,6 +147,25 @@ CRUSH_SCELLES="$travail/affaire-tk/scelles.txt:$travail/conf-tk-crush.txt" \
 CRUSH_SCELLES="$travail/affaire-tk/scelles.txt:$travail/conf-tk-crush.txt" \
   essai "deux listes séparées par « : » s'additionnent (2/2)" 2 \
   "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/poste_a_part/x\"}}"
+# LA LISTE À CÔTÉ DU SCRIPT — <affaire>/outils/scelles.txt. C'est là qu'un
+# analyste la pose naturellement, le script y étant déjà. Elle doit être lue
+# même quand la garde est appelée depuis un AUTRE dossier : un « $PWD/outils/
+# scelles.txt » y devient /tmp/outils/scelles.txt, introuvable et muet.
+mkdir -p "$travail/aff-outils/outils" "$travail/nas_rh"
+cp "$garde" "$travail/aff-outils/outils/garde-scelles.sh"
+printf '%s\n' "$travail/nas_rh" > "$travail/aff-outils/outils/scelles.txt"
+depuis_ailleurs() {             # <libellé> <code attendu> <json>
+    local code
+    ( cd / && printf '%s' "$3" \
+        | bash "$travail/aff-outils/outils/garde-scelles.sh" >/dev/null 2>&1 )
+    code=$?
+    if [[ "$code" == "$2" ]]; then printf "  ok      %s\n" "$1"
+    else printf "  MANQUE  %s — code=%d, attendu %d\n" "$1" "$code" "$2"
+         manques=$((manques + 1)); fi
+}
+depuis_ailleurs "outils/scelles.txt, lu depuis un autre dossier" 2 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/nas_rh/x\"}}"
+
 # Un fichier de liste absent n'est PAS une erreur : c'est le cas courant.
 CRUSH_SCELLES="$travail/rien-du-tout.txt:$travail/non-plus.txt" \
   essai "des listes absentes ne cassent rien" 0 \

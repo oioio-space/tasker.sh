@@ -640,20 +640,20 @@ garantie réelle ; le reste est une ceinture.
 
 Un partage NAS, un dossier d'affaire, une extraction à part : ce qui n'est pas
 une collecte et doit quand même être intouchable se **liste un par ligne**, en
-plus de la reconnaissance par structure et jamais à sa place. **Deux fichiers
-sont lus, et leurs listes s'additionnent :**
+plus de la reconnaissance par structure et jamais à sa place. **Trois
+emplacements sont lus, et leurs listes s'additionnent** — posez le fichier où
+vous voulez parmi ceux-là :
 
 | fichier | portée |
 |---|---|
-| `<affaire>/scelles.txt` | cette machine-là seulement |
+| `<affaire>/outils/scelles.txt` | cette machine-là, rangé à côté du script |
+| `<affaire>/scelles.txt` | cette machine-là, à la racine |
 | `~/.config/crush/scelles.txt` | le poste, toutes affaires |
 
-Le dossier d'affaire est celui où Crush tourne — il le donne dans
-`$CRUSH_PROJECT_DIR`, et à défaut le script prend le dossier courant. C'est un
-troisième fichier qui peut vivre dans le dossier d'analyse, mais il est
-**facultatif** : sans lui, rien ne change.
+Le fichier est **facultatif** : sans lui, rien ne change, et c'est le cas
+courant.
 
-    # ~/analyse/PC01_B13_SYCOBS_LINUX/scelles.txt
+    # ~/analyse/PC01_B13_SYCOBS_LINUX/outils/scelles.txt
     /mnt/nas_sycobs/partage_rh
     ~/Documents/affaire-2026-014
 
@@ -664,9 +664,17 @@ troisième fichier qui peut vivre dans le dossier d'analyse, mais il est
       liste déclarée : /home/…/analyse/PC01_B13_SYCOBS_LINUX/scelles.txt
       liste déclarée : /home/…/.config/crush/scelles.txt
 
-**N'écrivez pas `./scelles.txt` en dur** dans le script : le `.` est le dossier
-courant du processus, pas celui de l'analyse. Lancé à la main depuis ailleurs,
-le script ne trouverait plus rien — et sans un mot.
+**N'ancrez pas ce chemin sur le dossier courant** — ni `./scelles.txt`, ni
+`$PWD/outils/scelles.txt`. Crush lance bien le hook dans le dossier du projet,
+donc ça tombe juste sous Crush ; mais rien d'autre ne le garantit. Mesuré :
+
+    cwd = le dossier d'affaire   $PWD/outils/scelles.txt   → LU
+    cwd = /tmp                   $PWD/outils/scelles.txt   → INTROUVABLE
+    cwd = /tmp                   dossier du script         → LU
+
+Le premier emplacement du tableau est repéré par le chemin du **script**
+(`BASH_SOURCE`), pas par le dossier courant : c'est le seul qui tienne quand
+vous appelez la garde à la main depuis ailleurs.
 
 ### L'image montée : à lire, jamais à écrire
 

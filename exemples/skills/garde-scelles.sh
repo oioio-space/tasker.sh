@@ -34,19 +34,24 @@
 #
 # Réglage FACULTATIF : des dossiers à protéger EN PLUS, un par ligne. Sans ces
 # fichiers, la reconnaissance par structure suffit — c'est le cas courant.
-# DEUX fichiers sont lus, et leurs listes s'additionnent :
+# TROIS emplacements sont lus, et leurs listes s'AJOUTENT. Posez le fichier où
+# vous voulez parmi ceux-là, « --essai » dira lequel il a trouvé :
 #
-#   <dossier d'analyse>/scelles.txt    ce qui ne vaut que pour CETTE affaire
-#   ~/.config/crush/scelles.txt        ce qui vaut pour le poste
+#   <à côté de ce script>/scelles.txt   soit <affaire>/outils/scelles.txt
+#   <dossier d'analyse>/scelles.txt     à la racine de l'affaire
+#   ~/.config/crush/scelles.txt         ce qui vaut pour tout le poste
 #
 # ($XDG_CONFIG_HOME remplace ~/.config s'il est posé, comme pour Crush.)
 #
-# Le dossier d'analyse est celui où Crush tourne : il le donne dans
-# CRUSH_PROJECT_DIR, et à défaut on prend le dossier courant. Ne mettez donc
-# pas « ./scelles.txt » en dur : lancé à la main depuis ailleurs, le script ne
-# trouverait plus rien, et sans un mot.
+# Le premier est repéré par le chemin du SCRIPT, pas par le dossier courant :
+# c'est le seul qui tienne quand on lance la garde à la main depuis ailleurs.
+# Le deuxième vient de CRUSH_PROJECT_DIR, que Crush pose, avec $PWD à défaut —
+# Crush lance bien le hook dans le dossier du projet, mais rien d'autre ne le
+# garantit. Mesuré : « $PWD/outils/scelles.txt » est LU sous Crush et
+# INTROUVABLE dès qu'on appelle le script depuis /tmp ; l'ancrage sur le
+# script est lu dans les deux cas. N'écrivez donc jamais « ./scelles.txt ».
 #
-# CRUSH_SCELLES remplace les deux, et accepte plusieurs chemins séparés par
+# CRUSH_SCELLES remplace les trois, et accepte plusieurs chemins séparés par
 # « : », comme PATH.
 
 set -u
@@ -61,8 +66,11 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 _scelles_defaut() {
-    printf '%s:%s' "${CRUSH_PROJECT_DIR:-$PWD}/scelles.txt" \
-                   "${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt"
+    local ici
+    ici=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || ici="."
+    printf '%s:%s:%s' "$ici/scelles.txt" \
+                      "${CRUSH_PROJECT_DIR:-$PWD}/scelles.txt" \
+                      "${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt"
 }
 export TK_SCELLES="${CRUSH_SCELLES:-$(_scelles_defaut)}"
 
@@ -226,9 +234,13 @@ cwd = e.get("cwd") if isinstance(e.get("cwd"), str) else None
 # élément. Un fichier absent n'est pas une erreur : la reconnaissance par
 # structure reste le cas courant.
 declares = []
+lus = set()
 for f in os.environ.get("TK_SCELLES", "").split(os.pathsep):
-    if not f:
+    # Les trois emplacements se recouvrent quand le script est à la racine de
+    # l'affaire : le même fichier serait alors lu deux fois.
+    if not f or f in lus:
         continue
+    lus.add(f)
     try:
         with open(f, encoding="utf-8") as fh:
             declares += [os.path.abspath(os.path.expanduser(l.strip().rstrip("/")))
@@ -304,7 +316,7 @@ if [ "${1:-}" = "--essai" ]; then
     # Les listes déclarées suivent le dossier EXAMINÉ, pas le dossier courant :
     # « --essai ~/analyse/PC01 » depuis ailleurs doit lire le scelles.txt de
     # PC01, sinon l'essai ne dit pas la vérité sur ce dossier-là.
-    export TK_SCELLES="${CRUSH_SCELLES:-$dossier/scelles.txt:${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt}"
+    export TK_SCELLES="${CRUSH_SCELLES:-$dossier/outils/scelles.txt:$dossier/scelles.txt:${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt}"
     motif=$(mktemp)
     trap 'rm -f "$motif"' EXIT
 
