@@ -74,7 +74,7 @@ def batir(base):
     R = os.path.join(base, P)
     for d in ("SYSTEME", "COMPTES", "PAQUETS", "RESEAU", "JOURNAUX", "CONNEXIONS",
               "PERSISTANCE", "TIMELINE", "MACHINES", "PHOTOREC/recup_1", "STRINGS",
-              "SUPPRIMES/racine"):
+              "SUPPRIMES/racine", "PLASO"):
         os.makedirs(os.path.join(R, d), exist_ok=True)
 
     def w(rel, contenu):
@@ -434,6 +434,15 @@ def batir(base):
                  # membre était soumis aux motifs sous sa forme comprimée, où
                  # rien ne peut correspondre : elle sortait « ABSENTE ».
                  "texte: journal-tourne-et-comprime-dans-le-tar\n")
+    # Une super-timeline minuscule : sans elle, la catégorie « plaso » n'est pas
+    # PRODUITE par la collecte de référence, et le contrôle « toute catégorie
+    # atteint le rapport » ne couvre pas la régression qu'il vise.
+    w("PLASO/%s_plaso.jsonl" % P, "".join(
+        json.dumps({"__container_type__": "event", "data_type": "fs:stat",
+                    "parser": "filestat", "timestamp_desc": "mtime",
+                    "timestamp": ff("2026-01-06T22:%02d:00" % i),
+                    "filename": "/home/jdupont/Documents/note%d.odt" % i}) + "\n"
+        for i in range(3)))
     return R
 
 
@@ -824,11 +833,15 @@ def poser_tar_gz(chemin, membres):
         fh.write(gzip.compress(buf.getvalue()))
 
 
-def tourner(script, racine, sortie, *reste):
+def tourner(script, racine, sortie, *reste, env=None):
     """(code de retour, faits lus). Une sortie absente rend une liste vide, et
-    non une exception : c'est au contrôle de juger, pas à la suite de tomber."""
+    non une exception : c'est au contrôle de juger, pas à la suite de tomber.
+
+    « env » sert à rejouer la MÊME extraction ailleurs — sous un autre fuseau,
+    par exemple —, sans réécrire l'appel et la relecture du JSONL.
+    """
     p = subprocess.run([sys.executable, script, racine, "-o", sortie, *reste],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
     lus = []
     if os.path.exists(sortie):
         with open(sortie, encoding="utf-8") as fh:
@@ -1126,18 +1139,18 @@ def pieces_abimees(base):
               "w", encoding="utf-8") as fh:
         fh.write("2026-01-05T09:00:00+0100 pc42 systemd[1]: "
                  "Mounted /run/media/jdupont/CLE_USB\n")
-    US = 1_000_000
+    t0 = epoch("2026-01-05T08:00:00")          # l'instant que les contrôles citent
     evts = [
         # forme 1 : « timestamp » en microsecondes
-        {"data_type": "fs:stat", "parser": "filestat", "timestamp": 1767600000 * US,
+        {"data_type": "fs:stat", "parser": "filestat", "timestamp": t0 * US,
          "timestamp_desc": "mtime",
          "filename": "/home/jdupont/Documents/facture.pdf"},
-        {"data_type": "fs:stat", "parser": "filestat", "timestamp": 1767600001 * US,
+        {"data_type": "fs:stat", "parser": "filestat", "timestamp": (t0 + 1) * US,
          "timestamp_desc": "crtime",
          "display_name": "TSK:/usr/share/doc/ex/facture.pdf"},
         # forme 2 : « date_time.timestamp » en secondes
         {"data_type": "chrome:history:file_downloaded", "parser": "chrome_history",
-         "date_time": {"__type__": "DateTimeValues", "timestamp": 1767600100},
+         "date_time": {"__type__": "DateTimeValues", "timestamp": t0 + 100},
          "timestamp_desc": "Start Time",
          "filename": "/home/jdupont/Documents/facture.pdf"},
         # forme 3 : une chaîne ISO dans « datetime »
@@ -1150,7 +1163,7 @@ def pieces_abimees(base):
          "filename": "/home/jdupont/x.doc"},
     ]
     evts += [{"data_type": "fs:stat", "parser": "filestat",
-              "timestamp": (1767600200 + i) * US, "timestamp_desc": "crtime",
+              "timestamp": (t0 + 200 + i) * US, "timestamp_desc": "crtime",
               "filename": f"/run/media/jdupont/CLE_USB/doc{i}.odt"}
              for i in range(60)]
     with open(os.path.join(r, "PLASO", "PC42_B12_ARTE_ubuntu_plaso.jsonl"),
@@ -1230,13 +1243,8 @@ def pieces_abimees(base):
     # glissait d'un fuseau — une heure en France, treize à Auckland — parce
     # qu'un datetime naïf, déjà en UTC, était reconverti comme s'il était
     # local. Aucun test ne le voyait : ils tournent tous en UTC.
-    ailleurs = dict(os.environ, TZ="Pacific/Auckland")
-    p = subprocess.run([sys.executable, EXTRAIRE, r, "-o",
-                        os.path.join(coin, "plaso-tz.jsonl")],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       env=ailleurs)
-    with open(os.path.join(coin, "plaso-tz.jsonl"), encoding="utf-8") as fh:
-        ftz = [json.loads(l) for l in fh if l.strip()]
+    _, ftz = tourner(EXTRAIRE, r, os.path.join(coin, "plaso-tz.jsonl"),
+                     env=dict(os.environ, TZ="Pacific/Auckland"))
     stz = next((x for x in ftz if "pendant une session" in x["fait"]), {})
     yield ("plaso : la session ne glisse pas d'un fuseau",
            stz.get("valeur") == sess.get("valeur")
@@ -1263,10 +1271,10 @@ def pieces_abimees(base):
     # pour PosixTime : pour PosixTimeInMicroseconds cela levait une ValueError
     # « year 56014984 is out of range », non rattrapée, qui emportait la PHASE
     # ENTIÈRE. Une date fausse dans un rapport est pire encore qu'une absence.
-    for classe, ts in (("PosixTime", 1767600000),
-                       ("PosixTimeInMicroseconds", 1767600000 * 10 ** 6),
-                       ("PosixTimeInMilliseconds", 1767600000 * 10 ** 3),
-                       ("JavaTime", 1767600000 * 10 ** 3)):
+    for classe, ts in (("PosixTime", t0),
+                       ("PosixTimeInMicroseconds", t0 * US),
+                       ("PosixTimeInMilliseconds", t0 * 10 ** 3),
+                       ("JavaTime", t0 * 10 ** 3)):
         vu = extraire._plaso_horo({"date_time": {"__class_name__": classe,
                                                  "timestamp": ts}})
         yield (f"plaso : l'unité {classe[:22]}", vu == "2026-01-05T08:00:00Z",
@@ -1282,7 +1290,7 @@ def pieces_abimees(base):
                 "__container_type__": "event", "data_type": "fs:stat",
                 "parser": "filestat", "timestamp_desc": "mtime",
                 "date_time": {"__class_name__": "PosixTimeInMicroseconds",
-                              "timestamp": (1767600000 + i) * 10 ** 6},
+                              "timestamp": (t0 + i) * US},
                 "filename": f"/home/jdupont/x{i}.odt"}) + "\n")
     _, f3 = tourner(EXTRAIRE, r3, os.path.join(coin, "plaso-df.jsonl"))
     forme = next((x for x in f3 if x["fait"] == "forme du fichier plaso"), {})
@@ -1582,20 +1590,25 @@ def ce_que_le_rapport_montre(base):
     # manifeste, et INVISIBLE : « plaso » n'apparaissait pas une seule fois
     # dans brouillon.py. Un fait que le rapport ne montre pas n'a servi à
     # personne.
-    with open(os.path.join(SKILLS, "forensic-linux", "scripts", "brouillon.py"),
-              encoding="utf-8") as fh:
-        corps = fh.read()
-    manquantes = [cat for cat in ("plaso", "timeline", "periode", "adresse")
-                  if f'"{cat}"' not in corps]
-    yield ("toute catégorie de fait est lue par le rapport", not manquantes,
-           f"absentes de brouillon.py : {manquantes}" if manquantes
-           else "plaso, timeline, periode, adresse")
+    # On pose la question au RAPPORT, pas au code source. Chercher la chaîne
+    # « plaso » dans brouillon.py passait dès qu'elle figurait dans un tuple,
+    # un commentaire ou une docstring — et restait verte si tout le bloc était
+    # supprimé. La propriété qui compte est : une catégorie PRODUITE cite au
+    # moins un de ses identifiants dans le rapport. Elle vaut pour les
+    # catégories futures sans qu'on pense à allonger une liste.
+    with open(os.path.join(base, "faits.jsonl"), encoding="utf-8") as fh:
+        produits = [json.loads(l) for l in fh if l.strip()]
+    with open(os.path.join(base, "rapport-forensic.md"), encoding="utf-8") as fh:
+        rapport = fh.read()
+    lues = {f["categorie"] for f in produits if f["id"] in rapport}
+    orphelines = sorted({f["categorie"] for f in produits} - lues)
+    yield ("toute catégorie de fait atteint le rapport", not orphelines,
+           f"produites mais absentes : {', '.join(orphelines)}" if orphelines
+           else f"{len(lues)} catégories, toutes citées")
 
     # ── 3 · §2 n'invente pas de comptes à partir des adresses de courriel ──
     # La valeur du fait est l'ADRESSE, pas le nom du compte : le tableau des
     # comptes s'ouvrait sur « jean.dupont@entreprise.fr | 0 session | — | — ».
-    with open(os.path.join(base, "rapport-forensic.md"), encoding="utf-8") as fh:
-        rapport = fh.read()
     section = rapport.split("## 2 · Les comptes", 1)[-1].split("## 3", 1)[0]
     tableau_comptes = section.split("**Ce qui est propre", 1)[0]
     inventes = [l.split("|")[1].strip() for l in tableau_comptes.splitlines()

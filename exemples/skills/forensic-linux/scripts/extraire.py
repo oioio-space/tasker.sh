@@ -42,6 +42,21 @@ FAITS = []
 # lecteur du rapport, lui, puisse jamais le voir.
 DOSSIERS_SANS_PROVENANCE = ("STRINGS/", "PHOTOREC/", "SUPPRIMES/")
 
+# LA table des compresseurs — suffixe, ouvreur —, et pas une seconde en
+# if/elif ailleurs : ajouter un compresseur ici le rend lisible partout, de la
+# décompression des pièces au plafond de rendu jusqu'à la lecture d'un plaso
+# comprimé. Elle est en tête du fichier parce que quatre phases s'en servent,
+# dont une bien avant l'endroit où la décompression est écrite.
+# Le .gz y figure comme les autres : _blocs savait l'ouvrir depuis toujours,
+# mais _comprimee rendait False et _apercu était donc AVEUGLE au .gz — un
+# document rendu par le carving sous ce nom n'était jamais caractérisé.
+# gzip.GzipFile prend un NOM DE FICHIER en premier argument, là où BZ2File et
+# LZMAFile acceptent l'objet : d'où le fileobj= explicite. Sans lui, la phase
+# entière tombait sur « TypeError: expected str, bytes or os.PathLike ».
+_FLUX = ((".gz", lambda fh: gzip.GzipFile(fileobj=fh)), (".bz2", bz2.BZ2File),
+         (".xz", lzma.LZMAFile), (".lzma", lzma.LZMAFile),
+         (".zst", lambda fh: _zstd(fh)))
+
 
 RE_CONTROLE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 # Un nom de fichier n'est PAS forcément de l'UTF-8 : un disque à noms latin-1,
@@ -627,7 +642,14 @@ def comptes(c):
 # ── 3 · sessions, démarrages, arrêts ──────────────────────────────────
 
 
-def _last(c, chemin, categorie, quoi, methode):
+# Le rôle d'une ouverture de session, posé par les TROIS producteurs : le
+# binaire wtmp, la sortie texte de « last », et la table wtmp de wtmp.db.
+# Posé sur un seul, il laissait _fenetres_session rendre une liste vide — sans
+# un mot — sur Fedora 40 et Debian 13, qui n'ont plus de wtmp binaire.
+ROLE_SESSION = "session-ouverture"
+
+
+def _last(c, chemin, categorie, quoi, methode, role=None):
     """Lit la sortie TEXTE de last. Rend le nombre de lignes retenues, pour
     savoir si le binaire manquait vraiment.
 
@@ -660,12 +682,13 @@ def _last(c, chemin, categorie, quoi, methode):
              note=note + " — heure écrite par le poste d'analyse dans son fuseau, "
                          "le binaire wtmp manquant",
              tty=g["tty"] or None, origine=depuis if depuis not in ("", "-") else None,
-             fin=(lire_date(g["fin"]) or g["fin"]) if g.get("fin") else None)
+             fin=(lire_date(g["fin"]) or g["fin"]) if g.get("fin") else None,
+             role=role)
         poses += 1
     return poses
 
 
-def _utmp_brut(c, nom_fichier, categorie, quoi_defaut):
+def _utmp_brut(c, nom_fichier, categorie, quoi_defaut, role=None):
     """Lit le wtmp ou le btmp COPIÉ, quand aucune sortie texte n'existe.
 
     La collecte fait tourner « last » quand il est là ; si l'image n'avait pas
@@ -682,11 +705,11 @@ def _utmp_brut(c, nom_fichier, categorie, quoi_defaut):
         if os.path.isdir(dossier) else []
     poses = 0
     for chemin in chemins:
-        poses += _un_utmp(c, chemin, categorie, quoi_defaut)
+        poses += _un_utmp(c, chemin, categorie, quoi_defaut, role)
     return poses
 
 
-def _un_utmp(c, chemin, categorie, quoi_defaut):
+def _un_utmp(c, chemin, categorie, quoi_defaut, role=None):
     nom_fichier = os.path.basename(chemin)
     with open(chemin, "rb") as fh:
         blob = fh.read()
@@ -718,7 +741,14 @@ def _un_utmp(c, chemin, categorie, quoi_defaut):
                  "lecture directe du binaire (struct utmp)",
                  horodatage=e["quand"], acteur=e["qui"] or None,
                  note=note or None, tty=e["tty"] or None, origine=e["ou"] or None,
-                 role="session-ouverture" if e["type"] == 7 else None)
+                 # Le rôle vient de l'APPELANT, qui sait s'il lit wtmp ou
+                 # btmp ; le déduire du type de l'enregistrement le posait
+                 # aussi sur btmp, où le type 7 est un ÉCHEC. Un échec devenait
+                 # alors une fenêtre de session de douze heures, avec un
+                 # acteur — et tout ce que plaso trouvait dedans lui était
+                 # rapproché. Mesuré : neuf événements attribués à un compte
+                 # qui n'avait jamais réussi à se connecter.
+                 role=role if e["type"] == 7 else None)
         if e["type"] == 7 and e["tty"]:
             ouvertes[e["tty"]] = f
         elif e["type"] == 8 and e["tty"] in ouvertes:
@@ -758,6 +788,7 @@ def _bases_connexion(c):
                      qui, c.rel(chemin), f"sqlite3 sur la table {nom_table} de {base}",
                      horodatage=iso, acteur=qui, note=detail or None,
                      tty=tty or None, origine=origine or None,
+                     role=ROLE_SESSION if nom_table == "wtmp" else None,
                      fin=_epoch_iso(fin / diviseur) if isinstance(fin, (int, float)) and fin else None)
 
 
@@ -765,9 +796,14 @@ def sessions(c):
     """Le binaire wtmp d'abord : il porte l'epoch, donc l'heure exacte, et il
     contient aussi les démarrages et les arrêts. La sortie texte de last ne
     sert que s'il manque."""
-    if not _utmp_brut(c, "wtmp", "evenement", "ouverture de session"):
+    # Le RÔLE accompagne le libellé partout : c'est la version machine de la
+    # même décision. Posé sur un seul des trois producteurs, il laissait
+    # _fenetres_session rendre une liste vide — sans un mot — sur Fedora 40 et
+    # Debian 13, qui n'ont plus de wtmp binaire mais un wtmp.db.
+    if not _utmp_brut(c, "wtmp", "evenement", "ouverture de session",
+                      ROLE_SESSION):
         _last(c, c.un("_sessions.txt", "CONNEXIONS"), "evenement",
-              "ouverture de session", "last -F -f wtmp")
+              "ouverture de session", "last -F -f wtmp", ROLE_SESSION)
         _last(c, c.un("_reboots.txt", "CONNEXIONS"), "evenement",
               "démarrage ou arrêt de la machine", "last -F -x -f wtmp reboot shutdown")
     if not _utmp_brut(c, "btmp", "evenement", "échec d'authentification"):
@@ -1291,11 +1327,16 @@ def _iso_z(ts):
     return ts.replace(" ", "T") + "Z" if isinstance(ts, str) and len(ts) == 19 else ts
 
 
+# L'époque de Windows, en secondes avant 1970. Elle était écrite ici ET dans la
+# table des classes dfdatetime : une seule, lue par les deux.
+EPOCH_1601 = 11_644_473_600
+
+
 def _date_us(v, depuis_1601=False):
     """Microsecondes en ISO. Firefox compte depuis 1970, Chrome depuis 1601."""
     if not isinstance(v, (int, float)) or not v:
         return None
-    sec = v / 1_000_000 - (11_644_473_600 if depuis_1601 else 0)
+    sec = v / 1_000_000 - (EPOCH_1601 if depuis_1601 else 0)
     try:
         return _epoch_iso(sec)
     except (OSError, OverflowError, ValueError):
@@ -2448,13 +2489,18 @@ def _plaso_lignes(chemin):
     sont pas du JSON ligne à ligne, le reste l'est. On les retire ICI, une
     fois — le renifleur et le lecteur voient alors exactement la même chose.
     """
-    bas = chemin.lower()
-    lecteur = next((l for s, l in _FLUX if bas.endswith(s)), None)
+    # La sentinelle « rend le flux tel quel » évite un ternaire ET un second
+    # open. Le « with » ferme le descripteur dans TOUS les cas : GzipFile,
+    # BZ2File et LZMAFile ne ferment pas le fileobj qu'on leur passe, et
+    # _est_plaso ouvre chaque candidat de la collecte — un descripteur fuyait
+    # donc par candidat comprimé, sans borne.
+    lecteur = next((l for s, l in _FLUX if chemin.lower().endswith(s)),
+                   lambda fh: fh)
     try:
-        brut = lecteur(open(chemin, "rb")) if lecteur else open(chemin, "rb")
-        if brut is None:                     # compresseur absent du poste
-            return
-        with contextlib.closing(brut) as octets:
+        with open(chemin, "rb") as fh:
+            octets = lecteur(fh)
+            if octets is None:               # compresseur absent du poste
+                return
             for ligne in io.TextIOWrapper(octets, encoding="utf-8",
                                           errors="replace"):
                 nue = ligne.strip().lstrip("[").rstrip("],")
@@ -2498,14 +2544,15 @@ def trouver_plaso(c):
         if any(x in base for x in _PAS_PLASO) \
                 or rel.startswith(DOSSIERS_SANS_PROVENANCE):
             continue
-        candidats.append(chemin)
-    # Le nom d'abord — un dossier ou un fichier qui se nomme —, le reste
-    # ensuite : l'ordre ne change rien au résultat, mais il met les pièces
-    # évidentes en tête du rapport.
-    nommes = [x for x in candidats
-              if any(n in c.rel(x).lower() for n in _PLASO_NOMS)]
-    autres = [x for x in candidats if x not in nommes]
-    return [x for x in nommes + autres if _est_plaso(x)]
+        # Le nom d'abord — un dossier ou un fichier qui se nomme —, le reste
+        # ensuite : l'ordre ne change rien au résultat, mais il met les pièces
+        # évidentes en tête du rapport. Une clé posée ici, où le chemin relatif
+        # est déjà en main, plutôt qu'une seconde liste relue pour chaque
+        # candidat.
+        candidats.append(
+            (0 if any(x in rel.lower() for x in _PLASO_NOMS) else 1, chemin))
+    candidats.sort(key=lambda x: x[0])          # stable : l'ordre de collecte tient
+    return [chemin for _, chemin in candidats if _est_plaso(chemin)]
 
 
 # Un plaso récent sérialise « date_time » comme un objet dfdatetime, et son
@@ -2514,7 +2561,7 @@ def trouver_plaso(c):
 # PosixTimeInMicroseconds une ValueError « year 56014984 is out of range » qui
 # emportait la phase entière. (diviseur vers les secondes, origine en secondes
 # depuis 1970.)
-_1601 = -11644473600            # 1601-01-01, l'origine de Windows
+_1601 = -EPOCH_1601             # 1601-01-01, l'origine de Windows
 _DFDATETIME = {
     "PosixTime": (1, 0),
     "PosixTimeInMilliseconds": (10 ** 3, 0),
@@ -2528,51 +2575,64 @@ _DFDATETIME = {
 }
 # Hors de ces bornes, ce n'est pas une date : c'est une unité mal devinée.
 # Mieux vaut compter la ligne comme NON DATÉE que publier une date fausse — une
-# date est ce qu'un rapport cite en premier.
-PLASO_MIN, PLASO_MAX = 315532800, 4102444800      # 1980 → 2100
+# date est ce qu'un rapport cite en premier. Les ANNÉES sont nommées, et les
+# bornes en découlent : la note du fait les citait en retranchant les quatre
+# premiers caractères d'une date reconstruite, soit trois vérités à tenir
+# d'accord pour un seul intervalle.
+PLASO_ANNEE_MIN, PLASO_ANNEE_MAX = 1980, 2100
+PLASO_MIN = datetime(PLASO_ANNEE_MIN, 1, 1, tzinfo=timezone.utc).timestamp()
+PLASO_MAX = datetime(PLASO_ANNEE_MAX, 1, 1, tzinfo=timezone.utc).timestamp()
 
 
-def _plaso_iso(brut):
-    """Les secondes depuis 1970 d'une chaîne ISO, ou None."""
+def _iso(brut):
+    """Une chaîne ISO en datetime, ou None. LE lecteur d'ISO du fichier.
+
+    Le fuseau est rendu tel qu'il est écrit : une chaîne qui en porte un
+    revient ramenée à UTC et sans fuseau, une chaîne qui n'en porte pas revient
+    telle quelle. C'est à l'appelant de dire ce qu'il fait d'une heure sans
+    fuseau — _horo la prend pour l'heure du poste examiné, plaso pour de l'UTC
+    —, et ce choix se lit alors à l'endroit où il se décide.
+    """
     try:
         d = datetime.fromisoformat(brut.strip().replace("Z", "+00:00"))
     except ValueError:
         return None
-    return (d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d).timestamp()
+    return d.astimezone(timezone.utc).replace(tzinfo=None) if d.tzinfo else d
 
 
-def _plaso_secondes(e):
-    """Les secondes depuis 1970 d'un événement plaso, ou None.
+def _plaso_iso(brut):
+    """Les secondes depuis 1970 d'une chaîne ISO, ou None.
 
-    Le « timestamp » de premier niveau est la forme NORMALISÉE de plaso —
-    microsecondes depuis 1970 — et c'est la plus sûre : on la préfère. Le
-    « date_time » n'est lu qu'à défaut, avec l'unité que sa classe déclare.
+    Sans fuseau, plaso écrit de l'UTC : c'est la sortie de psort, normalisée.
+    """
+    d = _iso(brut)
+    return None if d is None else d.replace(tzinfo=timezone.utc).timestamp()
+
+
+def _plaso_horo(e):
+    """L'horodatage d'un événement plaso, en ISO UTC — ou None.
+
+    Trois formes selon la version. Le « timestamp » de premier niveau est la
+    forme NORMALISÉE de plaso — microsecondes depuis 1970 — et la plus sûre :
+    on la préfère. Le « date_time » n'est lu qu'à défaut, avec l'unité que sa
+    classe dfdatetime déclare. Une chaîne ISO ferme la marche.
     """
     ts = e.get("timestamp")
+    dt = e.get("date_time") if isinstance(e.get("date_time"), dict) else {}
     if isinstance(ts, (int, float)) and ts:
         # Un seuil grossier distingue les secondes des microsecondes : 10¹² µs
         # font onze jours après 1970, et 10¹² secondes l'an 33658. Aucune date
         # réelle n'est ambiguë.
-        return ts / 10 ** 6 if abs(ts) > 10 ** 12 else ts
-    dt = e.get("date_time")
-    if isinstance(dt, dict):
-        brut = dt.get("timestamp")
-        if isinstance(brut, (int, float)):
-            diviseur, origine = _DFDATETIME.get(str(dt.get("__class_name__")),
-                                                (1, 0))
-            return brut / diviseur + origine
+        s = ts / 10 ** 6 if abs(ts) > 10 ** 12 else ts
+    elif isinstance(dt.get("timestamp"), (int, float)):
+        diviseur, origine = _DFDATETIME.get(str(dt.get("__class_name__")), (1, 0))
+        s = dt["timestamp"] / diviseur + origine
+    else:
         # TimeElements et consorts portent une chaîne plutôt qu'un entier.
-        if isinstance(dt.get("string"), str):
-            return _plaso_iso(dt["string"])
-    return None
-
-
-def _plaso_horo(e):
-    """L'horodatage d'un événement plaso, en ISO UTC — ou None."""
-    s = _plaso_secondes(e)
-    if s is None:
-        brut = e.get("datetime")
-        s = _plaso_iso(brut) if isinstance(brut, str) and brut else None
+        s = next((x for x in (_plaso_iso(b) for b in (dt.get("string"),
+                                                      e.get("datetime"))
+                              if isinstance(b, str) and b) if x is not None),
+                 None)
     if s is None or not PLASO_MIN <= s <= PLASO_MAX:
         return None
     return _epoch_iso(s)
@@ -2640,6 +2700,13 @@ def _fenetres_session():
     return out
 
 
+# Un trou plus court que ça n'est pas un fait : un poste ne sert pas tous les
+# jours, un week-end en fait déjà deux. Quatorze jours, c'est plus qu'un congé
+# ordinaire, et c'est la durée à partir de laquelle l'absence mérite d'être
+# posée comme une question.
+TROU_JOURS = 14
+
+
 def _comptes_connus():
     """{dossier personnel en minuscules : compte} — pour ranger un chemin."""
     maisons = {}
@@ -2675,14 +2742,19 @@ def plaso(c):
     # champs du premier événement. C'est ce qui permet de dire, sans rien
     # demander à personne, quelle forme la version installée de plaso produit —
     # et de voir tout de suite si une unité inconnue a été devinée.
-    classes, champs = collections.Counter(), None
+    classes, champs = set(), None
 
     for chemin in chemins:
         for ligne in _plaso_lignes(chemin):
             total += 1
             try:
-                e = json.loads(ligne)
-            except json.JSONDecodeError:
+                # Le MÊME décodeur que le renifleur : json.loads refuse ce qui
+                # traîne derrière, raw_decode le tolère. Une ligne à deux
+                # objets était donc « du plaso » pour l'un et « illisible »
+                # pour l'autre, alors que le commentaire de _plaso_lignes
+                # promet qu'ils voient la même chose.
+                e, _ = _DECODEUR.raw_decode(ligne)
+            except ValueError:
                 illisibles += 1
                 continue
             if not isinstance(e, dict):
@@ -2692,19 +2764,18 @@ def plaso(c):
                 champs = sorted(e)
             dt = e.get("date_time")
             if isinstance(dt, dict):
-                classes[str(dt.get("__class_name__") or "?")] += 1
+                classes.add(str(dt.get("__class_name__") or "?"))
             genres[str(e.get("data_type") or "?")] += 1
             analyseurs[str(e.get("parser") or "?")] += 1
             quand = _plaso_horo(e)
             if quand is None:
                 sans_date += 1
             else:
-                premier = quand if premier is None or quand < premier else premier
-                dernier = quand if dernier is None or quand > dernier else dernier
-            if quand is not None:
+                premier = quand if premier is None else min(premier, quand)
+                dernier = quand if dernier is None else max(dernier, quand)
                 jours.add(quand[:10])
             ou = _plaso_chemin(e)
-            if ou and maisons:
+            if ou:
                 # Le dossier personnel range l'événement sous un COMPTE. C'est
                 # une imputation faible — un service peut écrire chez
                 # quelqu'un — et le fait le dira ; mais c'est la question que
@@ -2767,7 +2838,7 @@ def plaso(c):
     source = c.rel(chemins[0]) + ("" if len(chemins) == 1
                                   else f" (et {len(chemins) - 1} autre(s))")
     fait("plaso", "événements dans la super-timeline plaso", str(total), source,
-         "psort -o json_line, une ligne par événement",
+         "psort -o json_line, une ligne par événement", role="plaso-recensement",
          note=(f"du {premier} au {dernier}" if premier else "aucun événement daté")
               + f" ; {len(genres)} familles d'artefact, {len(analyseurs)} analyseurs"
               + ". plaso ouvre les bases, les journaux et les caches que mactime "
@@ -2777,6 +2848,7 @@ def plaso(c):
     for genre, n in genres.most_common(25):
         fait("plaso", "famille d'artefact dans la super-timeline", genre, source,
              "compte des « data_type » du fichier plaso", occurrences=n,
+             role="plaso-famille",
              note=f"{n} événement(s)")
     if len(genres) > 25:
         fait("limite", "familles d'artefact plaso non listées",
@@ -2787,17 +2859,18 @@ def plaso(c):
     # Le schéma lu, toujours posé : c'est lui qui permet de vérifier une date
     # plutôt que de la croire, et de voir si une classe dfdatetime inconnue a
     # été lue avec l'unité par défaut — donc peut-être à tort.
-    inconnues = [k for k in classes if k not in _DFDATETIME and k != "?"]
-    fait("plaso", "forme du fichier plaso", ", ".join(sorted(classes)) or "sans date_time",
+    inconnues = sorted(k for k in classes if k not in _DFDATETIME and k != "?")
+    note = ["champs : " + ", ".join(champs or ["aucun"]),
+            ("CLASSES INCONNUES lues en secondes, ce qui peut être faux : "
+             + ", ".join(inconnues)) if inconnues else
+            "toutes les classes de date sont connues",
+            f"dates retenues entre {PLASO_ANNEE_MIN} et {PLASO_ANNEE_MAX} : hors "
+            "de là, c'est une unité mal devinée, et la ligne est comptée comme "
+            "non datée"]
+    fait("plaso", "forme du fichier plaso",
+         ", ".join(sorted(classes)) or "sans date_time",
          source, "champs du premier événement et classes dfdatetime rencontrées",
-         note="champs : " + ", ".join(champs or ["aucun"])
-              + (f" ; CLASSES INCONNUES lues en secondes, ce qui peut être "
-                 f"faux : {', '.join(sorted(inconnues))}" if inconnues else
-                 " ; toutes les classes de date sont connues")
-              + f". Dates retenues entre {_epoch_iso(PLASO_MIN)[:4]} et "
-                f"{_epoch_iso(PLASO_MAX)[:4]} : hors de là, c'est une unité mal "
-                "devinée, et la ligne est comptée comme non datée",
-         confiance="certaine")
+         role="plaso-recensement", note=" ; ".join(note), confiance="certaine")
     if illisibles or sans_date:
         fait("limite", "lignes plaso non exploitées", str(illisibles + sans_date),
              source, "lecture ligne à ligne du JSON",
@@ -2821,7 +2894,7 @@ def plaso(c):
                   + ("" if sure else " — la pièce ne donne pas la fermeture : "
                      f"la fenêtre est bornée à {SESSION_MAX_PLASO}, elle n'est "
                      "pas mesurée")
-                  + f". Un service tourne aussi pendant qu'un compte est "
+                  + ". Un service tourne aussi pendant qu'un compte est "
                     f"connecté. {RAPPROCHEMENT}")
     for compte, (n, prem, dern) in sorted(par_compte.items()):
         fait("plaso", "activité dans le dossier personnel d'un compte", str(n),
@@ -2939,20 +3012,7 @@ def _horo(f):
     et mesurer un écart de plusieurs semaines.
     """
     h = f.get("horodatage")
-    if not h:
-        return None
-    try:
-        d = datetime.fromisoformat(h.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return d.astimezone(timezone.utc).replace(tzinfo=None) if d.tzinfo else d
-
-
-# Un trou plus court que ça n'est pas un fait : un poste ne sert pas tous les
-# jours, un week-end en fait déjà deux. Quatorze jours, c'est plus qu'un congé
-# ordinaire, et c'est la durée à partir de laquelle l'absence mérite d'être
-# posée comme une question.
-TROU_JOURS = 14
+    return _iso(h) if h else None
 
 
 def periodes(c):
@@ -3832,19 +3892,6 @@ def _morceaux(lecteur, ouvrir, etat, bloc=1 << 20):
 # rangé dans un tar et au fichier comprimé posé sur le disque : ajouter un
 # compresseur ici le rend lisible partout, et il n'y a pas d'endroit où un
 # .zst serait vu et un autre où il passerait pour du binaire.
-# Le .gz y figure comme les autres. _blocs sait l'ouvrir depuis toujours, mais
-# _comprimee rendait False et _apercu était donc AVEUGLE au .gz : un document
-# rendu par le carving sous ce nom n'était jamais caractérisé, alors que le
-# commentaire promettait qu'« ajouter un compresseur ici le rend lisible
-# partout ». Le plus courant de tous n'y était pas.
-# gzip.GzipFile prend un NOM DE FICHIER en premier argument, là où BZ2File et
-# LZMAFile acceptent l'objet : d'où le fileobj= explicite. Sans lui, la phase
-# entière tombait sur « TypeError: expected str, bytes or os.PathLike ».
-_FLUX = ((".gz", lambda fh: gzip.GzipFile(fileobj=fh)), (".bz2", bz2.BZ2File),
-         (".xz", lzma.LZMAFile), (".lzma", lzma.LZMAFile),
-         (".zst", lambda fh: _zstd(fh)))
-
-
 def _decomprime(nom, ouvrir, etat):
     """Le contenu lisible d'une source comprimée, morceau par morceau, ou None.
 

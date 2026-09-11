@@ -142,6 +142,9 @@ def fuseau_des_faits(faits):
 # est trop volumineuse pour un tableau et se lit à part.
 EVENEMENTS = ("evenement", "support", "telechargement", "paquet", "suspect",
               "persistance", "usage", "timeline", "plaso")
+# Ce que le § 5 montre déjà : le réimprimer dans la chronologie du § 6 ferait
+# compter deux fois le même identifiant.
+ROLES_HORS_CHRONO = ("plaso-recensement", "plaso-famille", "rapprochement-chemin")
 SESSION_MAX = timedelta(hours=12)      # une session sans fin connue ne dure pas plus
 RE_OU = re.compile(r'(tty [^\s,]+|depuis [^\s,]+|port [\d.-]+|/run/media/\S+|/dev/sd\w+)')
 RE_VISITES = re.compile(r'(\d+) visite')
@@ -440,8 +443,12 @@ def main():
             S.append("\n**Les périodes sans aucune trace**, toutes pièces confondues :\n")
             S.append(table(["durée", "période", "bornée par", "id"],
                            [(f"{f['jours']} jours", f["valeur"],
-                             f"{f.get('depuis')} → {f.get('jusqu')}", f["id"])
-                            for f in trous]))
+                             # Un trou plaso n'est borné par aucun fait : la
+                             # f-string écrivait « None → None » dans la case,
+                             # au lieu du tiret que cellule() rend pour None.
+                             " → ".join(x for x in (f.get("depuis"),
+                                                    f.get("jusqu")) if x) or None,
+                             f["id"]) for f in trous]))
         S.append("> **Un trou n'est pas une preuve de non-usage.** `wtmp` est tourné, "
                  "les journaux sont purgés, et un usage qui n'écrit rien ne laisse "
                  "rien. Ces lignes disent que la collecte ne porte aucune trace sur "
@@ -455,30 +462,36 @@ def main():
     # La super-timeline, quand la collecte en porte une. Elle est posée ICI,
     # au § des traces : c'est elle qui dit ce que les pièces couvrent
     # réellement, et ses intervalles vides sont déjà dans le tableau ci-dessus.
-    recens = [f for f in par.get("plaso", [])
-              if f["fait"].startswith(("événements dans", "forme du fichier"))]
+    # Sélection sur le RÔLE, jamais sur le libellé français : celui-ci est du
+    # texte de rapport, il se reformule, et l'extracteur vient justement de
+    # payer pour avoir sélectionné dessus. L'invariant vaut des DEUX côtés du
+    # faits.jsonl, sinon ce n'est pas un invariant mais une habitude locale.
+    plasos = par.get("plaso", [])
+
+    def par_role(r):
+        return [f for f in plasos if f.get("role") == r]
+
+    recens, familles = par_role("plaso-recensement"), par_role("plaso-famille")
+    maisons = par_role("rapprochement-chemin")
     if recens:
         S.append("\n**La super-timeline plaso** — plaso ouvre les bases, les "
                  "journaux et les caches que la timeline du système de fichiers "
                  "ne regarde pas. Ce tableau dit ce que cette pièce PEUT "
                  "répondre ; le reste s'interroge par `jq` sur le fichier.\n")
-        S.append(table(["", "", "id"],
-                       [(f["fait"], f["valeur"], f["id"]) for f in recens]))
-        familles = [f for f in par.get("plaso", [])
-                    if f["fait"].startswith("famille d'artefact")]
-        if familles:
-            S.append("\n" + table(["famille d'artefact", "événements", "id"],
-                                  [(f["valeur"], f.get("occurrences"), f["id"])
-                                   for f in familles]))
-        maisons = [f for f in par.get("plaso", [])
-                   if "dossier personnel" in f["fait"]]
-        if maisons:
-            S.append("\n**Par compte**, d'après le chemin des événements :\n")
-            S.append(table(["compte", "événements", "dernier", "id"],
-                           [(f.get("acteur"), f["valeur"], quand(f), f["id"])
-                            for f in maisons]))
-            S.append("> Un service écrit aussi chez les gens : ces comptes sont "
-                     "**rapprochés** des événements, pas mis en cause.\n")
+        S.append(table(["ce qui a été lu", "valeur", "id", "source"],
+                       [(f["fait"], f["valeur"], f["id"], f["source"])
+                        for f in recens]))
+    if familles:
+        S.append("\n" + table(["famille d'artefact", "événements", "id"],
+                              [(f["valeur"], f.get("occurrences"), f["id"])
+                               for f in familles]))
+    if maisons:
+        S.append("\n**Par compte**, d'après le chemin des événements :\n")
+        S.append(table(["compte", "événements", "dernier", "id"],
+                       [(f.get("acteur"), f["valeur"], quand(f), f["id"])
+                        for f in maisons]))
+        S.append("> Un service écrit aussi chez les gens : ces comptes sont "
+                 "**rapprochés** des événements, pas mis en cause.\n")
 
     S.append("## 6 · Ce qui s'est passé, session par session\n")
     S.append("Une session, c'est un compte ouvert sur un terminal entre deux instants. "
@@ -486,8 +499,15 @@ def main():
              "deux sessions se chevauchent, la ligne le dit, et l'attribution reste à "
              "établir par une autre trace (le chemin `/run/media/<compte>/`, le compte "
              "d'un sudo).\n")
+    # Le § 5 montre déjà le recensement plaso et le tableau par compte : les
+    # réimprimer ici ferait compter deux fois le même identifiant. L'exclusion
+    # se fait sur le RÔLE ; celle des ouvertures et fermetures de session reste
+    # sur le libellé faute d'un rôle de fermeture — à reprendre le jour où il
+    # y en aura un.
     evenements = H.tri([f for f in faits if f.get("categorie") in EVENEMENTS
-                        and f.get("horodatage") and "ouverture de session" not in f["fait"]
+                        and f.get("horodatage")
+                        and f.get("role") not in ROLES_HORS_CHRONO
+                        and "ouverture de session" not in f["fait"]
                         and "fermeture de session" not in f["fait"]])
     cles = [H.cle(f) for f in evenements]
     colonnes = ["quand", "qui", "quoi", "valeur", "où", "comment", "confiance", "id"]
