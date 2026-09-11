@@ -198,35 +198,63 @@ lancez pas Crush dans un dossier dont vous n'avez pas lu la configuration.
 `garde-scelles.sh` est la ceinture décrite au §3 ; le §9 explique les réglages
 du modèle.
 
-### Tout dans le dossier d'analyse, rien de global
+### Le hook dans le seul dossier d'analyse
 
-Le `crushrc` ci-dessus se pose dans `~/.config/crush/`, donc pour TOUS les
-projets. On peut aussi ne rien mettre de global : Crush cherche `.crushrc` puis
-`crushrc` dans le dossier de travail — en remontant jusqu'à la racine git —, et
-**les configurations de projet priment sur les globales** (`load.go:928-955`).
-Un poste qui sert aussi à autre chose garde alors son Crush intact.
+Le cas courant : la configuration reste globale — `~/.config/crush/crush.json`,
+avec le fournisseur, le modèle, les permissions —, et **seul le hook** est posé
+dans le dossier d'analyse, avec le script à côté. Rien d'autre ne bouge, et le
+Crush du poste reste utilisable pour tout le reste.
 
+    ~/.config/crush/crush.json     ← inchangé, et SANS bloc "hooks"
     ~/analyse/
-      .crushrc              ← la configuration ET le hook
-      garde-scelles.sh      ← la garde
-      .crush/skills/        ← les deux skills (.agents/, .claude/, .cursor/ marchent aussi)
-      .crush/               ← l'état de session (data-directory)
-      PC01_B13_SYCOBS_LINUX/  ← le scellé
-      mnt/                  ← l'image montée en lecture seule
+      .crush.json                  ← le hook, et rien d'autre
+      outils/garde-scelles.sh      ← le script
+      PC01_B13_SYCOBS_LINUX/       ← le scellé
+      mnt/                         ← l'image montée
 
-Deux lignes du `crushrc` livré changent, et une disparaît :
+`~/analyse/.crush.json` tient en huit lignes :
 
-    CONFIG="$PWD"                             # au lieu de ~/.config/crush
-    option data-directory "$PWD/.crush"
-    # option skill-path : à supprimer — .crush/skills est déjà regardé
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "hooks": {
+    "PreToolUse": [{
+      "name": "garde des scellés",
+      "matcher": "^(edit|write|multiedit|bash|download|lsp_rename|lsp_replace_symbol)$",
+      "command": "$CRUSH_PROJECT_DIR/outils/garde-scelles.sh",
+      "timeout": 5
+    }]
+  }
+}
+```
 
-`$PWD` est le dossier d'où `crush` est lancé : lancez-le depuis le dossier
-d'analyse. Depuis un sous-dossier, `.crushrc` serait bien trouvé mais `$PWD`
-pointerait ailleurs — donnez alors le chemin absolu.
+Trois choses à savoir, toutes vérifiées sur la source et en exécution :
 
-Vérifié de bout en bout, `~/.config/crush` inexistant : les deux skills sont
-chargés, et un `write` d'une pièce neuve dans le scellé est refusé (1 ligne
-`"decision":"deny"` au journal, aucun fichier créé).
+- **Crush lit les deux et le projet gagne.** Il cherche `.crushrc`, `crushrc`,
+  `.crush.json`, `crush.json` dans le dossier de travail — en remontant jusqu'à
+  la racine git — et ajoute ces fichiers APRÈS les configurations globales
+  (`load.go:928-955`). Dans un même dossier, `.crush.json` prime sur
+  `crush.json`.
+- **`$CRUSH_PROJECT_DIR` est fourni au hook** (`hooks/input.go:62`), avec
+  `$CRUSH_CWD`, `$CRUSH_TOOL_NAME` et `$CRUSH_EVENT`. La commande d'un hook
+  passe par le shell embarqué, donc les variables y sont développées — c'est
+  ce qui permet de ne pas écrire de chemin absolu. En cas de doute, un chemin
+  absolu marche toujours ; `$CRUSH_PROJECT` n'existe pas, et une variable
+  inconnue devient une chaîne VIDE, ce qui donne un hook « non bloquant » qui
+  ne dit rien d'autre qu'une ligne au journal.
+- **Le bloc `hooks` du projet REMPLACE celui du global** pour l'événement
+  nommé : laissez le global sans `hooks`, et la garde n'existe que dans ce
+  dossier-là.
+
+Vérifié de bout en bout contre Crush compilé, avec un `crush.json` global sans
+aucun `hooks` : un `write` d'une pièce neuve dans le scellé est refusé — une
+ligne `"decision":"deny"` au journal, aucun fichier créé —, et les skills
+continuent d'être chargés depuis la configuration globale. Testé aussi avec un
+dépôt git au-dessus du dossier d'analyse : même résultat.
+
+Le `crushrc` livré, lui, fait la même chose en une ligne `hook add PreToolUse`,
+et le même découpage s'applique : `~/analyse/.crushrc` ne portant que cette
+ligne suffit.
 
 ## 3 · Protéger les scellés
 
