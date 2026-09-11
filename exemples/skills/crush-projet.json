@@ -1,0 +1,35 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "_commentaire": [
+    "LE HOOK, ET RIEN D'AUTRE. À copier en « .crush.json » dans le dossier",
+    "d'analyse d'une machine — celui où vous lancez crush, par exemple",
+    "~/analyse/PC01_B13_SYCOBS_LINUX/. Le crush.json GLOBAL garde le",
+    "fournisseur, le modèle et les permissions, et ne porte alors AUCUN bloc",
+    "« hooks » : le bloc du projet remplace celui du global pour l'événement",
+    "nommé, et la garde n'existe que dans ce dossier-là.",
+    "",
+    "Le fichier doit être DANS le dossier où crush est lancé. La recherche",
+    "remonte les parents, mais s'arrête à la racine du dépôt git quand il y en",
+    "a un, et au dossier courant sinon (load.go, lookupConfigs) : posé un cran",
+    "au-dessus, il n'est pas lu, et rien ne le dit.",
+    "",
+    "$CRUSH_PROJECT_DIR est ce dossier (coordinator.go le passe depuis",
+    "cfg.WorkingDir()), et la commande d'un hook passe par le shell embarqué,",
+    "donc la variable y est développée. $CRUSH_PROJECT n'existe pas — et une",
+    "variable inconnue devient une chaîne VIDE, ce qui donne un hook qui",
+    "s'exécute sans jamais rien refuser, tout en ayant l'air posé.",
+    "",
+    "Le script attendu à côté : outils/garde-scelles.sh, exécutable.",
+    "Voir README.md §0 et §2."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "name": "garde des scellés",
+        "matcher": "^(edit|write|multiedit|bash|download|lsp_rename|lsp_replace_symbol)$",
+        "command": "$CRUSH_PROJECT_DIR/outils/garde-scelles.sh",
+        "timeout": 5
+      }
+    ]
+  }
+}
