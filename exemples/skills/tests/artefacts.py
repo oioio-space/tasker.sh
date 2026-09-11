@@ -1182,6 +1182,78 @@ def pieces_abimees(base):
                and f.get("valeur") == "2" for f in faits),
            "une illisible, une sans date")
 
+    # ── 6 quater · plaso se trouve même quand le nommage est imparfait ──
+    # Un dossier « PLASO/ » et une extension « .jsonl » ne sont PAS garantis :
+    # la pièce peut être rangée n'importe où, comprimée, et nommée sans
+    # rapport. On ne se fie donc pas au nom — on ouvre la première ligne.
+    r = collecte("plaso-sale", "SYSTEME", "COMPTES", "CONNEXIONS", "divers")
+    with open(os.path.join(r, "COMPTES", "PC42_B12_ARTE_ubuntu_passwd.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("root:x:0:0::/root:/bin/bash\n"
+                 "jdupont:x:1000:1000::/home/jdupont:/bin/bash\n")
+
+    def utmp1(typ, tty, user, iso):
+        return UTMP.pack(typ, 900, tty.encode().ljust(32, b"\0"),
+                         tty[-4:].encode().ljust(4, b"\0"),
+                         user.encode().ljust(32, b"\0"), b"\0" * 256,
+                         0, 0, 0, epoch(iso), 0, b"\0" * 16, b"\0" * 20)
+
+    with open(os.path.join(r, "CONNEXIONS", "wtmp"), "wb") as fh:
+        fh.write(utmp1(7, "tty1", "jdupont", "2026-01-05T09:00:00")
+                 + utmp1(8, "tty1", "", "2026-01-05T18:00:00"))
+    US = 1_000_000
+    ev = []
+    ev += [{"data_type": "fs:stat", "parser": "filestat",
+            "timestamp": (epoch("2026-01-05T10:00:00") + i * 60) * US,
+            "timestamp_desc": "mtime",
+            "filename": f"/home/jdupont/Documents/note{i}.odt"} for i in range(25)]
+    # HORS de la fenêtre de session : ils ne doivent pas y être comptés
+    ev += [{"data_type": "fs:stat", "parser": "filestat",
+            "timestamp": (epoch("2026-01-05T03:00:00") + i) * US,
+            "timestamp_desc": "crtime", "filename": "/var/lib/x"}
+           for i in range(5)]
+    # après un TROU de plus de six semaines, chez root
+    ev += [{"data_type": "syslog:line", "parser": "syslog",
+            "timestamp": (epoch("2026-02-20T12:00:00") + i) * US,
+            "timestamp_desc": "Content Modification Time",
+            "filename": "/root/.bash_history"} for i in range(3)]
+    # nom quelconque, comprimé, hors de tout dossier « PLASO »
+    with gzip.open(os.path.join(r, "divers", "extraction-complete-2026.json.gz"),
+                   "wt", encoding="utf-8") as fh:
+        for e in ev:
+            fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+    _, faits = tourner(EXTRAIRE, r, os.path.join(coin, "plaso-sale.jsonl"))
+    pl = [f for f in faits if f["categorie"] == "plaso"]
+    yield ("plaso : trouvé malgré le nommage",
+           any("événements dans" in f["fait"] and f.get("valeur") == "33"
+               for f in pl),
+           "ni dossier PLASO, ni extension .jsonl, et comprimé")
+    sess = next((f for f in pl if "pendant une session" in f["fait"]), {})
+    yield ("plaso : recoupé avec la session",
+           sess.get("valeur") == "25" and sess.get("acteur") == "jdupont",
+           f"{sess.get('valeur')} événements dans la fenêtre "
+           "(les 5 de 03:00 sont dehors)")
+    maisons = {f.get("acteur"): f.get("valeur") for f in pl
+               if "dossier personnel" in f["fait"]}
+    yield ("plaso : recoupé avec les comptes",
+           maisons == {"jdupont": "25", "root": "3"},
+           f"{maisons or 'AUCUN'}")
+    yield ("plaso : le trou de six semaines est dit",
+           any("aucune trace plaso pendant" in f["fait"]
+               and "2026-01-05" in str(f.get("valeur")) for f in pl),
+           "la synthèse des périodes ne voit pas dans la super-timeline")
+
+    # Ce qui n'est PAS du plaso ne doit pas être pris pour tel : la collecte
+    # porte du JSON qui n'en est pas — snapd, nos propres sorties.
+    r2 = collecte("plaso-faux", "PERSISTANCE")
+    with open(os.path.join(r2, "PERSISTANCE", "state.json"), "w",
+              encoding="utf-8") as fh:
+        fh.write(json.dumps({"data": {"snaps": {"firefox": {"revision": "1"}}}}))
+    _, f2 = tourner(EXTRAIRE, r2, os.path.join(coin, "plaso-faux.jsonl"))
+    yield ("plaso : un JSON qui n'en est pas est écarté",
+           not any(f["categorie"] == "plaso" for f in f2),
+           "state.json de snapd n'est pas une super-timeline")
+
     # ── 7 · une correspondance à cheval sur deux blocs : comptée UNE fois ──
     # La déduplication se faisait sur la FIN de la correspondance, qui bouge
     # dès que le motif a une queue gourmande — six des onze motifs d'INTERETS.

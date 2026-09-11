@@ -448,6 +448,21 @@ avec les mêmes limites que l'artefact lui-même : un `fs:stat` ne dit pas qui a
 Time »…) : il n'est pas décoratif, et deux événements du même fichier à deux
 dates différentes sont deux faits différents.
 
+**Où elle la cherche.** Nulle part en particulier. Le nommage d'une collecte
+n'est jamais parfait — le dossier peut s'appeler `PLASO`, `plaso`,
+`TIMELINE_PLASO` ou rien du tout, et le fichier `plaso.jsonl`,
+`super_timeline.json`, `l2t.jsonl.gz`, `PC01-psort.json`. L'extraction ne se fie
+donc PAS au nom : elle retient les candidats bon marché — tout `.json` ou
+`.jsonl`, comprimé ou non, hors de `PHOTOREC/` et `SUPPRIMES/` —, puis OUVRE la
+première ligne de chacun et regarde si c'est du plaso. Les deux sorties de psort
+sont acceptées : `-o json_line` (un objet par ligne) et `-o json` (un unique
+tableau). Un `state.json` de snapd, ou nos propres `faits.jsonl`, sont écartés.
+
+Si votre super-timeline n'est pas vue, c'est que sa première ligne ne porte pas
+deux des champs `data_type`, `timestamp_desc`, `parser`, `__container_type__`,
+`pathspec`, `display_name`, `timestamp`, `date_time` — regardez-la
+(`head -1 … | python3 -m json.tool`) avant de conclure.
+
 **Ce que l'extraction en fait — et ne fait pas.** Une super-timeline compte des
 millions de lignes ; les recopier en faits n'apprendrait rien et noierait le
 rapport. `extraire.py` en tire quatre choses :
@@ -462,6 +477,25 @@ rapport. `extraire.py` en tire quatre choses :
    MÊME NOM » est une homonymie, sans acteur ;
 3. les **chemins sensibles**, bornés à 300, et la borne se dit ;
 4. un fait `limite` comptant les lignes qu'il n'a pas su lire ou dater.
+
+**Et trois RECOUPEMENTS avec le reste des faits** — c'est là qu'une
+super-timeline vaut plus que la somme de ses lignes :
+
+- **par session.** Chaque ouverture de session établie ailleurs (wtmp, `last`)
+  donne une fenêtre ; l'extraction compte les événements plaso qui y tombent.
+  Le fait porte l'acteur et cite le fait d'ouverture. Quand la pièce ne donne
+  pas la fermeture, la fenêtre est **bornée** à seize heures et le fait le dit :
+  elle n'est pas mesurée. Attention au sens : un événement dans la fenêtre d'une
+  session n'est pas l'œuvre de ce compte — un service tourne aussi pendant qu'il
+  est connecté. C'est un rapprochement, à confirmer sur la pièce.
+- **par compte.** Les événements sous `/home/<compte>/` et `/root/` sont comptés
+  et datés par compte. Même réserve : un service écrit aussi chez les gens.
+- **par intervalle.** Les journées qui portent au moins un événement sont
+  relevées, et tout intervalle de plus de sept jours sans un seul événement
+  devient un fait. C'est ce qui permet de peser un « rien entre le X et le Y » :
+  la synthèse des périodes ne voit que les faits des autres phases, alors que
+  plaso a lu les bases, les journaux et les caches. Un intervalle vide **ici**
+  pèse bien plus lourd — sans dire pour autant que le poste n'a pas servi.
 
 **Pour le reste, interrogez le fichier vous-même.** Il est fait pour :
 

@@ -48,8 +48,8 @@ de la pièce :
 | un `…` final | valeur **coupée** : ne la citez pas comme une phrase entière, et ne lisez pas une adresse collée au `…` — elle est peut-être tranchée |
 
 Il écrit aussi `faits-manifeste.json` : l'empreinte SHA-256 de chaque pièce lue,
-de l'extracteur, des listes de recherche, et la `provenance_sha256` qui les
-résume — **quels octets**, **par quel outil**, **pour quelles questions**.
+de l'extracteur et des listes de recherche — **quels octets**, **par quel
+outil**, **pour quelles questions**.
 
 Les historiques de navigation ne sont **pas bornés** : pages, téléchargements,
 marque-pages, recherches, saisies de formulaire — tout ce que la base porte
@@ -64,17 +64,17 @@ empreinte, adresse, nom —, `--indicateurs fichier.txt` le cherche dans toute l
 collecte : `references/indicateurs.md`.
 
 **Les dates.** Chaque fait porte son horodatage tel que la pièce le donne : en
-UTC (suffixe `Z`) quand elle compte en epoch — `wtmp`, bases de navigateur,
-NetworkManager —, avec son décalage quand elle l'écrit (`journalctl`), sans
-rien quand elle ne le dit pas (ligne syslog, `dpkg.log` — c'est alors l'heure
-du poste). Le binaire `wtmp` passe avant la sortie texte de `last` : il porte
-l'epoch, le texte l'heure du poste d'analyse. Le brouillon met tout dans le
-fuseau du poste ; **vous ne convertissez rien à la main**.
+UTC (suffixe `Z`) quand elle compte en epoch — `wtmp`, navigateurs,
+NetworkManager —, avec son décalage quand elle l'écrit (`journalctl`), sans rien
+quand elle ne le dit pas (ligne syslog, `dpkg.log` : c'est l'heure du poste). Le
+binaire `wtmp` passe avant la sortie texte de `last`, qui porte l'heure du poste
+d'ANALYSE. Le brouillon met tout dans le fuseau du poste ; **vous ne convertissez
+rien à la main**.
 
 Quatre fiches, à ouvrir **au besoin**, jamais en entier : chacune s'ouvre par
 un index donnant le titre exact de ses sections. Lisez la seule qui répond —
 `grep -A 60 '<titre>' references/<fiche>`. `artefacts.md` coûte six mille
-jetons ; une de ses onze sections, six cents.
+jetons ; une de ses sections, six cents.
 
 | fiche | à ouvrir quand… |
 |---|---|
@@ -111,8 +111,8 @@ Quatre tableaux ne lisent aucune pièce : ils relisent les faits établis, chaqu
 ligne citant les identifiants dont elle sort.
 
 - **Les comptes**, avec première et dernière session, et la pièce qui le dit.
-  Un compte à zéro session n'est **pas** inutilisé : c'est un compte dont
-  `wtmp` ne porte aucune session. Dites-le ainsi.
+  Un compte à zéro session n'est **pas** inutilisé : c'est un compte dont `wtmp`
+  ne porte aucune session. Dites-le ainsi.
 - **Les périodes sans trace.** `wtmp` est tourné, les journaux purgés, un usage
   qui n'écrit rien ne laisse rien. **N'écrivez jamais « le poste n'a pas
   servi »** : écrivez « la collecte ne porte aucune trace entre le X et le Y ».
@@ -126,13 +126,15 @@ ligne citant les identifiants dont elle sort.
   **« administrée localement »** est tirée au hasard — **elle n'identifie pas un
   matériel**. Détail : `references/artefacts.md`.
 
-**Un dossier `PLASO/`** est une super-timeline — plaso ouvre les bases, les
-journaux et les caches que mactime ne regarde pas. L'extraction n'en recopie pas
-les millions d'événements : elle en fait le RECENSEMENT, qui dit ce que la pièce
-peut répondre. `grep -A 30 'super-timeline' references/artefacts.md`.
+**Une super-timeline plaso** est cherchée par son CONTENU, où qu'elle soit
+rangée et quel que soit son nom : plaso ouvre les bases, les journaux et les
+caches que mactime ne regarde pas. L'extraction n'en recopie pas les millions
+d'événements — elle en fait le recensement, et la RECOUPE avec le reste :
+événements par session ouverte, par compte, et intervalles sans une seule trace.
+`grep -A 40 'super-timeline' references/artefacts.md`.
 
 **Si l'extraction plante, relancez la même commande** : elle reprend où elle
-s'était arrêtée.
+s'est arrêtée.
 
 **Avant un `grep` sur la collecte**, vérifiez `ripgrep` (`command -v rg`) : sans
 lui l'outil se rabat sur un parcours qui **ignore son propre délai de garde** et
@@ -158,11 +160,10 @@ Trois contrôles, dans cet ordre. Ils changent la lecture de tout le reste.
 
 ## Quand une pièce manque
 
-Ne vous contentez jamais d'écrire « absent ». Une absence a deux causes : ou
-bien *le système ne l'avait pas* — un fait sur ce système —, ou bien *la
-collecte l'a ratée*, et il faut y retourner. `references/ou-chercher.md` les
-distingue pièce par pièce et dit par quoi chacune a été remplacée. Quand le
-doute demeure :
+Ne vous contentez jamais d'écrire « absent ». Une absence a deux causes : *le
+système ne l'avait pas* — un fait sur ce système —, ou *la collecte l'a ratée*,
+et il faut y retourner. `references/ou-chercher.md` les distingue pièce par
+pièce et dit par quoi chacune a été remplacée. Quand le doute demeure :
 
 1. **Demandez le rapport de la collecte** — `PREFIX_rapport.txt` et
    `PREFIX_script.log` : ils disent, étape par étape, ce qui a réussi, échoué
@@ -213,11 +214,10 @@ cut -d'"' -f8 faits.jsonl | sort | uniq -c | sort -rn   # faits par catégorie
   > rien, ne conclus rien : je recoupe ensuite.
 
 **Un sous-agent lit et résume ; il ne conclut pas**, ne qualifie rien de
-suspect, ne décide pas de ce qui entre au rapport — les identifiants qu'il rend
-servent à le revérifier sans le croire sur parole. Le recoupement et la
-rédaction restent à vous : le jugement est là. Sans l'outil `agent`, lisez par
-catégorie dans l'ordre du plan, en écrivant chaque section dès que vous en avez
-la matière.
+suspect, ne décide pas de ce qui entre au rapport — ses identifiants servent à
+le revérifier sans le croire sur parole. Le recoupement et la rédaction restent
+à vous : le jugement est là. Sans l'outil `agent`, lisez par catégorie dans
+l'ordre du plan, en écrivant chaque section dès que vous en avez la matière.
 
 ### 4 · Recouper
 
