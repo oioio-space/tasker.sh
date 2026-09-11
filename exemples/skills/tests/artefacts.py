@@ -997,7 +997,31 @@ def pieces_abimees(base):
            any(c["theme"] == "limite" and c.get("valeur", "").endswith(".zst") for c in cs),
            "un constat « limite » nomme le membre")
 
-    # ── 7 · conformité : pas de navigateur ≠ phase « usage » vide ──
+    # ── 7 · une correspondance à cheval sur deux blocs : comptée UNE fois ──
+    # La déduplication se faisait sur la FIN de la correspondance, qui bouge
+    # dès que le motif a une queue gourmande — six des onze motifs d'INTERETS.
+    # Tranchée par la fin du tampon puis rallongée au tour suivant, la même
+    # occurrence était comptée deux fois ET citée tronquée, sans « … » : le
+    # rapport montrait « password=SuperMotDe » comme un mot de passe entier.
+    secret = b"password=SuperMotDePasse2024\n"
+    temoins = []
+    for nom, avant in (("frontiere", 1048576 - 19), ("loin", 1000)):
+        r = collecte("cheval-" + nom, "STRINGS")
+        with open(os.path.join(r, "STRINGS",
+                               "PC42_B12_ARTE_ubuntu_strings_sda1.txt"), "wb") as fh:
+            fh.write(b"." * avant + secret + b"." * 4096)
+        _, faits = tourner(EXTRAIRE, r, os.path.join(coin, f"cheval-{nom}.jsonl"))
+        temoins.append(next((f for f in faits if f["categorie"] == "interet"), {}))
+    a_cheval, temoin = temoins
+    yield ("à cheval : comptée une seule fois",
+           a_cheval.get("occurrences") == temoin.get("occurrences") == 1,
+           f"{a_cheval.get('occurrences')} à la frontière du bloc, "
+           f"{temoin.get('occurrences')} loin d'elle")
+    yield ("à cheval : le secret n'est pas tronqué",
+           "SuperMotDePasse2024" in a_cheval.get("contexte", ""),
+           "citer « password=SuperMotDe » serait citer une chose qui n'existe pas")
+
+    # ── 8 · conformité : pas de navigateur ≠ phase « usage » vide ──
     # Absente était levée hors du filet d'appliquer_regles et emportait les
     # supports amovibles, qui n'ont pourtant rien à voir avec les navigateurs.
     r = collecte("sans-navigateur", "JOURNAUX")

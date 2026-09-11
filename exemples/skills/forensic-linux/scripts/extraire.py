@@ -3396,7 +3396,18 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             return
         hs = {g: hashlib.new(g) for g in empreintes}
         comptes_, contextes = {}, {}
-        reste, depart = b"", 0
+        # motif → {position absolue de début : longueur déjà comptée}. La
+        # déduplication ne peut PAS se faire sur la fin de la correspondance :
+        # six des onze motifs d'INTERETS ont une queue gourmande à longueur
+        # variable — « mot de passe en clair » finit par {6,64} —, et cette fin
+        # BOUGE d'un tour à l'autre. Tranchée par la fin du tampon au tour k,
+        # la correspondance repartait du chevauchement au tour k+1, s'allongeait
+        # dans le bloc neuf, et était RECOMPTÉE. Mesuré : « occurrences: 2 »
+        # pour un seul « password=SuperMotDePasse2024 » posé à cheval, et sept
+        # pour un unique secret dans un .docx, dont les membres XML donnent des
+        # blocs courts. Le début, lui, ne bouge jamais.
+        vus, depart = {}, 0
+        reste = b""
         for brut, clair in blocs:
             for h in hs.values():
                 h.update(brut)
@@ -3426,10 +3437,23 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                     continue
                 for m in x["motif"].finditer(tampon):
                     debut, fin = m.span()
-                    if fin <= len(reste):
-                        continue                   # déjà compté au tour d'avant
-                    comptes_[i] = comptes_.get(i, 0) + 1
-                    if i not in contextes:
+                    absolu = depart + debut
+                    connue = vus.get(i, {}).get(absolu)
+                    neuve = connue is None
+                    if neuve:
+                        comptes_[i] = comptes_.get(i, 0) + 1
+                    elif fin - debut <= connue:
+                        continue        # rien de plus à en tirer qu'au tour d'avant
+                    vus.setdefault(i, {})[absolu] = fin - debut
+                    # Le contexte se REMPLACE quand la même correspondance
+                    # reparaît plus longue : celle du tour d'avant était
+                    # tranchée par la fin du tampon, et rien ne le disait. Le
+                    # rapport montrait alors « password=SuperMotDe » comme un
+                    # mot de passe entier — une citation d'une chose qui n'a
+                    # jamais existé, exactement le piège que les « … » de
+                    # _coupe servent à éviter.
+                    if (i not in contextes if neuve
+                            else contextes[i][1] == absolu):
                         d, f = max(0, debut - 60), min(len(tampon), fin + 60)
                         # Les « … » disent que la fenêtre a TRANCHÉ, et de quel
                         # côté. Sans eux, une adresse coupée par le couteau se
@@ -3439,9 +3463,16 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                                         + tampon[d:f].decode("utf-8", "replace")
                                           .replace("\n", " ")
                                         + ("…" if f < len(tampon) else ""),
-                                        depart + debut)
+                                        absolu)
             reste = tampon[-chevauche:]
             depart += len(tampon) - len(reste)
+            # Seules les correspondances qui commencent DANS la queue reprise
+            # peuvent reparaître au tour suivant : le reste n'a plus à être
+            # retenu, et la table ne grossit pas avec le fichier.
+            for i, table in list(vus.items()):
+                vus[i] = {p: n for p, n in table.items() if p >= depart}
+                if not vus[i]:
+                    del vus[i]
         for g, attendus in empreintes.items():
             h = hs[g].hexdigest()
             if h in attendus:
