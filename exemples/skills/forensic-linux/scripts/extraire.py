@@ -10,7 +10,7 @@ recoupement et le jugement sont le travail du rapport.
 Bibliothèque standard seulement. La collecte n'est jamais modifiée : les
 archives sont lues en flux, jamais dépaquetées sur place.
 """
-import argparse, bz2, collections, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
+import argparse, bz2, codecs, collections, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
 import urllib.parse
 import sqlite3, struct, sys, tarfile, tempfile, zlib
 from datetime import datetime, timezone
@@ -153,6 +153,43 @@ class Collecte:
                 return fh.read(limite).decode("utf-8", "replace")
         except OSError:
             return ""
+
+    def lignes_texte(self, chemin, limite=8_000_000, bloc=1 << 20):
+        """Les mêmes lignes que texte(...).splitlines(), SANS le fichier entier.
+
+        texte() lit jusqu'à sa limite d'un seul coup puis décode : pour le
+        journal du poste, dont la limite est de 400 Mo, cela fait coexister
+        les octets, la chaîne décodée et la liste des lignes — mesuré 1034 Mio
+        de pic pour un journal de 392 Mo, soit deux fois et demie la pièce,
+        alors qu'on n'en tire que sept faits.
+
+        La découpe est celle de str.splitlines, et non celle de l'itération
+        d'un fichier texte : le journal d'un poste porte des octets de
+        contrôle, et str.splitlines coupe AUSSI sur \v, \f, \x85, U+2028 et
+        U+2029. Lire ligne à ligne avec « for l in fh » aurait rendu d'autres
+        lignes, donc d'autres faits, sur les seuls journaux qui en portent.
+
+        On garde donc le dernier morceau d'un bloc pour le recoller au suivant
+        — une ligne à cheval, ou un « \r » suivi d'un « \n » au bloc d'après.
+        """
+        self.lus.add(chemin)
+        dec = codecs.getincrementaldecoder("utf-8")("replace")
+        reste, lus = "", 0
+        try:
+            with open(chemin, "rb") as fh:
+                while lus < limite:
+                    brut = fh.read(min(bloc, limite - lus))
+                    if not brut:
+                        break
+                    lus += len(brut)
+                    morceaux = (reste + dec.decode(brut)).splitlines(True)
+                    reste = morceaux.pop() if morceaux else ""
+                    for x in morceaux:
+                        yield x.splitlines()[0]
+        except OSError:
+            return
+        for x in (reste + dec.decode(b"", True)).splitlines():
+            yield x
 
     def lignes(self, chemin):
         """Les lignes d'un gros fichier texte, sans le tenir en mémoire."""
@@ -803,7 +840,9 @@ def _ligne_journal(ligne, fin_fichier=None):
 
 
 def journal(source_rel, contenu, methode, fin_fichier=None):
-    for ligne in contenu.splitlines():
+    # une chaîne (un membre d'archive déjà en mémoire) ou un flux de lignes
+    # (le journal du poste, qui pèse des centaines de mégaoctets)
+    for ligne in (contenu.splitlines() if isinstance(contenu, str) else contenu):
         ts, reste, devine = _ligne_journal(ligne, fin_fichier)
         for categorie, quoi, litteral, motif, tire in MOTIFS_JOURNAL:
             if litteral and litteral not in reste:
@@ -825,7 +864,7 @@ def journal(source_rel, contenu, methode, fin_fichier=None):
 def journaux(c):
     j = c.un("_journal.txt", "JOURNAUX")
     if j:
-        journal(c.rel(j), c.texte(j, 400_000_000),
+        journal(c.rel(j), c.lignes_texte(j, 400_000_000),
                 "journalctl -D var/log/journal -o short-iso, puis motifs")
     tarlog = c.un("_var_log.tar.gz", "JOURNAUX")
     if tarlog:
@@ -1028,6 +1067,36 @@ def _lignes(cx, sql, params=()):
         return []
 
 
+def _flux(cx, sql, params=()):
+    """Les mêmes lignes que _lignes, mais RENDUES AU FIL DE L'EAU.
+
+    L'historique n'est pas borné — c'est une exigence du skill —, et un profil
+    de plusieurs années compte des centaines de milliers de pages. fetchall()
+    en fait une liste de tuples que l'on parcourt UNE fois pour poser un fait
+    par ligne : la liste entière n'existe que pour être jetée, et elle double
+    le pic mémoire de la phase.
+
+    Le tri, l'ordre et donc les identifiants des faits sont ceux de la
+    requête : c'est la même, rendue autrement.
+
+    Une base ABÎMÉE se comporte autrement, et c'est la seule différence :
+    fetchall() rendait tout ou rien, ici les lignes déjà lues sont déjà des
+    faits. Sur une pièce forensique, garder ce qui a pu être lu vaut mieux que
+    de tout jeter — mais cela se DIT, plutôt que de se découvrir.
+    """
+    if cx is None:
+        return
+    try:
+        curseur = cx.execute(sql, params)
+        while True:
+            lot = curseur.fetchmany(512)
+            if not lot:
+                return
+            yield from lot
+    except sqlite3.Error:
+        return
+
+
 def _sqlite_lire(blob, requetes):
     """(nom, lignes) pour chaque requête d'une même base."""
     with _sqlite(blob) as cx:
@@ -1170,7 +1239,9 @@ def _logins_chrome(source, compte, blob, req, outil):
 
 def _historique_navigateur(source, compte, blob, req, outil):
     with _sqlite(blob) as cx:
-        for ts, url, titre, combien, premiere in _lignes(cx, req["visite"]):
+        # _flux et non _lignes : c'est la seule requête sans borne de la
+        # collecte, et la seule dont la liste complète ne servirait à rien
+        for ts, url, titre, combien, premiere in _flux(cx, req["visite"]):
             ts, premiere = _iso_z(ts), _iso_z(premiere)
             note = f"{combien} visite(s)" if combien else ""
             if premiere and premiere != ts:
@@ -2725,26 +2796,43 @@ TYPES_INDICATEUR = ("sha256", "sha1", "md5", "texte", "regex", "ip", "domaine", 
 # Chaque fait qui en sort est « à vérifier » et jamais autre chose : trouvé
 # dans l'espace libre, un secret n'est ni daté, ni imputable, et peut venir
 # d'un paquet d'installation autant que d'un fichier de l'utilisateur.
+# Le quatrième champ est le CRIBLE : les littéraux qu'une correspondance de ce
+# motif porte FORCÉMENT. Un groupe = un endroit obligatoire du motif, et les
+# chaînes d'un groupe en sont les formes possibles ; il faut donc au moins une
+# chaîne de CHAQUE groupe pour qu'une correspondance soit encore possible.
+# C'est une condition NÉCESSAIRE, jamais suffisante : le motif est ensuite
+# passé tel quel, et lui seul décide. Ce qui est cherché ne change pas ; ce qui
+# change est qu'on ne balaie plus deux gigaoctets d'octets pour un « AKIA » qui
+# n'y est pas — bytes.find balaie le tampon à la vitesse de la mémoire, là où
+# re le parcourt caractère par caractère.
 INTERETS = [
     ("clé privée", r'-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY',
-     "une clé privée en clair ; comparez-la aux clés des comptes"),
+     "une clé privée en clair ; comparez-la aux clés des comptes",
+     ((b"-----begin",), (b"private key",)), None),
     ("mot de passe en clair", r'(?:password|passwd|mot_?de_?passe)["\s]{0,3}[=:]["\s]{0,3}[^\s"\',;]{6,64}',
-     "un mot de passe écrit en clair dans un fichier ou dans l'espace libre"),
+     "un mot de passe écrit en clair dans un fichier ou dans l'espace libre",
+     ((b"passw", b"passe"),), r'(?:password|passwd|mot_?de_?passe)["\s]{0,3}[=:]'),
     ("identifiants dans une URL", r'\b[a-z][a-z0-9+.-]{1,10}://[^\s:/@]{1,64}:[^\s@/]{3,64}@[^\s/]{3,}',
-     "un identifiant et un secret passés dans une adresse"),
+     "un identifiant et un secret passés dans une adresse",
+     ((b"://",), (b"@",)), r'://[^\s:/@]{1,64}:[^\s@/]{3,64}@'),
     ("chaîne de connexion", r'\b(?:mysql|postgres(?:ql)?|mongodb(?:\+srv)?|redis|amqp|ldaps?)://[^\s]{4,}',
-     "une base de données ou un annuaire joint depuis ce poste"),
-    ("jeton AWS", r'\bAKIA[0-9A-Z]{16}\b', "une clé d'accès Amazon"),
-    ("jeton GitHub", r'\bgh[pousr]_[A-Za-z0-9]{36}\b', "un jeton GitHub"),
-    ("jeton Slack", r'\bxox[baprs]-[A-Za-z0-9-]{10,}', "un jeton Slack"),
-    ("clé Google", r'\bAIza[0-9A-Za-z_-]{35}\b', "une clé d'API Google"),
+     "une base de données ou un annuaire joint depuis ce poste",
+     ((b"mysql", b"postgres", b"mongodb", b"redis", b"amqp", b"ldap"), (b"://",)), None),
+    ("jeton AWS", r'\bAKIA[0-9A-Z]{16}\b', "une clé d'accès Amazon", ((b"akia",),), None),
+    ("jeton GitHub", r'\bgh[pousr]_[A-Za-z0-9]{36}\b', "un jeton GitHub",
+     ((b"ghp_", b"gho_", b"ghu_", b"ghs_", b"ghr_"),), None),
+    ("jeton Slack", r'\bxox[baprs]-[A-Za-z0-9-]{10,}', "un jeton Slack",
+     ((b"xoxa-", b"xoxb-", b"xoxp-", b"xoxr-", b"xoxs-"),), None),
+    ("clé Google", r'\bAIza[0-9A-Za-z_-]{35}\b', "une clé d'API Google", ((b"aiza",),), None),
     ("adresse en .onion", r'\b[a-z2-7]{16}\.onion\b|\b[a-z2-7]{56}\.onion\b',
-     "un service accessible seulement par Tor"),
+     "un service accessible seulement par Tor", ((b".onion",),), None),
     ("clé de réseau sans fil", r'\bpsk["\s]{0,3}=["\s]{0,3}[^\s"\',;]{8,63}',
-     "la clé d'un réseau sans fil, en clair"),
+     "la clé d'un réseau sans fil, en clair", ((b"psk",),),
+     r'psk["\s]{0,3}='),
     ("couple identifiant/mot de passe",
      r'\b[\w.+-]{3,64}@[\w.-]{3,}\.[a-z]{2,12}:[^\s:]{4,64}\b',
-     "la forme des listes de comptes qui circulent après une fuite"),
+     "la forme des listes de comptes qui circulent après une fuite",
+     ((b"@",), (b":",)), r'@[\w.-]{3,}\.[a-z]{2,12}:'),
 ]
 
 
@@ -2757,8 +2845,10 @@ def interets():
     ne pas avoir de clé privée qui traîne est la normale, pas une découverte.
     """
     return [{"genre": nom, "valeur": nom, "motif": re.compile(m.encode("utf-8"), re.I),
-             "etiquette": quoi, "categorie": "interet", "absent": False}
-            for nom, m, quoi in INTERETS]
+             "etiquette": quoi, "categorie": "interet", "absent": False,
+             "crible": crible,
+             "garde": re.compile(garde.encode("utf-8"), re.I) if garde else None}
+            for nom, m, quoi, crible, garde in INTERETS]
 
 
 def lire_textes(chemins):
@@ -2810,7 +2900,10 @@ def _a_la_lettre(genre, valeur, etiquette):
     « Dupont (RH) » veut ces caractères-là, pas un groupe de capture.
     """
     return {"genre": genre, "valeur": valeur, "etiquette": etiquette,
-            "motif": re.compile(re.escape(valeur.encode("utf-8")), re.I)}
+            "motif": re.compile(re.escape(valeur.encode("utf-8")), re.I),
+            # une chaîne cherchée à la lettre est à elle seule son crible :
+            # le motif ne peut correspondre nulle part où elle n'est pas
+            "crible": ((valeur.encode("utf-8").lower(),),)}
 
 
 def lire_indicateurs(chemin):
@@ -3109,6 +3202,20 @@ class Reprise:
         return e if (e.get("taille") == st.st_size
                      and e.get("mtime") == int(st.st_mtime)) else None
 
+    def reporter(self, entree):
+        """Recopie au journal NEUF une entrée du journal précédent.
+
+        Sans elle, une reprise RÉUSSIE se détruit elle-même : __enter__ ouvre
+        le journal en écriture, donc le vide, et seuls les fichiers réellement
+        relus y sont notés — c'est-à-dire aucun. Le journal retombe à sa
+        seule ligne d'en-tête, et la reprise SUIVANTE reparcourt toute la
+        collecte. Le premier plantage était couvert ; le second ne l'était
+        plus, alors que c'est exactement le cas où l'on reprend deux fois.
+        """
+        if self.fh:
+            self.fh.write(json.dumps(entree, ensure_ascii=False) + "\n")
+            self.fh.flush()
+
     def noter(self, rel, chemin, faits, trouves):
         if not self.fh:
             return
@@ -3149,6 +3256,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
     empreintes = {g: d for g, d in empreintes.items() if d}
     noms = [x for x in liste if x["genre"] == "fichier"]
     motifs = [x for x in liste if x["motif"] is not None]
+    cribles = any(x.get("crible") for x in motifs)
     lire = bool(empreintes or motifs)
     soi = {c.rel(os.path.abspath(x)) for x in fichiers}
     par_valeur = {x["valeur"]: x for x in liste}
@@ -3209,7 +3317,27 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             if not clair or not motifs:
                 continue
             tampon = reste + clair
+            # Le tampon en minuscules, UNE fois pour tous les motifs : le
+            # crible de chacun s'y cherche ensuite avec bytes.__contains__,
+            # qui balaie la mémoire au lieu de la parcourir. re.I sur des
+            # octets ne replie que l'ASCII, et bytes.lower() non plus : les
+            # deux voient exactement les mêmes correspondances.
+            bas = tampon.lower() if cribles else None
             for i, x in enumerate(motifs):
+                crible = x.get("crible")
+                if crible and not all(any(lit in bas for lit in groupe)
+                                      for groupe in crible):
+                    continue        # aucune correspondance possible ici
+                # La GARDE : un MORCEAU du motif lui-même, donc encore une
+                # condition nécessaire — mais qui commence, elle, par un
+                # littéral. re saute alors d'un « @ » au suivant au lieu
+                # d'essayer « [\w.+-]{3,64} » à chaque octet du tampon, et
+                # elle s'arrête à la première correspondance là où finditer
+                # doit toutes les rendre. Là où le crible ne trie plus rien —
+                # un disque est plein de « @ » et de « :// » —, elle trie.
+                garde = x.get("garde")
+                if garde is not None and not garde.search(tampon):
+                    continue
                 for m in x["motif"].finditer(tampon):
                     debut, fin = m.span()
                     if fin <= len(reste):
@@ -3321,6 +3449,16 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                         par_valeur[x]["trouve"] = True
                 for fa in deja["faits"]:
                     _rejouer(fa)
+                # le journal se réécrit à chaque passage : ce qui n'y est pas
+                # recopié est perdu pour la reprise d'après
+                reprise.reporter(deja)
+                # La pièce a bien été ANALYSÉE, même si elle ne l'a pas été à
+                # ce passage-ci : le manifeste doit la porter. Sans cette
+                # ligne, une reprise rendait un manifeste amputé — il listait
+                # les seules pièces relues, et prétendait donc que le reste
+                # n'avait pas été lu. C'est la preuve « quels octets ont été
+                # analysés » qui devenait fausse, en silence.
+                c.lus.add(chemin)
                 continue
             # Un seul endroit qui note au journal : une pièce lue et non notée
             # serait relue à chaque reprise, et une branche ajoutée plus tard

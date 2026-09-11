@@ -869,6 +869,32 @@ def main():
     print(f"  {'ok ' if pareil else 'MANQUE'}  {'journal coupé, faits rejoués':28s} "
           f"identiques à un passage d'un seul tenant")
 
+    # Une reprise RÉUSSIE ne doit pas se détruire elle-même. Le journal est
+    # rouvert en écriture à chaque passage : ce qu'on n'y recopie pas est
+    # perdu. Le premier plantage était couvert, le SECOND ne l'était plus —
+    # et c'est justement le cas où l'on reprend deux fois.
+    jr = os.path.splitext(repris)[0] + "-reprise.jsonl"
+    avant = sum(1 for _ in open(jr, encoding="utf-8"))
+    man = os.path.splitext(repris)[0] + "-manifeste.json"
+    pieces = len(json.load(open(man, encoding="utf-8"))["pieces_lues"])
+    subprocess.run([sys.executable, os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py"),
+                    R, "-o", repris, "--indicateurs", os.path.join(base, "indicateurs.txt")],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    apres = sum(1 for _ in open(jr, encoding="utf-8"))
+    ok = apres == avant and avant > 1
+    manques += not ok
+    print(f"  {'ok ' if ok else 'MANQUE'}  {'le journal survit à la reprise':28s} "
+          f"{apres} ligne(s), {avant} avant")
+    # Et la preuve « quels octets ont été analysés » doit rester ENTIÈRE : une
+    # pièce rejouée a bien été analysée, même si elle ne l'a pas été à ce
+    # passage-ci. Sans cela le manifeste prétendait, en silence, qu'elle ne
+    # l'avait pas été.
+    apres_p = len(json.load(open(man, encoding="utf-8"))["pieces_lues"])
+    ok = apres_p == pieces and pieces > 1
+    manques += not ok
+    print(f"  {'ok ' if ok else 'MANQUE'}  {'manifeste entier après reprise':28s} "
+          f"{apres_p} pièces, {pieces} avant")
+
     print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")
     with open(faits, encoding="utf-8") as fh:
         lus_f = [json.loads(l) for l in fh if l.strip()]
