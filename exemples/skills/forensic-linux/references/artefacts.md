@@ -498,13 +498,27 @@ super-timeline vaut plus que la somme de ses lignes :
   pèse bien plus lourd — sans dire pour autant que le poste n'a pas servi.
 
 **Ce que ça coûte.** Mesuré sur un million d'événements (234 Mio de JSONL) :
-**11,8 s et 32 Mio de pic** — le fichier est lu en flux, la mémoire ne croît
-donc pas avec lui. Comptez deux minutes pour une super-timeline de dix millions
-de lignes. Les deux tiers du temps sont le `json.loads` de chaque ligne, et le
-tiers restant la datation ; les deux sont déjà au plancher de la bibliothèque
-standard (deux formes plus courtes ont été mesurées et sont plus LENTES). Si
-vous devez aller plus vite, restreignez le fichier en amont, avec `psort` et son
-filtre de dates.
+**11,8 s**, et un pic de mémoire **plat de 1 à 3 millions d'événements** — le
+fichier est lu en flux, aucun accumulateur n'est indexé par le chemin. Comptez
+deux minutes pour une super-timeline de dix millions de lignes.
+
+Le temps se répartit en **55 % de `json.loads`**, 27 % de datation, le reste en
+comptage et en rapprochements. Les deux premiers sont déjà au plancher de la
+bibliothèque standard : deux écritures plus courtes du formatage ISO ont bien
+été mesurées 30 à 45 % plus rapides, mais elles **tronquent la sous-seconde**,
+qu'un événement plaso porte — ce n'est donc pas la vitesse qui décide ici.
+
+Ce chiffre suppose une collecte à quelques dizaines de sessions. Chaque
+événement cherche la session qui le couvre, et rien ne borne le nombre de
+sessions : `sessions()` lit wtmp, **toutes ses rotations** et wtmp.db. Une
+recherche naïve coûtait alors le produit des deux — 41 s pour le même million à
+400 sessions, 199 s à 2 000. Le contrôle en tête de la descente (voyez
+`fins_max` dans `plaso()`) ramène à l'immédiat le cas dominant, celui d'un
+événement qu'aucune session ne couvre : une super-timeline porte des années de
+dates de système de fichiers là où wtmp porte des semaines.
+
+Si vous devez aller plus vite, restreignez le fichier en amont, avec `psort` et
+son filtre de dates.
 
 **Pour le reste, interrogez le fichier vous-même.** Il est fait pour :
 

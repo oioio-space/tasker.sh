@@ -11,6 +11,7 @@ Bibliothèque standard seulement. La collecte n'est jamais modifiée : les
 archives sont lues en flux, jamais dépaquetées sur place.
 """
 import argparse, bisect, bz2, codecs, collections, contextlib, csv, fnmatch, gzip
+import itertools
 import hashlib, io, json, lzma, os, re
 import urllib.parse
 import sqlite3, struct, sys, tarfile, tempfile, zlib
@@ -2734,6 +2735,12 @@ def plaso(c):
     # Ce que plaso vient RECOUPER avec le reste des faits.
     fenetres = _fenetres_session()
     debuts = [w[0] for w in fenetres]
+    # La fin la plus TARDIVE parmi les fenêtres qui commencent au plus tard
+    # ici. Elle répond en une comparaison à « une session couvre-t-elle cet
+    # instant ? » — voyez la boucle plus bas, qui sans elle balayait toutes les
+    # sessions pour chaque événement qu'AUCUNE ne couvre, et c'est le cas de
+    # loin le plus fréquent.
+    fins_max = list(itertools.accumulate((w[1] for w in fenetres), max))
     maisons = _comptes_connus()
     par_session = collections.Counter()          # id du fait d'ouverture → n
     par_compte = {}                              # compte → [n, premier, dernier]
@@ -2797,13 +2804,35 @@ def plaso(c):
                 # triés : les sessions se comptent en dizaines, l'événement en
                 # millions, et une recherche linéaire par événement coûterait
                 # le produit des deux.
+                #
+                # Le bisect ne suffisait pas. Il donne la dernière session
+                # COMMENCÉE avant l'instant ; si elle est déjà fermée, la
+                # boucle redescend — et jusqu'à zéro quand aucune ne couvre.
+                # Or c'est le cas dominant : wtmp couvre des semaines, une
+                # super-timeline des années de dates de système de fichiers.
+                # Le coût était donc le produit malgré le bisect. Mesuré sur
+                # un million d'événements : 14,5 s avec 40 sessions, 41 s avec
+                # 400, 199 s avec 2 000 — et rien ne borne ce nombre, sessions()
+                # lisant wtmp, toutes ses rotations et wtmp.db.
+                # fins_max[i] est la fin la plus tardive de tout ce qui
+                # commence au plus tard en i : si elle précède l'instant,
+                # aucune de ces fenêtres ne peut le couvrir, et la descente est
+                # inutile. Le contrôle est EXACT — il ne fait que sauter un
+                # balayage dont on sait déjà qu'il ne rendra rien.
+                # UNE FOIS, devant la boucle, et non dans sa condition : porté
+                # dans la condition il élague un peu plus, mais il coûte une
+                # comparaison par tour, et une session longue qui en couvre de
+                # courtes paie alors 7,3 s là où la boucle nue en paie 4,6.
+                # Devant, le cas dominant tombe à 0,06 s au lieu de 24,6, et le
+                # cas imbriqué reste celui d'avant.
                 i = bisect.bisect_right(debuts, quand) - 1
-                while i >= 0:
-                    d, f_, _acteur, ident, _sure = fenetres[i]
-                    if quand <= f_:
-                        par_session[ident] += 1
-                        break
-                    i -= 1
+                if i >= 0 and fins_max[i] >= quand:
+                    while i >= 0:
+                        d, f_, _acteur, ident, _sure = fenetres[i]
+                        if quand <= f_:
+                            par_session[ident] += 1
+                            break
+                        i -= 1
             if not ou:
                 continue
             base, vise = ou.rsplit("/", 1)[-1].lower(), False

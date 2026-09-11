@@ -1251,6 +1251,42 @@ def pieces_abimees(base):
            and stz.get("horodatage") == sess.get("horodatage"),
            f"UTC : {sess.get('valeur')} à {sess.get('horodatage')} ; "
            f"Auckland : {stz.get('valeur')} à {stz.get('horodatage')}")
+    # Une session LONGUE qui en couvre une courte. Le bisect atterrit sur la
+    # courte, déjà fermée, et il faut redescendre jusqu'à la longue. C'est le
+    # cas que le contrôle « fins_max » — celui qui évite de balayer toutes les
+    # sessions pour un événement qu'aucune ne couvre — ne doit PAS court-
+    # circuiter : trop pressé, il perdrait la pièce sans un mot.
+    r2 = collecte("plaso-sessions-imbriquees", "COMPTES", "CONNEXIONS", "PLASO")
+    with open(os.path.join(r2, "COMPTES", "PC42_B12_ARTE_ubuntu_passwd.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("jdupont:x:1000:1000::/home/jdupont:/bin/bash\n"
+                 "marie:x:1001:1001::/home/marie:/bin/bash\n")
+    with open(os.path.join(r2, "CONNEXIONS", "wtmp"), "wb") as fh:
+        fh.write(utmp([(7, 900, "tty1", "jdupont", "", "2026-01-05T09:00:00"),
+                       (7, 901, "pts/0", "marie", "", "2026-01-05T10:00:00"),
+                       (8, 901, "pts/0", "", "", "2026-01-05T10:05:00"),
+                       (8, 900, "tty1", "", "", "2026-01-05T18:00:00")]))
+    with open(os.path.join(r2, "PLASO", "PC42_B12_ARTE_ubuntu_plaso.jsonl"),
+              "w", encoding="utf-8") as fh:
+        for i in range(7):                  # 12:00 : dans jdupont seul
+            fh.write(json.dumps({
+                "data_type": "fs:stat", "parser": "filestat",
+                "timestamp": (epoch("2026-01-05T12:00:00") + i) * US,
+                "timestamp_desc": "mtime",
+                "filename": f"/home/jdupont/n{i}.odt"}) + "\n")
+        for i in range(4):                  # après TOUTE session : dehors
+            fh.write(json.dumps({
+                "data_type": "fs:stat", "parser": "filestat",
+                "timestamp": (epoch("2026-01-06T23:00:00") + i) * US,
+                "timestamp_desc": "mtime", "filename": "/var/lib/y"}) + "\n")
+    _, f2 = tourner(EXTRAIRE, r2, os.path.join(coin, "plaso-imbrique.jsonl"))
+    couvre = {x.get("acteur"): x.get("valeur") for x in f2
+              if "pendant une session" in x["fait"]}
+    yield ("plaso : la session qui ENGLOBE est retrouvée",
+           couvre == {"jdupont": "7"},
+           f"{couvre or 'AUCUNE'} — la courte est fermée, les 4 du 6 sont hors "
+           "de tout")
+
     maisons = {f.get("acteur"): f.get("valeur") for f in pl
                if "dossier personnel" in f["fait"]}
     yield ("plaso : recoupé avec les comptes",
