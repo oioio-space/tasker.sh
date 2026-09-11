@@ -1755,6 +1755,21 @@ def main():
     manques += not ok
     print(f"  {'ok ' if ok else 'MANQUE'}  {'manifeste entier après reprise':28s} "
           f"{apres_p} pièces, {pieces} avant")
+    # L'empreinte du manifeste est calculée PENDANT la lecture des indicateurs,
+    # au lieu de relire toute la collecte une seconde fois après la dernière
+    # phase — une passe complète de plus, en silence, sur un scellé à cent
+    # mille pièces. Elle doit donc rester EXACTE, y compris après une reprise
+    # où la pièce n'a pas été relue : c'est le journal qui la reporte alors.
+    lues = json.load(open(man, encoding="utf-8"))["pieces_lues"]
+    faux = [rel for rel, meta in lues.items()
+            if hashlib.sha256(open(os.path.join(R, rel), "rb").read()).hexdigest()
+            != meta["sha256"]
+            or os.path.getsize(os.path.join(R, rel)) != meta["octets"]]
+    ok = not faux and len(lues) > 10
+    manques += not ok
+    print(f"  {'ok ' if ok else 'MANQUE'}  {'empreintes du manifeste justes':28s} "
+          f"{len(lues)} pièces vérifiées octet par octet"
+          + (f", FAUSSES : {faux[:2]}" if faux else ""))
 
     print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")
     with open(faits, encoding="utf-8") as fh:

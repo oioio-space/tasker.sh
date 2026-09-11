@@ -244,6 +244,19 @@ tient dans un seul fichier, et une ligne qui n'avancerait qu'entre deux fichiers
 s'y figerait aussi longtemps que le journal de reprise — qui, lui, ne se remplit
 qu'une fois la pièce finie.
 
+**Et après la dernière phase, ce n'est pas fini** : le manifeste doit empreindre
+chaque pièce lue. Sur un scellé à cent mille fichiers, c'était une seconde passe
+complète sur la collecte, après `adresses réseau` et **sans écrire une ligne**.
+L'empreinte est désormais calculée pendant la lecture des indicateurs, où les
+octets défilent déjà, et le manifeste la réutilise ; ce qui reste à relire — les
+`.tar.gz`, dont on lit les membres et non le fichier — s'affiche comme le reste :
+
+      empreintes : SYSTEME/PC01_installation.tar.gz — 12 pièces, 840 Mo, 1 min 30 s
+
+Le gain dépend du disque. Mesuré page-cache chaud : relire et empreindre coûte
+**1 Go/s**, donc peu. Sur un scellé de plusieurs centaines de gigaoctets monté
+depuis un partage, c'est une lecture complète du scellé en moins.
+
 Depuis un autre terminal, le journal de reprise dit la même chose — il est vidé
 sur le disque après **chaque** pièce :
 

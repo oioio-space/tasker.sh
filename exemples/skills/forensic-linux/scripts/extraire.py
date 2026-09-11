@@ -159,6 +159,9 @@ class Collecte:
         self.racine = os.path.abspath(racine)
         self.prefix = os.path.basename(self.racine)
         self.lus = set()          # ce qui a servi, pour le manifeste
+        # {chemin : sha256}, rempli au fil de la lecture des indicateurs. Le
+        # manifeste s'en sert au lieu de relire la collecte entière.
+        self.empreintes = {}
         self.mtimes = {}          # archive → {membre: date}, rempli en lisant
         self.abimees = set()      # archives dont la lecture s'est arrêtée net
         if not os.path.isdir(self.racine):
@@ -4126,7 +4129,7 @@ class Reprise:
             self.fh.write(json.dumps(entree, ensure_ascii=False) + "\n")
             self.fh.flush()
 
-    def noter(self, rel, chemin, faits, trouves):
+    def noter(self, rel, chemin, faits, trouves, sha256=None):
         if not self.fh:
             return
         try:
@@ -4135,6 +4138,9 @@ class Reprise:
             return
         self.fh.write(json.dumps(
             {"chemin": rel, "taille": st.st_size, "mtime": int(st.st_mtime),
+             # Sans elle, une reprise ne relit pas la pièce — donc ne recalcule
+             # pas son empreinte — et le manifeste devait la relire une par une.
+             "sha256": sha256,
              "faits": [{k: v for k, v in f.items() if k != "id"} for f in faits],
              "trouves": sorted(trouves)}, ensure_ascii=False) + "\n")
         self.fh.flush()          # après CHAQUE fichier, sinon ce n'est pas une reprise
@@ -4148,6 +4154,53 @@ def _rejouer(f):
     les mêmes numéros qu'un rapport d'un seul tenant.
     """
     FAITS.append({"id": f"F{len(FAITS) + 1:04d}", **f})
+
+
+class Avancement:
+    """Une ligne sur stderr, au plus une toutes les PAS_AVANCEMENT secondes.
+
+    Sur un terminal elle se réécrit sur elle-même et s'efface à la fin ;
+    ailleurs — journal, tube — elle s'ajoute, et le rythme suffit à ce que le
+    fichier reste lisible. Les tests ne comptent comme échec que les lignes qui
+    commencent par « ! » : celle-ci ne les dérange pas.
+
+    Elle compte les PIÈCES et les OCTETS. Les deux, parce qu'un STRINGS/ de
+    plusieurs gigaoctets tient dans un seul fichier : une ligne qui n'avancerait
+    qu'entre deux pièces s'y figerait, et c'est précisément là que le temps
+    passe.
+    """
+
+    def __init__(self, quoi):
+        self.quoi, self.tty = quoi, sys.stderr.isatty()
+        self.depart = self.quand = time.monotonic()
+        self.pieces = self.octets = 0
+        self.ou, self.dit = "", False
+
+    @staticmethod
+    def _volume(n):
+        return f"{n / (1 << 30):.1f} Go" if n >= 1 << 30 else f"{n >> 20} Mo"
+
+    def pas(self, ou=None, octets=0):
+        """Une pièce de plus (ou=son chemin), ou des octets de plus dedans."""
+        if ou is not None:
+            self.pieces += 1
+            self.ou = ou
+        self.octets += octets
+        maintenant = time.monotonic()
+        if maintenant - self.quand < PAS_AVANCEMENT:
+            return
+        self.quand, self.dit = maintenant, True
+        ecoule = int(maintenant - self.depart)
+        ligne = (f"      {self.quoi} : {self.ou or '.'} — {self.pieces} "
+                 f"pièce{'s' if self.pieces > 1 else ''}, "
+                 f"{self._volume(self.octets)}, "
+                 f"{ecoule // 60} min {ecoule % 60:02d} s")
+        print(f"\r{ligne:<100.100s}" if self.tty else ligne,
+              end="" if self.tty else "\n", file=sys.stderr, flush=True)
+
+    def fin(self):
+        if self.tty and self.dit:
+            print("\r" + " " * 100 + "\r", end="", file=sys.stderr, flush=True)
 
 
 # La phase des indicateurs n'écrivait RIEN pendant des heures. Sur une collecte
@@ -4182,36 +4235,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
     par_valeur = {x["valeur"]: x for x in liste}
     nouveaux = []      # les valeurs trouvées, dans l'ordre, pour le journal
 
-    # L'avancement, sur stderr comme le reste des étapes. Compté par pièce ET
-    # par BLOC : un STRINGS/ de plusieurs gigaoctets tient dans UN fichier, et
-    # une ligne qui n'avance qu'entre deux fichiers s'y fige aussi longtemps
-    # que le journal de reprise. Or c'est exactement là que le temps passe —
-    # mesuré, 211 motifs coûtent 7,9 s par 8 Mo, soit un quart d'heure par
-    # gigaoctet pour une seule pièce.
-    tty = sys.stderr.isatty()
-    depart = time.monotonic()
-    avance = {"pieces": 0, "octets": 0, "ou": "", "quand": depart}
-
-    def volume(n):
-        return f"{n / (1 << 30):.1f} Go" if n >= 1 << 30 else f"{n >> 20} Mo"
-
-    def avancer(ou=None, octets=0):
-        """Une pièce de plus (ou=chemin), ou des octets de plus dans la même."""
-        if ou is not None:
-            avance["pieces"] += 1
-            avance["ou"] = ou
-        avance["octets"] += octets
-        maintenant = time.monotonic()
-        if maintenant - avance["quand"] < PAS_AVANCEMENT:
-            return
-        avance["quand"] = maintenant
-        ecoule = int(maintenant - depart)
-        ligne = (f"      lecture : {avance['ou'] or '.'} — {avance['pieces']} "
-                 f"pièce{'s' if avance['pieces'] > 1 else ''}, "
-                 f"{volume(avance['octets'])}, "
-                 f"{ecoule // 60} min {ecoule % 60:02d} s")
-        print(f"\r{ligne:<100.100s}" if tty else ligne,
-              end="" if tty else "\n", file=sys.stderr, flush=True)
+    av = Avancement("lecture")
 
     def trouve(x):
         """Note qu'un indicateur vient d'être vu — une fois, à sa découverte."""
@@ -4219,7 +4243,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             x["trouve"] = True
             nouveaux.append(x["valeur"])
 
-    def examiner(source, nom, blocs=None, chevauche=1 << 12):
+    def examiner(source, nom, blocs=None, chevauche=1 << 12, garder=None):
         """Le nom, l'empreinte et les motifs, en UNE lecture.
 
         « blocs » est une suite de (brut, clair) — un seul couple pour un
@@ -4259,7 +4283,13 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                      trouve=True, note=x["etiquette"])
         if blocs is None:
             return
-        hs = {g: hashlib.new(g) for g in empreintes}
+        # sha256 TOUJOURS, même quand personne ne cherche d'empreinte : c'est
+        # celle du manifeste, et _blocs garantit déjà que « brut » porte le
+        # fichier ENTIER — plafond d'archive compris. La calculer ici évite au
+        # manifeste de relire toute la collecte une seconde fois, en silence,
+        # après la dernière phase. Sur un scellé à cent mille pièces, c'était
+        # une passe complète de plus.
+        hs = {g: hashlib.new(g) for g in set(empreintes) | {"sha256"}}
         comptes_, contextes = {}, {}
         # Les (motif, position absolue de début) déjà comptés. La
         # déduplication ne peut PAS se faire sur la fin de la correspondance :
@@ -4279,7 +4309,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
         vus, neufs, depart = set(), set(), 0
         reste = b""
         for brut, clair in blocs:
-            avancer(octets=len(brut))
+            av.pas(octets=len(brut))
             for h in hs.values():
                 h.update(brut)
             if not clair or not motifs:
@@ -4338,6 +4368,10 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             reste = tampon[-chevauche:]
             depart += len(tampon) - len(reste)
             vus, neufs = neufs, set()
+        # « garder » est le chemin sur le disque, quand la source en est un :
+        # le manifeste veut l'empreinte des FICHIERS, pas des membres d'archive.
+        if garder:
+            c.empreintes[garder] = hs["sha256"].hexdigest()
         for g, attendus in empreintes.items():
             h = hs[g].hexdigest()
             if h in attendus:
@@ -4367,7 +4401,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                          "venir d'un paquet d'installation autant que d'un fichier du "
                          "compte. À confirmer sur la pièce citée" if interet else ""))
 
-    def lire_source(source, nom, ouvrir):
+    def lire_source(source, nom, ouvrir, garder=None):
         """Une source soumise aux motifs, et ce qu'on n'a pas su en lire.
 
         Une seule voie pour tout le monde : _blocs décide seul s'il faut
@@ -4379,7 +4413,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
         """
         etat = {}
         try:
-            examiner(source, nom, _blocs(nom, ouvrir, etat))
+            examiner(source, nom, _blocs(nom, ouvrir, etat), garder=garder)
         except OSError as e:
             # zlib.error n'a plus à être rattrapée ici : _blocs la traite et la
             # note dans etat, ce qui laisse examiner() aller jusqu'au bout et
@@ -4411,7 +4445,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             examiner(rel, rel)
         else:
             c.lus.add(chemin)
-            lire_source(rel, rel, lambda: open(chemin, "rb"))
+            lire_source(rel, rel, lambda: open(chemin, "rb"), chemin)
 
     for d, sous, noms_fichiers in os.walk(c.racine):
         # os.walk n'a pas d'ordre garanti : sans ces deux tris, la reprise
@@ -4427,7 +4461,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             chemin, rel = os.path.join(d, f), c.rel(os.path.join(d, f))
             if rel in soi:
                 continue
-            avancer(rel)
+            av.pas(rel)
             deja = reprise.reutilisable(rel, chemin) if reprise else None
             if deja is not None:
                 for x in deja.get("trouves", ()):
@@ -4438,6 +4472,8 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                 # le journal se réécrit à chaque passage : ce qui n'y est pas
                 # recopié est perdu pour la reprise d'après
                 reprise.reporter(deja)
+                if deja.get("sha256"):
+                    c.empreintes[chemin] = deja["sha256"]
                 # La pièce a bien été ANALYSÉE, même si elle ne l'a pas été à
                 # ce passage-ci : le manifeste doit la porter. Sans cette
                 # ligne, une reprise rendait un manifeste amputé — il listait
@@ -4453,9 +4489,8 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             parcourir(chemin, rel)
             if reprise:
                 reprise.noter(rel, chemin, FAITS[debut_faits:],
-                              nouveaux[debut_trouves:])
-    if tty and avance["quand"] != depart:
-        print("\r" + " " * 78 + "\r", end="", file=sys.stderr, flush=True)
+                              nouveaux[debut_trouves:], c.empreintes.get(chemin))
+    av.fin()
     for x in liste:
         if x.get("absent") is False:
             continue          # l'absence d'un motif de l'outil n'est pas un fait
@@ -4554,13 +4589,23 @@ def manifeste(c, sortie, argv, prov, signature):
     extractions de même provenance rendent le même fichier de faits, à l'octet
     près.
     """
+    # L'empreinte vient de la lecture des indicateurs quand la pièce y est
+    # passée : la recalculer relisait TOUTE la collecte une seconde fois, après
+    # la dernière phase et sans écrire une ligne. Le repli couvre ce qui n'a
+    # pas été lu en flux — les tar, dont les membres sont lus, pas le fichier.
     pieces = {}
+    av = Avancement("empreintes")
     for chemin in sorted(c.lus):
         try:
-            pieces[c.rel(chemin)] = {"sha256": empreinte(chemin),
-                                     "octets": os.path.getsize(chemin)}
+            sha = c.empreintes.get(chemin)
+            octets = os.path.getsize(chemin)
+            if sha is None:
+                av.pas(c.rel(chemin), octets)
+                sha = empreinte(chemin)
+            pieces[c.rel(chemin)] = {"sha256": sha, "octets": octets}
         except OSError:
             continue
+    av.fin()
     par_cat = collections.Counter(f["categorie"] for f in FAITS)
     return {
         "collecte": c.prefix,
