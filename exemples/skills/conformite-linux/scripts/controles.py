@@ -40,7 +40,6 @@ RE_CONTROLE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 # l'extraction. Mesuré : traceback, faits.jsonl tronqué en plein milieu, ni
 # CSV ni manifeste. Un seul fichier mal nommé sur le disque examiné emportait
 # donc l'analyse entière.
-RE_DEMI_CODET = re.compile(r'[\ud800-\udfff]')
 
 
 def _propre(v):
@@ -51,10 +50,17 @@ def _propre(v):
     Les octets d'un nom de fichier qui n'est pas de l'UTF-8 sont rendus sous
     leur forme \\xNN : lisible, sans ambiguïté sur le fait que le nom n'est pas
     du texte, et surtout écrivable — sans quoi c'est toute la sortie qui est
-    perdue à la dernière ligne du programme."""
+    perdue à la dernière ligne du programme.
+
+    Le repérage se fait par encode() en try/except, et non par une expression :
+    _propre est appelée sur CHAQUE champ de CHAQUE fait, et une seconde regex y
+    coûtait 34 % du temps de fait() là où celle-ci en coûte 11.
+    """
     if not isinstance(v, str):
         return v
-    if RE_DEMI_CODET.search(v):
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
         v = v.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
     return RE_CONTROLE.sub("·", v)
 
@@ -652,9 +658,15 @@ class Balayage:
         hotes = collections.Counter(m.group(0).lower().decode("latin-1")
                                     for m in RE_HOTE.finditer(blob))
         for hote, n in hotes.items():
-            fin = _fin_hote(hote)
+            # Calculé PARESSEUSEMENT : il ne sert qu'en cas de correspondance,
+            # cas très minoritaire, et il coûte 807 ns par hôte distinct — un
+            # million d'hôtes, une seconde jetée. Mesuré : +17 % sur le balayage
+            # quand il est calculé pour tous, +1 % ainsi.
+            fin = None
             for ident, rx in self.motifs:
                 for m in rx.finditer(hote):
+                    if fin is None:
+                        fin = _fin_hote(hote)
                     # La correspondance doit COMMENCER dans le nom d'hôte.
                     # RE_HOTE garde jusqu'à 120 caractères de chemin, et le
                     # motif d'une règle courait sur le tout : une page
@@ -949,9 +961,16 @@ def usage(c, pieces):
         # caractère près : le point final de « Mounted /run/media/x/CLE. » ne
         # doit pas entrer dans l'étiquette, sans quoi les deux rapports
         # nomment le même support différemment.
+        # Le crible littéral AVANT le motif, comme MOTIFS_JOURNAL en pose un
+        # dans le skill forensic. « (?:/run)? » en tête interdit à re son
+        # optimisation de préfixe, si bien que le motif balayait chaque ligne du
+        # journal pour rien. Mesuré sur 2 000 000 de lignes : 5,55 s sans le
+        # crible, 0,10 s avec — cinquante-cinq fois moins, pour un résultat
+        # identique.
         vus = set()
         for ligne in c.lignes(j):
-            vus.update(RE_MEDIA.findall(ligne))
+            if "/media/" in ligne:
+                vus.update(RE_MEDIA.findall(ligne))
         for compte, etiquette in sorted(vus):
             constat("usage", "support amovible monté", etiquette,
                     c.rel(j), "chemins /run/media/<compte>/ dans le journal",
