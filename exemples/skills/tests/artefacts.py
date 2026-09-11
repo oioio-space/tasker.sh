@@ -268,7 +268,15 @@ def batir(base):
     T(f"JOURNAUX/{P}_var_log.tar.gz", {
         "var/log/auth.log":
             "Jan  5 09:00:01 pc42 sshd[7]: Accepted publickey for "
-            "mrobert from 10.1.2.3 port 5000 ssh2\n",
+            "mrobert from 10.1.2.3 port 5000 ssh2\n"
+            # Cette ligne-ci est l'épreuve du FUSEAU. Son heure est celle du
+            # POSTE (Europe/Paris) ; le mtime du membre, lui, est en UTC et
+            # vaut 12:00. 13:30 locale « dépasse » donc 12:00 UTC, l'année
+            # courante était rejetée, et la ligne ressortait datée de l'année
+            # PRÉCÉDENTE — sur les lignes les plus récentes du journal, celles
+            # qui intéressent l'enquête.
+            "Jan  8 13:30:00 pc42 sshd[9]: Accepted password for "
+            "jdupont from 10.1.2.9 port 5001 ssh2\n",
         "var/log/auth.log.2.gz": gzip.compress(
             b"Jan  2 08:14:55 pc42 sudo: jdupont : "
             b"COMMAND=/usr/bin/journal-tourne-et-comprime-dans-le-tar\n")})
@@ -641,6 +649,25 @@ ATTENDUS_CHAMPS = [
     ("indicateur : la polarité est dite",
      {"__jamais__": {"categorie": "indicateur", "trouve": None}}),
 
+    # ── les dates d'une ligne syslog ──────────────────────────────────
+    # Une ligne syslog ne porte NI année NI fuseau : c'est l'heure lue sur
+    # l'horloge du poste. L'horodatage doit donc sortir NU — le marquer « Z »
+    # revenait à affirmer de l'UTC, et mettait deux échelles dans le même
+    # fichier de faits, à côté de faits journalctl correctement décalés.
+    ("syslog : l'heure du poste", {"fait": "connexion SSH acceptée",
+                                   "horodatage": "2026-01-05T09:00:01",
+                                   "acteur": "mrobert"}),
+    # En EXACT, et c'est indispensable : « 09:00:01 » est une sous-chaîne de
+    # « 09:00:01Z », donc l'attente ci-dessus passait aussi sur le code fautif.
+    ("syslog : jamais marqué Z",
+     {"__jamais__": {"fait": "connexion SSH acceptée",
+                     "horodatage": "2026-01-05T09:00:01Z"}}),
+    # Et l'année ne doit pas reculer d'un cran parce que l'heure locale
+    # dépasse le mtime UTC du fichier.
+    ("syslog : l'année ne recule pas", {"fait": "connexion SSH acceptée",
+                                        "horodatage": "2026-01-08T13:30:00",
+                                        "acteur": "jdupont"}),
+
     # ── l'historique de navigation n'est pas borné ────────────────────
     # Le piège pose 22 pages dans places.sqlite — dont 20 anciennes — et 1 dans
     # Chrome. Les 23 doivent devenir des faits : une borne garde « les plus
@@ -930,7 +957,8 @@ def main():
             etiquette = interdit
         else:
             ok = any(all(v in str(d.get(k, "")) for k, v in exige.items()) for d in lus_f)
-            etiquette = exige.get("valeur") or exige.get("source")
+            etiquette = (exige.get("valeur") or exige.get("source")
+                         or exige.get("horodatage") or exige.get("fait"))
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {etiquette}")
 

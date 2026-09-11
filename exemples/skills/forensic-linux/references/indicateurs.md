@@ -34,6 +34,18 @@ Un indicateur qui n'est **nulle part** donne aussi un fait — « absent de la
 collecte » —, avec la réserve qui va avec : absent des pièces collectées, pas
 forcément du poste.
 
+**N'en lisez qu'une section**, avec `grep -A 40 '<titre>' \
+references/indicateurs.md` :
+
+| ouvrez… | quand |
+|---|---|
+| `## Ce qu'il faut savoir avant de conclure` | avant de conclure quoi que ce soit d'un indicateur trouvé |
+| `## Et dans le skill de conformité` | la même recherche, mais dans une règle |
+| `## Ce que l'outil cherche de lui-même` | la liste des motifs, et ce qui en a été écarté exprès |
+| `## Dans quoi ça cherche : les archives sont ouvertes` | ce qui est décomprimé, et le plafond |
+| `## Reprendre après un plantage` | le journal de reprise, et ce qui l'invalide |
+| `` ## Une simple liste de chaînes : `--textes` `` | chercher des noms, des références, des mots-clés |
+
 ## Ce qu'il faut savoir avant de conclure
 
 - **Une empreinte compare des contenus entiers.** Un fichier modifié d'un

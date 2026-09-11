@@ -73,23 +73,17 @@ de `last` : il porte l'epoch, le texte porte l'heure du poste d'analyse. Le
 brouillon met tout dans le fuseau du poste ; **vous ne convertissez rien à la
 main**.
 
-Deux fiches à lire, dans cet ordre :
+Quatre fiches, à ouvrir **quand le besoin se présente**, jamais en entier :
+chacune s'ouvre par un index qui donne le titre exact de ses sections. Lisez la
+seule qui répond — `grep -A 60 '<titre>' references/<fiche>`. `artefacts.md`
+coûte six mille jetons ; une de ses onze sections, six cents.
 
-- `references/artefacts.md` — **ce que sont** les pièces. Vous travaillez hors
-  ligne : ce fichier est la seule source sur le format d'un `places.sqlite`, la
-  raison pour laquelle un `.bash_history` n'est pas daté, ou la conversion des
-  dates Chrome depuis 1601. **Lisez-le dès qu'un nom de fichier ne vous dit pas
-  immédiatement ce qu'il prouve** — et n'inventez jamais la signification d'un
-  artefact que vous n'y trouvez pas : dites que vous ne savez pas.
-- `references/inventaire.md` — **question par question** : la trace, la pièce
-  qui la porte, si elle est lue, et ce qui manque. À consulter avant d'écrire
-  « on ne sait pas » : la réponse y est peut-être. Et avant d'affirmer, pour
-  vérifier que la pièce dit bien ce que vous lui faites dire.
-- `references/sources.md` — **où** chaque réponse se trouve, et ce qu'aucune
-  pièce ne dit.
-- `references/ou-chercher.md` — **quand une pièce manque** : son chemin sur le
-  système d'origine, l'étape à rejouer, et comment distinguer « le système ne
-  l'avait pas » de « la collecte l'a ratée ».
+| fiche | à ouvrir quand… |
+|---|---|
+| `references/artefacts.md` | un nom de fichier ne vous dit pas ce qu'il PROUVE. Hors ligne, c'est la seule source sur le format d'un `places.sqlite` ou les dates Chrome depuis 1601. **N'inventez jamais** la signification d'un artefact absent de cette fiche : dites que vous ne savez pas |
+| `references/inventaire.md` | avant d'écrire « on ne sait pas » — la réponse y est peut-être ; et avant d'affirmer, pour vérifier que la pièce dit bien ce que vous lui faites dire |
+| `references/ou-chercher.md` | une pièce manque : son chemin d'origine, l'étape à rejouer, et comment distinguer « le système ne l'avait pas » de « la collecte l'a ratée » |
+| `references/sources.md` | vous cherchez par quelle COMMANDE une réponse a été obtenue |
 
 ### Les pièces qui n'ont ni date ni auteur
 

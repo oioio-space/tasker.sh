@@ -7,6 +7,10 @@ Une case « — » n'est pas un oubli : c'est une chose qu'aucune pièce ne dit.
 Elle a autant de valeur que le reste, et doit se retrouver dans « Les limites »
 du rapport.
 
+**Ce fichier est un tableau par question.** Cherchez la vôtre
+directement : `grep -n 'USB' references/inventaire.md`. Le lire en entier ne
+sert que si vous voulez l'inventaire complet de ce que la collecte NE dit pas.
+
 ---
 
 ## Identifier la machine

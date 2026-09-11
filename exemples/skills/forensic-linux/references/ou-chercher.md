@@ -4,6 +4,11 @@ L'extraction signale chaque pièce absente comme un fait de catégorie `limite`,
 avec son **chemin d'origine** et l'**étape** de `collecte-linux.conf` à rejouer.
 Cette fiche dit ce qu'il faut en faire.
 
+**Cherchez d'abord la pièce qui manque** :
+`grep -n 'lastlog' references/ou-chercher.md`. Les sections : ce qui distingue
+deux absences, le tableau des absences NORMALES, et comment demander une
+reprise de collecte.
+
 ## D'abord : distinguer deux absences
 
 Elles n'ont pas la même conséquence, et le rapport ne doit pas les confondre.

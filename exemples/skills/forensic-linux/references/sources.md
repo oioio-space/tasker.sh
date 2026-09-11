@@ -4,6 +4,9 @@ Chaque ligne : la question, la pièce dans la collecte, le geste, et sa limite.
 Les limites comptent autant que les réponses — c'est ce qui distingue un
 rapport d'une affirmation.
 
+**Un tableau par pièce.** Cherchez la vôtre :
+`grep -n 'wtmp' references/sources.md`.
+
 ## La machine
 
 | question | pièce | geste | limite |

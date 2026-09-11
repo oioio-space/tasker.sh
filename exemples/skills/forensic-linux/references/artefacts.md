@@ -6,6 +6,25 @@ rien de ce qui suit ne peut être cherché ailleurs, tout ce qui compte est ici.
 Pour chaque pièce : ce que c'est, ce qu'elle **prouve**, ce qu'elle **ne prouve
 pas**, et le piège qui fait dire des bêtises.
 
+**Ce fichier est long. N'en lisez qu'une section**, avec
+`grep -A 60 '## Les navigateurs' references/artefacts.md` — le nom exact est
+dans la colonne de gauche. Le lire en entier coûte huit fois ce qu'une section
+coûte, pour une réponse qui tient dans une seule.
+
+| ouvrez… | quand |
+|---|---|
+| `## Les fichiers de connexion` | `wtmp`, `btmp`, `lastlog`, `wtmp.db`, `lastlog2.db`, la sortie de `last` |
+| `## Le journal systemd` | `journal.txt`, les journaux binaires, `journalctl` |
+| `## Les traces d'un compte` | `.bash_history`, `.ssh`, `recently-used.xbel`, les profils applicatifs |
+| `## Les navigateurs` | `places.sqlite`, `History`, `Cookies`, `logins.json`, `Bookmarks`, `Web Data` |
+| `## Le réseau` | `NetworkManager`, `ifcfg`, `resolv.conf`, `hosts`, `known_hosts`, les baux DHCP |
+| `## Le domaine` | `sssd`, `krb5.conf`, `samba`, le cache sss |
+| `## Le disque` | `fstab`, les systèmes de fichiers, `SUPPRIMES/`, `PHOTOREC/` |
+| `## Les paquets` | `dpkg`, `rpm`, `pacman`, `apk`, `snap`, `flatpak`, les dépôts |
+| `## La timeline mactime` | `mactime.csv`, les drapeaux `macb`, les inodes |
+| `## Les pièces qu'on oublie` | `machine-id`, `adjtime`, `localtime`, les journaux d'installation |
+| `## STRINGS/` | les chaînes lisibles des périphériques, et leurs extraits |
+
 ---
 
 ## Les fichiers de connexion

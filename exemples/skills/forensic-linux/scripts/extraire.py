@@ -13,7 +13,7 @@ archives sont lues en flux, jamais dépaquetées sur place.
 import argparse, bz2, codecs, collections, contextlib, csv, fnmatch, gzip, hashlib, io, json, lzma, os, re
 import urllib.parse
 import sqlite3, struct, sys, tarfile, tempfile, zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Les colonnes de tête, dans l'ordre où on les lit. Les champs nommés en plus
 # par les faits (tty, vid, premiere, porte…) viennent ensuite, tout seuls : les
@@ -803,6 +803,9 @@ MOTIFS_JOURNAL = [
      lambda m: (None, m.group(1) if m.lastindex else "bail DHCP")),
 ]
 RE_ISO = re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+\-]\d{4})\s+(\S+)\s+(.*)$')
+# Une ligne syslog porte l'heure du POSTE, le mtime du fichier est en UTC :
+# les comparer demande de tolérer l'écart des fuseaux, de −12 à +14 heures.
+MARGE_FUSEAU = timedelta(hours=26)
 RE_SYSLOG = re.compile(r'^(\w{3})\s+(\d{1,2})\s+(\d\d:\d\d:\d\d)\s+(\S+)\s+(.*)$')
 
 
@@ -815,6 +818,21 @@ def _ligne_journal(ligne, fin_fichier=None):
     On prend alors l'année qui place la ligne juste avant la dernière écriture
     du fichier : logrotate garantit qu'un journal couvre moins d'un an, donc
     une seule année convient. C'est une déduction, elle est marquée comme telle.
+
+    Elle ne porte pas non plus de FUSEAU : c'est l'heure du poste, lue sur son
+    horloge. L'horodatage sort donc SANS suffixe — ni « Z », ni décalage —,
+    comme le fait déjà « dpkg.log ». Le marquer « Z » revenait à affirmer de
+    l'UTC : sur un poste à Paris, une ligne de 09:00:01 ressortait en
+    09:00:01Z, c'est-à-dire 10:00:01 heure du poste, à côté de faits
+    journalctl correctement décalés. Deux échelles dans le même fichier de
+    faits, sans que rien ne le dise.
+
+    La MARGE de la comparaison vient du même défaut. « fin_fichier » est le
+    mtime du fichier, lui en UTC : à l'est de Greenwich, l'heure locale des
+    dernières lignes DÉPASSE ce mtime, l'année courante était rejetée, et
+    c'est l'année précédente qui sortait — une date fausse d'un an, sur les
+    lignes les plus récentes, donc celles qui intéressent l'enquête. Vingt-six
+    heures couvrent tous les fuseaux (−12 à +14) et la seconde intercalaire.
     """
     m = RE_ISO.match(ligne)
     if m:
@@ -828,14 +846,14 @@ def _ligne_journal(ligne, fin_fichier=None):
     if not mois:
         return None, m.group(5), False
     h, mn, sec = (int(x) for x in m.group(3).split(":"))
+    borne = fin_fichier.replace(tzinfo=None) + MARGE_FUSEAU
     for annee in (fin_fichier.year, fin_fichier.year - 1):
         try:
-            d = datetime(annee, mois, int(m.group(2)), h, mn, sec,
-                         tzinfo=timezone.utc)
+            d = datetime(annee, mois, int(m.group(2)), h, mn, sec)
         except ValueError:
             continue
-        if d <= fin_fichier:
-            return d.isoformat().replace("+00:00", "Z"), m.group(5), True
+        if d <= borne:
+            return d.isoformat(), m.group(5), True
     return None, m.group(5), False
 
 
