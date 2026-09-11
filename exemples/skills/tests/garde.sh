@@ -130,6 +130,28 @@ mkdir -p "$travail/affaire"
 CRUSH_SCELLES="$travail/scelles.txt" essai "un dossier déclaré à la main" 2 \
   "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/affaire/note.txt\"}}"
 
+# DEUX listes qui s'additionnent : celle de l'affaire et celle du poste. Une
+# seule était lue, et l'ajout d'un « :-./scelles.txt » dans le défaut aurait
+# produit un chemin littéral « …/scelles.txt:-./scelles.txt » — lu par
+# personne, et sans un mot. Vu poser la question ; d'où ces cas.
+mkdir -p "$travail/nas" "$travail/poste_a_part" "$travail/affaire-tk"
+printf '%s\n' "$travail/nas"          > "$travail/affaire-tk/scelles.txt"
+printf '%s\n' "$travail/poste_a_part" > "$travail/conf-tk-crush.txt"
+
+CRUSH_PROJECT_DIR="$travail/affaire-tk" \
+  essai "la liste de l'AFFAIRE est lue" 2 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/nas/x\"}}"
+CRUSH_SCELLES="$travail/affaire-tk/scelles.txt:$travail/conf-tk-crush.txt" \
+  essai "deux listes séparées par « : » s'additionnent (1/2)" 2 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/nas/x\"}}"
+CRUSH_SCELLES="$travail/affaire-tk/scelles.txt:$travail/conf-tk-crush.txt" \
+  essai "deux listes séparées par « : » s'additionnent (2/2)" 2 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/poste_a_part/x\"}}"
+# Un fichier de liste absent n'est PAS une erreur : c'est le cas courant.
+CRUSH_SCELLES="$travail/rien-du-tout.txt:$travail/non-plus.txt" \
+  essai "des listes absentes ne cassent rien" 0 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/analyse/r.md\"}}"
+
 # ── « --essai » : la garde se contrôle elle-même ──────────────────────
 # Le contrôle tapé à la main dans le README pouvait rendre 0 pour une faute
 # de frappe — « scelles » pour « scelle », un cwd qui n'est pas le dossier

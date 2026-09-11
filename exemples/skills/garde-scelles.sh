@@ -32,10 +32,22 @@
 # qui est la seule garantie réelle. Ceci est une ceinture de plus, lisible,
 # qui explique au modèle pourquoi il ne peut pas.
 #
-# Réglage FACULTATIF : des dossiers à protéger en plus, un par ligne, dans
-# ~/.config/crush/scelles.txt — ou $XDG_CONFIG_HOME/crush/scelles.txt si cette
-# variable est posée, comme Crush lui-même. CRUSH_SCELLES nomme directement un
-# autre fichier. Sans ce fichier, la reconnaissance par structure suffit.
+# Réglage FACULTATIF : des dossiers à protéger EN PLUS, un par ligne. Sans ces
+# fichiers, la reconnaissance par structure suffit — c'est le cas courant.
+# DEUX fichiers sont lus, et leurs listes s'additionnent :
+#
+#   <dossier d'analyse>/scelles.txt    ce qui ne vaut que pour CETTE affaire
+#   ~/.config/crush/scelles.txt        ce qui vaut pour le poste
+#
+# ($XDG_CONFIG_HOME remplace ~/.config s'il est posé, comme pour Crush.)
+#
+# Le dossier d'analyse est celui où Crush tourne : il le donne dans
+# CRUSH_PROJECT_DIR, et à défaut on prend le dossier courant. Ne mettez donc
+# pas « ./scelles.txt » en dur : lancé à la main depuis ailleurs, le script ne
+# trouverait plus rien, et sans un mot.
+#
+# CRUSH_SCELLES remplace les deux, et accepte plusieurs chemins séparés par
+# « : », comme PATH.
 
 set -u
 
@@ -48,7 +60,11 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 2
 fi
 
-export TK_SCELLES="${CRUSH_SCELLES:-${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt}"
+_scelles_defaut() {
+    printf '%s:%s' "${CRUSH_PROJECT_DIR:-$PWD}/scelles.txt" \
+                   "${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt"
+}
+export TK_SCELLES="${CRUSH_SCELLES:-$(_scelles_defaut)}"
 
 # Le programme est capturé dans une variable, et NON passé sur l'entrée
 # standard : celle-ci porte le JSON de Crush, et un « python3 - » la mangerait.
@@ -205,13 +221,20 @@ entree = e.get("tool_input") or {}
 # n'était même pas vu comme un chemin.
 cwd = e.get("cwd") if isinstance(e.get("cwd"), str) else None
 
+# Plusieurs fichiers, séparés comme PATH : celui de l'affaire et celui du
+# poste s'AJOUTENT. Un seul chemin fonctionne toujours — c'est une liste à un
+# élément. Un fichier absent n'est pas une erreur : la reconnaissance par
+# structure reste le cas courant.
 declares = []
-try:
-    with open(os.environ.get("TK_SCELLES", ""), encoding="utf-8") as fh:
-        declares = [os.path.abspath(os.path.expanduser(l.strip().rstrip("/")))
-                    for l in fh if l.strip() and not l.lstrip().startswith("#")]
-except OSError:
-    pass
+for f in os.environ.get("TK_SCELLES", "").split(os.pathsep):
+    if not f:
+        continue
+    try:
+        with open(f, encoding="utf-8") as fh:
+            declares += [os.path.abspath(os.path.expanduser(l.strip().rstrip("/")))
+                         for l in fh if l.strip() and not l.lstrip().startswith("#")]
+    except OSError:
+        pass
 
 commande = entree.get("command") if isinstance(entree.get("command"), str) else ""
 vises = [v for k in ("file_path", "path") for v in (entree.get(k),) if isinstance(v, str)]
@@ -278,6 +301,10 @@ PY
 if [ "${1:-}" = "--essai" ]; then
     dossier=$(cd "${2:-.}" 2>/dev/null && pwd) || {
         echo "essai : « ${2:-.} » n'est pas un dossier" >&2; exit 1; }
+    # Les listes déclarées suivent le dossier EXAMINÉ, pas le dossier courant :
+    # « --essai ~/analyse/PC01 » depuis ailleurs doit lire le scelles.txt de
+    # PC01, sinon l'essai ne dit pas la vérité sur ce dossier-là.
+    export TK_SCELLES="${CRUSH_SCELLES:-$dossier/scelles.txt:${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt}"
     motif=$(mktemp)
     trap 'rm -f "$motif"' EXIT
 
@@ -292,7 +319,14 @@ if [ "${1:-}" = "--essai" ]; then
         echo refuse
     }
 
-    printf 'garde des scellés — essai sur %s\n\n' "$dossier"
+    printf 'garde des scellés — essai sur %s\n' "$dossier"
+    lues=0
+    IFS=: read -ra _listes <<< "$TK_SCELLES"
+    for f in "${_listes[@]}"; do
+        [ -f "$f" ] && { printf '  liste déclarée : %s\n' "$f"; lues=1; }
+    done
+    [ "$lues" -eq 0 ] && printf '  aucune liste déclarée — la structure suffit\n'
+    echo
     scelles=0 images=0 souci=0
     for d in "$dossier"/*/; do
         [ -d "$d" ] || continue

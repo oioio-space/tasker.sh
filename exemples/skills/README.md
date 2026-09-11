@@ -636,9 +636,37 @@ règle — ce qui doit passer, et ce qui ne doit pas :
 Le montage en lecture seule, lui, tient dans tous les cas — c'est la seule
 garantie réelle ; le reste est une ceinture.
 
-Un dossier qui n'est PAS une collecte et qu'on veut protéger quand même se
-liste un par ligne dans `~/.config/crush/scelles.txt` — en plus de la
-reconnaissance par structure, jamais à sa place.
+#### Protéger un dossier que la structure ne reconnaît pas
+
+Un partage NAS, un dossier d'affaire, une extraction à part : ce qui n'est pas
+une collecte et doit quand même être intouchable se **liste un par ligne**, en
+plus de la reconnaissance par structure et jamais à sa place. **Deux fichiers
+sont lus, et leurs listes s'additionnent :**
+
+| fichier | portée |
+|---|---|
+| `<affaire>/scelles.txt` | cette machine-là seulement |
+| `~/.config/crush/scelles.txt` | le poste, toutes affaires |
+
+Le dossier d'affaire est celui où Crush tourne — il le donne dans
+`$CRUSH_PROJECT_DIR`, et à défaut le script prend le dossier courant. C'est un
+troisième fichier qui peut vivre dans le dossier d'analyse, mais il est
+**facultatif** : sans lui, rien ne change.
+
+    # ~/analyse/PC01_B13_SYCOBS_LINUX/scelles.txt
+    /mnt/nas_sycobs/partage_rh
+    ~/Documents/affaire-2026-014
+
+`CRUSH_SCELLES` remplace les deux et accepte plusieurs chemins séparés par
+`:`, comme `PATH`. Ce que la garde a lu se voit dans `--essai` :
+
+    garde des scellés — essai sur /home/…/analyse/PC01_B13_SYCOBS_LINUX
+      liste déclarée : /home/…/analyse/PC01_B13_SYCOBS_LINUX/scelles.txt
+      liste déclarée : /home/…/.config/crush/scelles.txt
+
+**N'écrivez pas `./scelles.txt` en dur** dans le script : le `.` est le dossier
+courant du processus, pas celui de l'analyse. Lancé à la main depuis ailleurs,
+le script ne trouverait plus rien — et sans un mot.
 
 ### L'image montée : à lire, jamais à écrire
 
