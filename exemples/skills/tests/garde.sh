@@ -81,6 +81,42 @@ essai "un chemin relatif, depuis le dossier parent" 2 \
 essai "un lecteur qui écrit HORS du scellé (doit passer)" 0 \
   "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"python3 extraire.py $C -o $travail/analyse/f.jsonl\"}}"
 
+# L'IMAGE MONTÉE. Quand la collecte ne porte pas la pièce cherchée, l'analyse
+# doit pouvoir aller la chercher sur l'image elle-même. Elle se reconnaît, comme
+# le scellé, à sa STRUCTURE — une racine Linux porte etc/ et usr/ — et jamais à
+# son chemin : « mnt/ » est une convention, pas une adresse.
+M="$travail/analyse/mnt"
+mkdir -p "$M"/{etc,usr,var,bin,home,root}
+printf 'root:x:0:0::/root:/bin/sh\n' > "$M/etc/passwd"
+
+echo "── L'IMAGE MONTÉE : TOUT CE QUI LIT ──"
+essai "cat sur un fichier de l'image" 0 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"cat $M/etc/passwd\"}}"
+essai "strings, puis tri, vers le dossier d'analyse" 0 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"strings $M/var/log/x | sort -u > $travail/analyse/s.txt\"}}"
+essai "grep récursif, même sur le mot « rm »" 0 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"grep -r 'rm -rf' $M/home\"}}"
+essai "find et sqlite3 en lecture" 0 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"find $M/home -name places.sqlite\"}}"
+
+echo "── L'IMAGE MONTÉE : RIEN DE CE QUI ÉCRIT ──"
+essai "écrire un fichier dans l'image" 2 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$M/etc/note.txt\"}}"
+essai "rediriger DANS l'image" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"strings $M/var/log/x > $M/tmp/s.txt\"}}"
+essai "effacer dans l'image" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"rm -rf $M/var/log\"}}"
+essai "copier VERS l'image" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"cp /etc/hosts $M/etc/hosts\"}}"
+essai "sed -i sur un fichier de l'image" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"sed -i s/a/b/ $M/etc/passwd\"}}"
+essai "une lecture, PUIS une écriture" 2 \
+  "{\"tool_name\":\"bash\",\"tool_input\":{\"command\":\"cat $M/etc/passwd ; touch $M/etc/vu\"}}"
+# Le poste de l'analyste n'est pas une image : « / » porte etc/ et usr/ lui
+# aussi, et la garde refuserait alors absolument tout.
+essai "la racine du poste n'est pas une image" 0 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/analyse/rapport2.md\"}}"
+
 # Le fichier de déclaration reste possible, pour protéger en plus un dossier
 # qui n'est pas une collecte — un dossier d'affaire, par exemple.
 echo "── LA LISTE DÉCLARÉE, EN PLUS DE LA STRUCTURE ──"

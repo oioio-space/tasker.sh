@@ -20,6 +20,14 @@
 # vérifient. Sans cette autorisation la garde refuserait la toute première
 # commande du skill, qui doit bien lire la collecte pour en tirer des faits.
 #
+# DEUXIÈME CAS, RÉGLÉ AUTREMENT : l'IMAGE MONTÉE. Quand la collecte ne porte
+# pas ce qu'il faut, l'analyse doit pouvoir aller le chercher sur l'image
+# elle-même, montée en lecture seule à côté — « mnt/ » par convention, ou
+# l'endroit que l'analyste indique. Là, tout ce qui LIT est permis, y compris
+# par bash : cat, strings, sqlite3, tar -t, find… Seul l'ÉCRITURE est refusée.
+# Une image se reconnaît elle aussi à sa structure — une racine Linux porte
+# etc/ et usr/ — et jamais à son chemin, pour la même raison que le scellé.
+#
 # Ce qu'il ne remplace pas : le montage en lecture seule (mount -o bind,ro),
 # qui est la seule garantie réelle. Ceci est une ceinture de plus, lisible,
 # qui explique au modèle pourquoi il ne peut pas.
@@ -55,6 +63,26 @@ DOSSIERS = {"SYSTEME", "PAQUETS", "COMPTES", "CONNEXIONS", "RESEAU",
 # collecte ne doit pas geler le poste de l'analyste.
 ASSEZ = 3
 
+# Une racine Linux montée. « etc » et « usr » sont exigés tous les deux, plus
+# cinq marqueurs en tout : un arbre de compilation qui porterait bin/ et lib/
+# ne doit pas geler le poste. La racine « / » du poste d'analyse est écartée
+# explicitement — sans quoi la garde refuserait absolument tout.
+RACINE = {"etc", "usr", "var", "bin", "sbin", "lib", "lib64", "boot", "home",
+          "root", "opt", "srv", "proc", "sys", "dev", "tmp", "run", "mnt", "media"}
+ASSEZ_RACINE = 5
+
+# Les commandes qui ÉCRIVENT. La garde ne les cherche qu'en tête de segment —
+# après un « ; », un « && », un tube — et non n'importe où : « grep -r "rm "
+# mnt/ » est une lecture parfaitement légitime.
+MUTENT = {"rm", "rmdir", "mv", "cp", "touch", "mkdir", "rename", "chmod",
+          "chown", "chgrp", "ln", "dd", "truncate", "tee", "install", "rsync",
+          "shred", "unzip", "gunzip", "bunzip2", "unxz", "mkfs", "fsck",
+          "mount", "umount", "patch", "split", "wipefs", "sgdisk", "fdisk",
+          "debugfs", "tune2fs", "xfs_undelete", "photorec", "testdisk"}
+SEPARATEURS = re.compile(r'\|\||&&|[;|&\n\r]')
+# « sed -i », « tar -x », « perl -i » : la commande est anodine, le drapeau non.
+DRAPEAUX_ECRIVENT = {"-i", "--in-place", "-x", "--extract", "--delete"}
+
 # Les scripts du skill ne modifient JAMAIS leur entrée : ils lisent les
 # archives en flux, sans les dépaqueter, et écrivent là où « -o » le dit.
 #
@@ -73,29 +101,102 @@ ENCHAINE = (";", "&", "|", ">", "<", "`", "$(", "#", "\n", "\r", "\\")
 SORTIES = ("-o", "--sortie", "--out")
 
 
+_VUS = {}
+
+
+def _noms(d):
+    """Le contenu d'un dossier, mémorisé. Une commande bash porte des dizaines
+    de mots, dont chacun fait remonter tous ses parents : sans ce cache, la
+    garde relit les mêmes dossiers des centaines de fois, et le hook a cinq
+    secondes."""
+    if d not in _VUS:
+        try:
+            _VUS[d] = set(os.listdir(d))
+        except OSError:
+            _VUS[d] = set()
+    return _VUS[d]
+
+
 def est_collecte(d):
-    try:
-        return sum(1 for x in os.listdir(d)
-                   if x in DOSSIERS and os.path.isdir(os.path.join(d, x))) >= ASSEZ
-    except OSError:
+    noms = _noms(d)
+    return sum(1 for x in noms & DOSSIERS
+               if os.path.isdir(os.path.join(d, x))) >= ASSEZ
+
+
+def est_image(d):
+    if d == os.sep:
         return False
+    noms = _noms(d)
+    return {"etc", "usr"} <= noms and len(noms & RACINE) >= ASSEZ_RACINE
+
+
+def absolu(chemin, cwd=None):
+    p = os.path.expanduser(chemin)
+    return os.path.abspath(os.path.join(cwd, p)
+                           if cwd and not os.path.isabs(p) else p)
+
+
+def protege(chemin, declares, cwd=None):
+    """(« scelle » ou « image », dossier) que ce chemin vise, ou (None, None).
+
+    On remonte les parents : écrire un fichier NEUF au fond d'une collecte doit
+    être refusé comme le reste."""
+    p = absolu(chemin, cwd)
+    for d in declares:
+        if p == d or p.startswith(d + os.sep):
+            return "scelle", d
+    while True:
+        if est_collecte(p):
+            return "scelle", p
+        if est_image(p):
+            return "image", p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None, None
+        p = parent
 
 
 def scelle_touche(chemin, declares, cwd=None):
-    """Le scellé que ce chemin vise, ou None. On remonte les parents : écrire
-    un fichier NEUF au fond d'une collecte doit être refusé comme le reste."""
-    p = os.path.expanduser(chemin)
-    p = os.path.abspath(os.path.join(cwd, p) if cwd and not os.path.isabs(p) else p)
-    for d in declares:
-        if p == d or p.startswith(d + os.sep):
-            return d
-    while True:
-        if est_collecte(p):
-            return p
-        parent = os.path.dirname(p)
-        if parent == p:
-            return None
-        p = parent
+    genre, d = protege(chemin, declares, cwd)
+    return d if genre == "scelle" else None
+
+
+def ecrit_dans(commande, dossier, cwd=None):
+    """La commande écrit-elle DANS ce dossier ? Segment par segment.
+
+    Une image montée se lit librement — c'est tout l'intérêt d'aller y chercher
+    ce qui manque à la collecte. Seule l'écriture est refusée, et elle prend
+    trois formes : une redirection dont la CIBLE est dedans, une commande qui
+    modifie ses arguments, ou un drapeau qui transforme une lecture en
+    écriture.
+    """
+    def dedans(mot):
+        p = absolu(mot.strip("'\""), cwd)
+        return p == dossier or p.startswith(dossier + os.sep)
+
+    for segment in SEPARATEURS.split(commande):
+        mots = segment.split()
+        if not mots:
+            continue
+        # les redirections : « > x », « >x », « 2>> x »
+        for i, mot in enumerate(mots):
+            coupe = mot.find(">")
+            if coupe < 0 or (coupe and not mot[:coupe].rstrip(">").isdigit()):
+                continue
+            cible = mot[coupe:].lstrip(">")
+            if not cible and i + 1 < len(mots):
+                cible = mots[i + 1]
+            if cible and dedans(cible):
+                return True
+        # le premier mot du segment, une fois les « VAR=valeur » écartés
+        tete = next((os.path.basename(m) for m in mots if "=" not in m.split("/")[0]),
+                    "")
+        args = [m for m in mots[1:] if not m.startswith("-")]
+        if tete in MUTENT and any(dedans(m) for m in args):
+            return True
+        if DRAPEAUX_ECRIVENT & set(mots) and any(dedans(m) for m in args):
+            return True
+    return False
 
 
 e = json.load(sys.stdin)
@@ -120,22 +221,43 @@ vises = [v for k in ("file_path", "path") for v in (entree.get(k),) if isinstanc
 mots = [t.strip("'\"") for t in commande.split()]
 vises += [m for m in mots if m and not m.startswith("-")]
 
+# Le scellé d'abord : c'est le régime le plus strict, et un scellé posé sous un
+# point de montage doit être traité en scellé.
 touche = next((s for c in vises for s in (scelle_touche(c, declares, cwd),) if s), None)
-if not touche:
+
+if touche:
+    if outil == "bash" and RE_LECTEUR.match(commande) \
+            and not any(d in commande for d in ENCHAINE) \
+            and not any(scelle_touche(v, declares, cwd)
+                        for o, v in zip(mots, mots[1:]) if o in SORTIES):
+        sys.exit(0)      # un lecteur du skill, seul, qui écrit hors du scellé
+
+    print(f"refusé : « {touche} » est un scellé — une collecte, reconnue à sa "
+          "structure. Le skill ne modifie jamais une pièce. Pour LIRE, servez-vous "
+          "de view, grep, ls, ou lancez extraire.py / controles.py dessus (seuls, "
+          "sans redirection ni enchaînement) ; le rapport et les fichiers de "
+          "travail vont dans le dossier d'analyse, hors du scellé.", file=sys.stderr)
+    sys.exit(2)
+
+# L'image montée : tout ce qui lit est permis, rien de ce qui écrit.
+image = next((d for c in vises
+              for g, d in (protege(c, declares, cwd),) if g == "image"), None)
+if not image:
     sys.exit(0)
 
-if outil == "bash" and RE_LECTEUR.match(commande) \
-        and not any(d in commande for d in ENCHAINE) \
-        and not any(scelle_touche(v, declares, cwd)
-                    for o, v in zip(mots, mots[1:]) if o in SORTIES):
-    sys.exit(0)          # un lecteur du skill, seul, qui écrit hors du scellé
+if outil in ("edit", "write", "multiedit", "download", "lsp_rename",
+             "lsp_replace_symbol") or (outil == "bash"
+                                       and ecrit_dans(commande, image, cwd)):
+    print(f"refusé : « {image} » est l'IMAGE EXAMINÉE, montée en lecture seule. "
+          "Vous pouvez y LIRE tout ce que vous voulez — cat, strings, file, "
+          "stat, find, grep, sqlite3, tar -t — et c'est même ce qu'il faut "
+          "faire quand la collecte ne porte pas la pièce cherchée. Mais rien "
+          "n'y est écrit, jamais : dirigez la sortie vers le dossier d'analyse. "
+          "Notez dans le rapport que la pièce vient de l'image et non de la "
+          "collecte : elle n'a pas d'empreinte au manifeste.", file=sys.stderr)
+    sys.exit(2)
 
-print(f"refusé : « {touche} » est un scellé — une collecte, reconnue à sa "
-      "structure. Le skill ne modifie jamais une pièce. Pour LIRE, servez-vous "
-      "de view, grep, ls, ou lancez extraire.py / controles.py dessus (seuls, "
-      "sans redirection ni enchaînement) ; le rapport et les fichiers de "
-      "travail vont dans le dossier d'analyse, hors du scellé.", file=sys.stderr)
-sys.exit(2)
+sys.exit(0)
 PY
 )
 python3 -c "$garde"

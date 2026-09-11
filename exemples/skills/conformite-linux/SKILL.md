@@ -147,6 +147,19 @@ Trois choses à savoir pour le rapport :
   connexion réseau ») ; quand la pièce est là et que rien n'a été trouvé, il est
   de thème `conforme` — et dit lui-même que cela ne prouve pas le respect de la
   règle. Ces deux cas vont respectivement au §7 et au §6 du rapport, jamais au §3.
+- **Une pièce qui manque peut être allée chercher sur l'IMAGE**, si elle est
+  montée à côté de la collecte — sous `mnt/` par convention, ou là où
+  l'analyste l'indique. Tout ce qui LIT y est permis, `bash` compris : `cat`,
+  `stat`, `strings`, `find`, `grep`, `sqlite3`, `tar -t`. Une racine Linux se
+  reconnaît à ce qu'elle porte `etc/` et `usr/` ; le skill `forensic-linux`
+  donne le chemin d'origine de chaque pièce dans
+  `references/ou-chercher.md`. **Rien n'y est jamais écrit** : l'image est
+  montée en lecture seule et la garde refuse toute écriture — dirigez vos
+  sorties vers le dossier d'analyse. Une pièce lue là **n'a pas d'empreinte au
+  manifeste** : citez-la comme venant de l'image, et non de la collecte. Un
+  constat qui fonde un manquement mérite mieux que cela — recopiez alors la
+  pièce dans la collecte et relancez `controles.py`, pour que le manifeste en
+  porte l'empreinte.
 
 Reportez le tableau du §3 depuis le fichier : `regle`, `texte`, les indices, et
 les constats obtenus. Le manifeste `constats-manifeste.json` contient le

@@ -251,6 +251,40 @@ Un dossier qui n'est PAS une collecte et qu'on veut protéger quand même se
 liste un par ligne dans `~/.config/crush/scelles.txt` — en plus de la
 reconnaissance par structure, jamais à sa place.
 
+### L'image montée : à lire, jamais à écrire
+
+Une collecte ne porte jamais tout. Quand une pièce manque, le geste le plus
+rapide est d'aller la lire sur l'image elle-même — et les deux skills sont
+faits pour le faire seuls. Montez-la **en lecture seule**, à côté du dossier
+d'analyse :
+
+    sudo losetup -r -f --show -P image.dd          # -r : le périphérique est ro
+    sudo mount -o ro,noatime /dev/loop0p2 ~/analyse/mnt
+
+`mnt/` est la convention, pas une adresse : **rien n'est écrit en dur nulle
+part**. Indiquez au modèle un autre point de montage et il s'en servira ; la
+garde le reconnaîtra de la même façon, à sa STRUCTURE — une racine Linux porte
+`etc/` et `usr/`.
+
+Ce que la garde laisse faire, et ce qu'elle refuse :
+
+| | |
+|---|---|
+| `cat mnt/etc/os-release`, `stat`, `find`, `grep -r`, `strings`, `sqlite3`, `tar -t` | **permis** — c'est l'intérêt |
+| `strings mnt/var/log/wtmp > ~/analyse/w.txt` | **permis** — la sortie va hors de l'image |
+| `strings mnt/… > mnt/tmp/w.txt`, `cp x mnt/etc/`, `rm mnt/…`, `sed -i`, l'outil `write` | **refusés** |
+
+Le montage `ro` suffirait ; la garde est là pour **l'expliquer** au modèle plutôt
+que de le laisser buter sur un « read-only file system » qu'il prendrait pour
+une panne.
+
+Une pièce lue sur l'image **n'a pas d'empreinte au manifeste** : les deux
+`SKILL.md` demandent de la citer comme venant de l'image, et — quand elle fonde
+une conclusion — de la recopier dans la collecte avant de relancer
+l'extraction, pour qu'elle y entre avec son empreinte. Le tableau
+`## Où poser une pièce reprise à la main`, dans
+`forensic-linux/references/ou-chercher.md`, donne le nom attendu de chacune.
+
 ## 4 · S'en servir
 
 ### La méthode sûre, en deux temps

@@ -5,9 +5,17 @@ avec son **chemin d'origine** et l'**étape** de `collecte-linux.conf` à rejoue
 Cette fiche dit ce qu'il faut en faire.
 
 **Cherchez d'abord la pièce qui manque** :
-`grep -n 'lastlog' references/ou-chercher.md`. Les sections : ce qui distingue
-deux absences, le tableau des absences NORMALES, et comment demander une
-reprise de collecte.
+`grep -n 'lastlog' references/ou-chercher.md`.
+
+| section | ce qu'elle donne |
+|---|---|
+| `## D'abord : distinguer deux absences` | les absences NORMALES, système par système |
+| `## Comment savoir laquelle` | le rapport de collecte, et où il se trouve |
+| `## Aller la lire vous-même sur l'image` | ce que vous pouvez faire seul, tout de suite |
+| `## Reprendre une pièce` | rejouer une étape de collecte |
+| `## Où poser une pièce reprise à la main` | le nom que l'extracteur attend |
+| `## Où chaque pièce vit sur le système` | le chemin d'origine de chacune |
+| `## Ce qu'aucune remontée ne rendra` | ce qu'il faut renoncer à chercher |
 
 ## D'abord : distinguer deux absences
 
@@ -48,6 +56,49 @@ Demandez le **rapport de la collecte** : `PREFIX_rapport.txt`, et le journal
 avez pas, demandez-les : sans eux, on ne peut pas distinguer « le système ne
 l'avait pas » de « la collecte a échoué », et il faut le dire dans le rapport
 plutôt que de choisir.
+
+## Aller la lire vous-même sur l'image
+
+C'est le geste le plus rapide, et il ne demande personne. **Si l'image est
+montée à côté de la collecte, allez-y.** Par convention elle est sous `mnt/`
+dans le dossier d'analyse ; si l'analyste vous indique un autre point de
+montage, c'est celui-là qui vaut. Un `ls` sur le dossier d'analyse vous le
+montre ; une racine Linux se reconnaît à ce qu'elle porte `etc/` et `usr/`.
+
+**Tout ce qui LIT y est permis**, par les outils comme par `bash` :
+
+    ls mnt/var/log/
+    cat mnt/etc/os-release
+    stat mnt/var/log/wtmp
+    strings mnt/var/log/journal/*/system.journal | grep -i ssh
+    find mnt/home -name 'places.sqlite'
+    sqlite3 'file:mnt/home/jdupont/.mozilla/…/places.sqlite?mode=ro' '.tables'
+    tar -tzf mnt/var/backups/x.tar.gz
+
+**Rien n'y est écrit, jamais.** L'image est montée en lecture seule, et la
+garde des scellés refuse en plus toute écriture — une redirection dont la cible
+est dedans, un `cp` ou un `rm` qui la vise, un `sed -i`. Ce n'est pas une
+contrariété à contourner : une image qu'on a modifiée n'est plus une preuve.
+Dirigez toute sortie vers le dossier d'analyse :
+
+    strings mnt/var/log/wtmp > analyse/wtmp-chaines.txt      ← oui
+    strings mnt/var/log/wtmp > mnt/tmp/wtmp-chaines.txt      ← refusé
+
+**Dites d'où vient ce que vous en tirez.** Une pièce lue sur l'image n'a
+traversé ni la collecte ni le manifeste : elle n'a donc **pas d'empreinte**, et
+rien ne prouvera plus tard que vous avez lu ce que vous dites avoir lu. Deux
+conséquences, toutes deux à respecter :
+
+- dans le rapport, citez la source comme *l'image montée*, jamais comme la
+  collecte — « `mnt/etc/hostname` (image montée, hors collecte) » ;
+- quand la pièce compte pour une conclusion, ne vous arrêtez pas là :
+  **recopiez-la dans la collecte** sous le nom attendu (section suivante) et
+  relancez l'extraction, ou demandez la reprise de l'étape. Elle entre alors au
+  manifeste avec son empreinte, et le rapport redevient reproductible.
+
+Le tableau `## Où chaque pièce vit sur le système`, plus bas, donne le chemin
+d'origine de chaque pièce : c'est celui-là qu'il faut préfixer par le point de
+montage.
 
 ## Reprendre une pièce
 
