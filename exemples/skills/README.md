@@ -165,8 +165,7 @@ Puis **trois contrôles**, et aucun n'est décoratif :
     done
 
     # 2 · la garde mord-elle ?
-    printf '{"tool_name":"write","tool_input":{"file_path":"%s"},"cwd":"%s"}' \
-        "$T/scelle/SYSTEME/x" "$T" | outils/garde-scelles.sh ; echo "code $?"
+    outils/garde-scelles.sh --essai
 
     # 3 · Crush voit-il les skills ? (hors ligne : c'est journalisé avant
     #     tout appel au modèle)
@@ -177,15 +176,35 @@ Ce que vous devez lire, exactement :
 
     ro                     scelle
     ro                     mnt
-    refusé : « …/scelle » est un scellé — une collecte, reconnue à sa structure…
-    code 2
+
+    garde des scellés — essai sur /home/…/analyse/PC01_B13_SYCOBS_LINUX
+
+      mnt/                   IMAGE    écriture refusée, lecture libre
+      outils/                libre    dossier de travail
+      scelle/                SCELLÉ   écriture refusée, bash refusé aussi
+      ./                     libre    le rapport peut y être écrit
+
+      la garde mord.
+
     Successfully loaded skill name=conformite-linux
     Successfully loaded skill name=forensic-linux
 
-Un `PAS EN LECTURE SEULE`, un `code 0`, ou un seul nom de skill : **arrêtez-vous
-là**. Le premier veut dire que le scellé est modifiable, le deuxième que la
-garde est muette, le troisième que Crush ne trouvera pas le skill. Aucun des
-trois ne se voit ensuite — ils se paient en fin d'analyse.
+`--essai` sonde **chaque sous-dossier** avec le programme réel : il n'y a aucun
+chemin à taper, donc plus rien à mal taper. C'est le point : un contrôle écrit à
+la main rendait `code 0` pour une simple faute de frappe — `scelles` au lieu de
+`scelle`, ou un `cwd` qui n'est pas le dossier d'analyse —, parce que la garde
+ne trouvait alors **aucun dossier à protéger**. Elle répondait très
+correctement, mais on lisait « elle ne mord pas ». L'inverse trompe encore
+plus : un chemin mal tapé qui tombe par hasard sur un scellé rassure à tort.
+
+Il vérifie aussi que le dossier d'analyse reste **écrivable** — une garde qui
+refuse tout est aussi cassée qu'une garde qui ne refuse rien : le rapport ne
+pourrait plus s'y écrire.
+
+Un `PAS EN LECTURE SEULE`, un `AUCUN SCELLÉ RECONNU`, un `ANORMAL`, ou un seul
+nom de skill : **arrêtez-vous là**. Le scellé est modifiable, rien n'est
+protégé, la garde se comporte mal, ou Crush ne trouvera pas le skill. Aucun de
+ces états ne se voit ensuite — ils se paient en fin d'analyse.
 
 `crush logs` lit le journal du dossier où vous êtes : Crush range sessions et
 journal dans un `.crush/` de son dossier de travail, jamais ailleurs (§2).
@@ -569,7 +588,18 @@ rien à déclarer, et surtout aucun chemin à tenir à jour — un chemin écrit
 dur ne protège rien sur un poste où la collecte est ailleurs, tout en ayant
 l'air de marcher.
 
-On le vérifie avec un scellé jouet, hors de Crush :
+Le plus sûr est de la laisser se contrôler elle-même, **dans le dossier
+d'analyse**, une fois les montages faits :
+
+    ~/analyse/PC01_B13_SYCOBS_LINUX/outils/garde-scelles.sh --essai
+
+Elle sonde chaque sous-dossier avec son propre programme et dit ce qu'elle
+répond de chacun — `SCELLÉ`, `IMAGE` ou `libre` —, puis rend 0 si tout est en
+ordre et 1 sinon. Rien à taper, donc rien à mal taper : un chemin écrit à la
+main qui ne désigne aucun dossier existant fait rendre 0 à la garde, très
+correctement, et ce 0 se lit « elle ne mord pas ».
+
+Avec un scellé jouet, hors de tout montage :
 
     mkdir -p /tmp/essai/PC01/{SYSTEME,COMPTES,JOURNAUX}
     printf '{"tool_name":"write","tool_input":{"file_path":"/tmp/essai/PC01/SYSTEME/x"},"cwd":"/tmp"}' \

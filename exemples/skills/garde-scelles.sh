@@ -265,4 +265,77 @@ if outil in ("edit", "write", "multiedit", "download", "lsp_rename",
 sys.exit(0)
 PY
 )
+
+# ── « --essai » : la garde se contrôle elle-même ──────────────────────
+# Un « code 2 » tapé à la main ne prouve rien : il suffit d'une faute de
+# frappe dans le chemin — « scelles » pour « scelle », un cwd qui n'est
+# pas le dossier d'analyse — pour viser un dossier INEXISTANT. La garde
+# rend alors 0, très correctement, et on lit « la garde ne mord pas »
+# alors qu'elle n'a rien eu à mordre. L'inverse est pire encore : un
+# chemin mal tapé qui tombe par hasard sur un scellé rassure à tort.
+# Ici, rien à taper : on sonde CHAQUE sous-dossier avec le vrai
+# programme, et on dit ce que la garde répond de chacun.
+if [ "${1:-}" = "--essai" ]; then
+    dossier=$(cd "${2:-.}" 2>/dev/null && pwd) || {
+        echo "essai : « ${2:-.} » n'est pas un dossier" >&2; exit 1; }
+    motif=$(mktemp)
+    trap 'rm -f "$motif"' EXIT
+
+    demander() {   # $1 = outil, $2 = chemin visé, $3 = commande bash
+        printf '{"tool_name":"%s","tool_input":{"file_path":"%s","command":"%s"},"cwd":"%s"}' \
+            "$1" "$2" "$3" "$dossier" | python3 -c "$garde" 2>"$motif"
+    }
+    regime() {     # le mot que la garde emploie pour ce dossier
+        demander write "$1" "" && { echo libre; return; }
+        grep -q "est un scellé" "$motif" && { echo scelle; return; }
+        grep -q "IMAGE EXAMINÉE" "$motif" && { echo image; return; }
+        echo refuse
+    }
+
+    printf 'garde des scellés — essai sur %s\n\n' "$dossier"
+    scelles=0 images=0 souci=0
+    for d in "$dossier"/*/; do
+        [ -d "$d" ] || continue
+        nom=$(basename "$d")
+        case "$(regime "$d")" in
+          scelle) scelles=$((scelles + 1))
+                  printf '  %-22s SCELLÉ   écriture refusée' "$nom/"
+                  if demander bash "" "grep -r motif $d"; then
+                      printf '  — mais bash y lit, ANORMAL\n'; souci=1
+                  else printf ', bash refusé aussi\n'; fi ;;
+          image)  images=$((images + 1))
+                  printf '  %-22s IMAGE    écriture refusée' "$nom/"
+                  if demander bash "" "cat ${d}etc/os-release"; then
+                      printf ', lecture libre\n'
+                  else printf '  — mais la LECTURE est refusée, ANORMAL\n'; souci=1; fi ;;
+          *)      printf '  %-22s libre    dossier de travail\n' "$nom/" ;;
+        esac
+    done
+    # Le dossier lui-même doit rester écrivable : une garde qui refuse tout
+    # est aussi cassée qu'une garde qui ne refuse rien — le rapport ne
+    # pourrait plus s'y écrire.
+    if demander write "$dossier/rapport-forensic.md" ""; then
+        printf '  %-22s libre    le rapport peut y être écrit\n' "./"
+    else
+        printf '  %-22s REFUSÉ   le rapport ne peut PAS y être écrit\n' "./"
+        souci=1
+    fi
+
+    echo
+    if [ "$scelles" -eq 0 ]; then
+        echo "AUCUN SCELLÉ RECONNU — rien n'est protégé ici."
+        echo "Un scellé se reconnaît à sa STRUCTURE : au moins trois des"
+        echo "dossiers de collecte. Vérifiez le montage — « ls scelle/ » doit"
+        echo "montrer SYSTEME/, COMPTES/, JOURNAUX/…"
+        exit 1
+    fi
+    [ "$images" -eq 0 ] && echo "note : aucune image montée ici, c'est permis."
+    if [ "$souci" -ne 0 ]; then
+        echo "LA GARDE SE COMPORTE MAL — voyez les lignes ANORMAL ci-dessus."
+        exit 1
+    fi
+    echo "la garde mord."
+    exit 0
+fi
+
 python3 -c "$garde"

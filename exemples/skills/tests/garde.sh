@@ -130,6 +130,51 @@ mkdir -p "$travail/affaire"
 CRUSH_SCELLES="$travail/scelles.txt" essai "un dossier déclaré à la main" 2 \
   "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/affaire/note.txt\"}}"
 
+# ── « --essai » : la garde se contrôle elle-même ──────────────────────
+# Le contrôle tapé à la main dans le README pouvait rendre 0 pour une faute
+# de frappe — « scelles » pour « scelle », un cwd qui n'est pas le dossier
+# d'analyse —, et ce 0 se lisait « la garde ne mord pas ». Vu en vrai. Le
+# mode --essai sonde chaque sous-dossier avec le VRAI programme : il n'y a
+# plus de chemin à taper, donc plus rien à mal taper.
+echo "── LA GARDE SE CONTRÔLE ELLE-MÊME ──"
+aff="$travail/affaire-essai"
+mkdir -p "$aff"/{outils,scelle,mnt}
+
+verdict() {                     # <libellé> <code attendu> <motif attendu>
+    local sortie code
+    sortie=$(bash "$garde" --essai "$aff" 2>&1); code=$?
+    if [[ "$code" == "$2" ]] && grep -qF "$3" <<< "$sortie"; then
+        printf "  ok      %s\n" "$1"
+    else
+        printf "  MANQUE  %s — code=%d (attendu %s), sortie :\n%s\n" \
+               "$1" "$code" "$2" "$sortie"
+        manques=$((manques + 1))
+    fi
+}
+
+# Rien de monté : c'est le cas qu'un « code 0 » tapé à la main ne distinguait
+# PAS d'une garde cassée. Ici il est nommé, et l'essai échoue.
+verdict "rien de monté : l'essai le DIT" 1 "AUCUN SCELLÉ RECONNU"
+
+# Un scellé, reconnu à sa structure sous un nom quelconque.
+mkdir -p "$aff/scelle"/{SYSTEME,COMPTES,JOURNAUX}
+verdict "un scellé monté : la garde mord" 0 "la garde mord."
+verdict "et l'essai le nomme SCELLÉ" 0 "SCELLÉ"
+verdict "sans image, il le dit sans échouer" 0 "aucune image montée"
+
+# Une image : l'écriture refusée, la LECTURE libre — c'est tout l'intérêt.
+mkdir -p "$aff/mnt"/{etc,usr,var,home,root,boot}
+verdict "une image montée : lecture libre" 0 "lecture libre"
+
+# Le dossier d'analyse lui-même doit rester écrivable : une garde qui refuse
+# tout est aussi cassée qu'une garde qui ne refuse rien.
+verdict "le rapport reste écrivable" 0 "le rapport peut y être écrit"
+
+# Le mode --essai ne doit pas changer le comportement normal : sans argument,
+# la garde lit toujours son JSON sur l'entrée standard.
+essai "sans --essai, le JSON reste lu" 2 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$aff/scelle/SYSTEME/x\"}}"
+
 echo
 echo "$travail"
 if (( manques )); then
