@@ -25,20 +25,38 @@ Sorties : constats.jsonl (un constat par ligne, pour un SIEM), constats.csv
 
 Bibliothèque standard seulement. La collecte n'est jamais modifiée.
 """
-import argparse, base64, collections, csv, functools, gzip, hashlib, json, os, re, sys, tarfile
+import argparse, base64, bz2, collections, csv, functools, gzip, hashlib, json, lzma
+import os, re, sys, tarfile, zlib
 from datetime import datetime, timezone
 
 CONSTATS = []
 COLONNES_CSV = ("id", "theme", "regle", "constat", "valeur", "date", "acteur", "portee",
                 "source", "methode", "question", "note")
 RE_CONTROLE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+# Un nom de fichier n'est PAS forcément de l'UTF-8 : un disque à noms latin-1,
+# un nom forgé, et os.walk comme tarfile rendent les octets indécodables sous
+# forme de « demi-codets » (\udce9). json.dumps les laisse passer, et c'est
+# l'écriture sur le flux UTF-8 qui lève — à la toute fin, après toute
+# l'extraction. Mesuré : traceback, faits.jsonl tronqué en plein milieu, ni
+# CSV ni manifeste. Un seul fichier mal nommé sur le disque examiné emportait
+# donc l'analyse entière.
+RE_DEMI_CODET = re.compile(r'[\ud800-\udfff]')
 
 
 def _propre(v):
     """Une valeur tirée d'une pièce peut porter des octets de contrôle — un
     contexte pris dans une base binaire, un nom de fichier forgé. Ils n'ont
-    rien à faire dans un rapport, un CSV ou un terminal : un point médian."""
-    return RE_CONTROLE.sub("·", v) if isinstance(v, str) else v
+    rien à faire dans un rapport, un CSV ou un terminal : un point médian.
+
+    Les octets d'un nom de fichier qui n'est pas de l'UTF-8 sont rendus sous
+    leur forme \\xNN : lisible, sans ambiguïté sur le fait que le nom n'est pas
+    du texte, et surtout écrivable — sans quoi c'est toute la sortie qui est
+    perdue à la dernière ligne du programme."""
+    if not isinstance(v, str):
+        return v
+    if RE_DEMI_CODET.search(v):
+        v = v.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+    return RE_CONTROLE.sub("·", v)
 
 
 def constat(theme, quoi, valeur, source, methode, acteur=None, portee=None,
@@ -97,13 +115,45 @@ def _compte_de(chemin, suffixe):
     return m.group(1) if m else "?"
 
 
-def texte_de(nom, blob):
+# Les compresseurs que logrotate et les gestionnaires de paquets emploient.
+# .gz est le défaut, mais .xz est celui de Debian pour les vieilles rotations
+# et .bz2 se rencontre encore. Ajouter un compresseur ici suffit.
+_DECOMPRESSEURS = ((".gz", gzip.decompress), (".xz", lzma.decompress),
+                   (".lzma", lzma.decompress), (".bz2", bz2.decompress))
+
+
+def texte_de(nom, blob, source=None):
     """Le texte d'un membre d'archive, ou None s'il n'en est pas un :
-    décompressé s'il le faut, écarté s'il est binaire."""
-    if nom.endswith(".gz"):
+    décompressé s'il le faut, écarté s'il est binaire.
+
+    Un membre qu'on ne sait pas ouvrir laisse un constat « limite ». Il n'en
+    laissait aucun, et seul .gz était connu : un history.log.2.xz installé et
+    présent disparaissait de l'analyse SANS un mot, la règle qui le cherchait
+    rendant « 2 constats » au lieu de 3. Le skill forensic lit les mêmes
+    membres avec les mêmes compresseurs ; les deux rapports se contredisaient
+    sur la même pièce.
+    """
+    for suffixe, ouvrir in _DECOMPRESSEURS:
+        if not nom.endswith(suffixe):
+            continue
         try:
-            blob = gzip.decompress(blob)
-        except (OSError, EOFError):
+            blob = ouvrir(blob)
+        except (OSError, EOFError, ValueError, lzma.LZMAError, zlib.error) as e:
+            # zlib.error ne descend d'aucune des autres, et c'est l'exception
+            # normale d'un .gz au corps deflate abîmé : elle remontait jusqu'à
+            # etape(), qui vidait la liste des pièces — et le rapport annonçait
+            # alors « pièce absente » pour un fichier bel et bien présent et
+            # lisible. Une affirmation fausse, pas seulement une omission.
+            constat("limite", "membre d'archive non décompressé", nom,
+                    source or nom, f"{type(e).__name__} à l'ouverture",
+                    portee="poste", note="son contenu n'est PAS dans l'analyse")
+            return None
+        break
+    else:
+        if nom.endswith((".zst", ".lz4", ".Z")):
+            constat("limite", "membre d'archive non décompressé", nom,
+                    source or nom, "compresseur non disponible", portee="poste",
+                    note="son contenu n'est PAS dans l'analyse")
             return None
     if b"\x00" in blob[:4096]:
         return None
@@ -115,11 +165,17 @@ class Collecte:
         self.racine = os.path.abspath(racine)
         self.prefix = os.path.basename(self.racine)
         self.lus = set()
+        self.abimees = set()      # archives dont la lecture s'est arrêtée net
         if not os.path.isdir(self.racine):
             sys.exit(f"pas un dossier : {self.racine}")
 
     def rel(self, chemin):
-        return os.path.relpath(chemin, self.racine)
+        """Le chemin tel qu'il sera CITÉ : jamais celui par lequel on ouvre.
+
+        Le repli des demi-codets a donc lieu ici, une fois pour toutes — et
+        non à chaque écriture. Le journal de reprise, le manifeste et les
+        sources des faits portent alors tous la même chaîne, écrivable."""
+        return _propre(os.path.relpath(chemin, self.racine))
 
     def chercher(self, motif, sous=None):
         base = os.path.join(self.racine, sous) if sous else self.racine
@@ -177,8 +233,19 @@ class Collecte:
                     fh = t.extractfile(m)
                     if fh is not None:
                         yield nom, fh.read()
-        except (tarfile.TarError, OSError, EOFError) as e:
+        except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
+            # Un mot sur stderr ne suffit pas : le rapport est bâti sur les
+            # constats, et il ne portait aucune trace que les membres suivant
+            # le point de rupture n'avaient pas été lus. Une seule fois par
+            # archive — certaines sont parcourues deux fois.
             print(f"  ! {os.path.basename(archive)} : {e}", file=sys.stderr)
+            if archive not in self.abimees:
+                self.abimees.add(archive)
+                constat("limite", "archive lue en partie seulement",
+                        self.rel(archive), self.rel(archive),
+                        f"{type(e).__name__} pendant le parcours", portee="poste",
+                        note="les membres qui suivent le point de rupture ne "
+                             "sont PAS dans l'analyse")
 
 
 # ── 1 · comptes et mots de passe ─────────────────────────────────────
@@ -692,7 +759,7 @@ def lire_paquets(c):
     for arch in c.chercher("_historique.tar.gz", "PAQUETS"):
         for nom, blob in c.membres_tar(arch, lambda n: not n.endswith((".sqlite", ".json"))
                                        or n.endswith("state.json")):
-            txt = texte_de(nom, blob)
+            txt = texte_de(nom, blob, f"{c.rel(arch)} → {nom}")
             if txt is None:
                 continue
             lignes = []
@@ -802,13 +869,26 @@ def secrets(comptes_):
 
 def usage(c, pieces):
     """Ce qui a servi. Rien n'est qualifié : les familles rangent, la charte juge."""
-    for famille, brut in FAMILLES:
-        for t in _chercher_domaine(pieces, None, brut, famille):
-            constat("usage", f"service {famille} présent dans un profil de navigateur",
-                    t["valeur"], t["source"], t["methode"], acteur=t["acteur"],
-                    date=t.get("date"),
-                    question=f"la charte encadre-t-elle l'usage d'un service {famille} "
-                             "sur un poste professionnel ?", note=t["note"])
+    # Absente est conçue pour appliquer_regles(), qui la convertit en constat
+    # « limite ». Ici elle était levée HORS de ce filet : sur un poste sans
+    # profil de navigateur — un serveur, un poste verrouillé —, la toute
+    # première famille la levait et emportait avec elle les supports amovibles
+    # et les programmes posés dans un dossier personnel, qui n'ont pourtant
+    # rien à voir. Mesuré : « usage 0 constats » contre 1 dès qu'un
+    # places.sqlite VIDE était ajouté à la collecte.
+    try:
+        for famille, brut in FAMILLES:
+            for t in _chercher_domaine(pieces, None, brut, famille):
+                constat("usage", f"service {famille} présent dans un profil de navigateur",
+                        t["valeur"], t["source"], t["methode"], acteur=t["acteur"],
+                        date=t.get("date"),
+                        question=f"la charte encadre-t-elle l'usage d'un service {famille} "
+                                 "sur un poste professionnel ?", note=t["note"])
+    except Absente as e:
+        constat("limite", "familles de services non cherchées dans les navigateurs",
+                str(e), c.prefix, "recherche par domaine dans les profils",
+                portee="poste",
+                note="l'absence de la pièce n'est pas l'absence d'usage")
 
     # Supports amovibles : le journal les porte, avec le compte dans le chemin.
     j = c.un("_journal.txt", "JOURNAUX")

@@ -43,13 +43,30 @@ DOSSIERS_SANS_PROVENANCE = ("STRINGS/", "PHOTOREC/", "SUPPRIMES/")
 
 
 RE_CONTROLE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+# Un nom de fichier n'est PAS forcément de l'UTF-8 : un disque à noms latin-1,
+# un nom forgé, et os.walk comme tarfile rendent les octets indécodables sous
+# forme de « demi-codets » (\udce9). json.dumps les laisse passer, et c'est
+# l'écriture sur le flux UTF-8 qui lève — à la toute fin, après toute
+# l'extraction. Mesuré : traceback, faits.jsonl tronqué en plein milieu, ni
+# CSV ni manifeste. Un seul fichier mal nommé sur le disque examiné emportait
+# donc l'analyse entière.
+RE_DEMI_CODET = re.compile(r'[\ud800-\udfff]')
 
 
 def _propre(v):
     """Une valeur tirée d'une pièce peut porter des octets de contrôle — un
     contexte pris dans une base binaire, un nom de fichier forgé. Ils n'ont
-    rien à faire dans un rapport, un CSV ou un terminal : un point médian."""
-    return RE_CONTROLE.sub("·", v) if isinstance(v, str) else v
+    rien à faire dans un rapport, un CSV ou un terminal : un point médian.
+
+    Les octets d'un nom de fichier qui n'est pas de l'UTF-8 sont rendus sous
+    leur forme \\xNN : lisible, sans ambiguïté sur le fait que le nom n'est pas
+    du texte, et surtout écrivable — sans quoi c'est toute la sortie qui est
+    perdue à la dernière ligne du programme."""
+    if not isinstance(v, str):
+        return v
+    if RE_DEMI_CODET.search(v):
+        v = v.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+    return RE_CONTROLE.sub("·", v)
 
 
 def _coupe(v, n):
@@ -120,6 +137,7 @@ class Collecte:
         self.prefix = os.path.basename(self.racine)
         self.lus = set()          # ce qui a servi, pour le manifeste
         self.mtimes = {}          # archive → {membre: date}, rempli en lisant
+        self.abimees = set()      # archives dont la lecture s'est arrêtée net
         if not os.path.isdir(self.racine):
             sys.exit(f"pas un dossier : {self.racine}")
         # os-release, lu une fois : les faits « machine » en viennent, et la
@@ -130,7 +148,12 @@ class Collecte:
         self.familles = {x.lower() for k in ("ID", "ID_LIKE") for x in champs.get(k, "").split()}
 
     def rel(self, chemin):
-        return os.path.relpath(chemin, self.racine)
+        """Le chemin tel qu'il sera CITÉ : jamais celui par lequel on ouvre.
+
+        Le repli des demi-codets a donc lieu ici, une fois pour toutes — et
+        non à chaque écriture. Le journal de reprise, le manifeste et les
+        sources des faits portent alors tous la même chaîne, écrivable."""
+        return _propre(os.path.relpath(chemin, self.racine))
 
     def chercher(self, motif, sous=None):
         """Chemins absolus des fichiers dont le nom contient motif."""
@@ -233,9 +256,23 @@ class Collecte:
                     fh = t.extractfile(m)
                     if fh is not None:
                         yield nom, fh.read()
-        except (tarfile.TarError, OSError, EOFError) as e:
+        except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
+            # Un mot sur stderr ne suffit PAS : le rapport est bâti sur les
+            # faits, et il ne portait aucune trace que var/log/secure et
+            # var/log/messages n'avaient jamais été lus. Une archive tronquée
+            # rendait donc une collecte SILENCIEUSEMENT incomplète — et
+            # « journaux 0 faits » se lit comme « rien à signaler ».
+            # Une fois par archive : dates_tar() la reparcourt.
             print(f"  ! archive illisible {os.path.basename(archive)} : {e}",
                   file=sys.stderr)
+            if archive not in self.abimees:
+                self.abimees.add(archive)
+                fait("limite", "archive lue en partie seulement", self.rel(archive),
+                     self.rel(archive), f"{type(e).__name__} pendant le parcours",
+                     confiance="certaine",
+                     note="les membres qui suivent le point de rupture ne sont "
+                          "PAS dans l'analyse ; le compte de faits de cette "
+                          "phase ne vaut pas pour toute l'archive")
 
 
 # Les dates de « last » et de « rpm --last » sortent dans la langue du poste
@@ -2625,7 +2662,13 @@ def decomprimer(nom, blob):
         if nom.endswith(".zst"):
             fh = _zstd(io.BytesIO(blob))
             return fh.read() if fh is not None else None
-    except (OSError, EOFError, lzma.LZMAError, ValueError):
+    except (OSError, EOFError, lzma.LZMAError, ValueError, zlib.error):
+        # zlib.error n'hérite d'AUCUNE des quatre autres, et c'est pourtant
+        # l'exception normale d'un .gz dont l'en-tête est valide et le corps
+        # deflate abîmé — la corruption la plus courante. Elle remontait donc
+        # jusqu'à etape(), qui arrêtait la phase journaux ENTIÈRE : mesuré,
+        # 1 fait au lieu de 52, la connexion SSH du membre SUIVANT l'archive
+        # abîmée n'étant jamais lue.
         return None
     return blob
 
@@ -3131,7 +3174,21 @@ def _blocs(nom, ouvrir, etat=None, bloc=1 << 20):
                 continue
             entree, premier = brut, brut
             while True:
-                clair = dec.decompress(entree, bloc)
+                try:
+                    clair = dec.decompress(entree, bloc)
+                except zlib.error as e:
+                    # Un flux deflate abîmé. L'exception remontait jusqu'à
+                    # lire_source, qui l'avalait SANS RIEN NOTER : le fichier
+                    # disparaissait en entier de l'analyse — et son EMPREINTE
+                    # avec lui, alors qu'elle ne dépend d'aucune décompression.
+                    # Une empreinte recherchée sortait donc « ABSENTE » pour un
+                    # fichier bel et bien là. On continue à lire les octets
+                    # bruts, pour que l'empreinte porte sur le fichier entier.
+                    etat["illisible"] = f"flux comprimé abîmé ({e})"
+                    yield premier, b""
+                    dec = None
+                    comprime = True      # le second passage tentera sa chance
+                    break
                 rendu += len(clair)
                 # « premier » ne sort qu'une fois : répéter les octets bruts
                 # les compterait deux fois dans l'empreinte.
@@ -3140,6 +3197,17 @@ def _blocs(nom, ouvrir, etat=None, bloc=1 << 20):
                 if rendu > PLAFOND_ARCHIVE:
                     etat["tronque"] = "plafond d'archive atteint"
                     break
+                if dec.eof:
+                    # Un .gz peut porter PLUSIEURS membres — « cat a.gz b.gz »,
+                    # « gzip -c f1 f2 », des rotations concaténées. decompressobj
+                    # s'arrête au premier ; gzip.decompress, lui, les lit tous.
+                    # Le mot-clé rangé dans le second membre sortait « ABSENT ».
+                    reste_gz = dec.unused_data
+                    if not reste_gz:
+                        break
+                    dec = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                    entree = reste_gz
+                    continue
                 entree = dec.unconsumed_tail
                 if not entree:
                     break
@@ -3416,8 +3484,11 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
         etat = {}
         try:
             examiner(source, nom, _blocs(nom, ouvrir, etat))
-        except (OSError, zlib.error):
-            pass
+        except OSError as e:
+            # zlib.error n'a plus à être rattrapée ici : _blocs la traite et la
+            # note dans etat, ce qui laisse examiner() aller jusqu'au bout et
+            # rendre l'empreinte. L'avaler ICI la rendait muette.
+            etat.setdefault("illisible", f"{type(e).__name__} à la lecture ({e})")
         # Une archive tronquée ou illisible se DIT : sans ça, un document qu'on
         # n'a pas su ouvrir ressemblerait à un document sans rien dedans, ce
         # qui n'est pas la même chose du tout.

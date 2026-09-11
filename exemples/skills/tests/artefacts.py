@@ -835,6 +835,181 @@ def blocs_bornes():
            "sha256 du fichier entier malgré la troncature")
 
 
+def pieces_abimees(base):
+    """Une pièce abîmée ne doit jamais disparaître SANS LE DIRE.
+
+    Six pertes silencieuses de preuve, toutes mesurées sur du code réel avant
+    correction. Le fil commun : le rapport ne portait aucune trace du trou, et
+    une phase à zéro fait se lit comme « rien à signaler ». Deux d'entre elles
+    faisaient pire que se taire — un fichier présent déclaré absent, et une
+    règle enfreinte déclarée conforme.
+    """
+    import bz2, gzip, hashlib, io, lzma, tarfile
+
+    sys.path.insert(0, os.path.join(SKILLS, "forensic-linux", "scripts"))
+    import extraire
+    coin = os.path.join(base, "abimees")
+    EXTRAIRE = os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py")
+    CONTROLES = os.path.join(SKILLS, "conformite-linux", "scripts", "controles.py")
+    MOT = b"MOT-CLE-AFFAIRE-2024"
+
+    def collecte(nom, *dossiers):
+        r = os.path.join(coin, nom, "PC42_B12_ARTE_ubuntu")
+        for d in dossiers:
+            os.makedirs(os.path.join(r, d), exist_ok=True)
+        return r
+
+    def tar_gz(chemin, membres):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            for nom, contenu in membres:
+                ti = tarfile.TarInfo(nom)
+                ti.size = len(contenu)
+                t.addfile(ti, io.BytesIO(contenu))
+        with open(chemin, "wb") as fh:
+            fh.write(gzip.compress(buf.getvalue()))
+
+    def tourner(script, racine, sortie, *reste):
+        p = subprocess.run([sys.executable, script, racine, "-o", sortie, *reste],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        lus = []
+        if os.path.exists(sortie):
+            with open(sortie, encoding="utf-8") as fh:
+                lus = [json.loads(l) for l in fh if l.strip()]
+        return p.returncode, lus
+
+    # ── 1 · un .gz au corps abîmé : l'EMPREINTE ne dépend pourtant de rien ──
+    # Elle sortait « ABSENTE » pour un fichier bel et bien dans la collecte :
+    # l'exception coupait examiner() avant le calcul des empreintes, et
+    # lire_source l'avalait sans rien noter.
+    r = collecte("gz-abime", "STRINGS")
+    octets = bytearray(gzip.compress(MOT + b" present\n" * 200))
+    octets[14] ^= 0xFF                       # en-tête valide, corps cassé
+    with open(os.path.join(r, "STRINGS", "PC42_B12_ARTE_ubuntu_strings_sda1.txt.gz"),
+              "wb") as fh:
+        fh.write(bytes(octets))
+    ind = os.path.join(coin, "ind.txt")
+    with open(ind, "w", encoding="utf-8") as fh:
+        fh.write("sha256: " + hashlib.sha256(bytes(octets)).hexdigest() + "\n")
+    _, faits = tourner(EXTRAIRE, r, os.path.join(coin, "gz-abime.jsonl"),
+                       "--indicateurs", ind)
+    libelles = {f["fait"] for f in faits}
+    yield ("gz abîmé : l'empreinte sort quand même",
+           "fichier à l'empreinte sha256 recherchée" in libelles,
+           "une empreinte ne demande aucune décompression")
+    yield ("gz abîmé : le trou est dit",
+           any(f["categorie"] == "limite" and "non lisible" in f["fait"] for f in faits),
+           "un fait « limite » nomme la pièce")
+
+    # ── 2 · un .gz MULTI-MEMBRE (cat a.gz b.gz, gzip -c f1 f2) ──
+    # decompressobj s'arrête au premier membre ; gzip.decompress les lit tous.
+    r = collecte("gz-multi", "STRINGS")
+    with open(os.path.join(r, "STRINGS", "PC42_B12_ARTE_ubuntu_strings_sda1.txt.gz"),
+              "wb") as fh:
+        fh.write(gzip.compress(b"rien ici\n" * 40)
+                 + gzip.compress(MOT + b" dans le SECOND membre\n"))
+    textes = os.path.join(coin, "textes.txt")
+    with open(textes, "w", encoding="utf-8") as fh:
+        fh.write(MOT.decode() + "\n")
+    _, faits = tourner(EXTRAIRE, r, os.path.join(coin, "gz-multi.jsonl"),
+                       "--textes", textes)
+    yield ("gz multi-membre : le second est lu",
+           any(f["fait"] == "texte recherché présent dans un fichier" for f in faits),
+           "le mot-clé n'est QUE dans le second membre")
+
+    # ── 3 · un nom de fichier qui n'est pas de l'UTF-8 ──
+    # os.walk rend les octets indécodables en demi-codets ; json.dumps les
+    # laisse passer et c'est l'ÉCRITURE qui levait, à la toute dernière ligne
+    # du programme : traceback, faits.jsonl tronqué, ni CSV ni manifeste.
+    r = collecte("nom-latin1", "PHOTOREC/recup_1")
+    with open(os.path.join(r, "PHOTOREC", "recup_1",
+                           os.fsdecode(b"f0001_\xe9t\xe9.txt")), "wb") as fh:
+        fh.write(b"contact: jdupont@example.com\n" * 4)
+    sortie = os.path.join(coin, "nom-latin1.jsonl")
+    code, faits = tourner(EXTRAIRE, r, sortie, "--textes", textes)
+    complet = code == 0 and all(os.path.exists(os.path.splitext(sortie)[0] + s)
+                                for s in (".csv", "-manifeste.json"))
+    yield ("nom non-UTF-8 : la sortie est écrite", complet,
+           f"code {code}, CSV et manifeste présents" if complet
+           else f"code {code} — sortie incomplète")
+    yield ("nom non-UTF-8 : l'octet est lisible",
+           any("\\xe9" in str(f.get("source", "")) for f in faits),
+           "l'octet indécodable est rendu sous sa forme \\xNN")
+
+    # ── 4 · un membre .gz abîmé DANS un tar n'emporte plus la phase ──
+    # zlib.error n'hérite d'aucune des exceptions rattrapées : elle remontait
+    # jusqu'à etape(), qui arrêtait « journaux » en entier — les membres
+    # SUIVANTS n'étaient jamais lus.
+    ssh = (b"Jan  5 09:00:01 pc42 sshd[1010]: Accepted password for mrobert "
+           b"from 10.1.2.3 port 55000 ssh2\n")
+    # Un corps deflate assez long pour que l'octet retourné tombe dans les
+    # données et non dans la somme de contrôle : c'est zlib.error qu'il faut
+    # ici, pas le BadGzipFile d'un CRC faux, qui lui était déjà rattrapé.
+    casse = bytearray(gzip.compress(b"Jan  4 08:00:00 pc42 sshd[9]: "
+                                    b"Accepted password for jdupont\n" * 200))
+    casse[20] ^= 0xFF
+    r = collecte("tar-membre-abime", "JOURNAUX")
+    tar_gz(os.path.join(r, "JOURNAUX", "PC42_B12_ARTE_ubuntu_var_log.tar.gz"),
+           [("var/log/auth.log.1.gz", bytes(casse)), ("var/log/secure", ssh)])
+    _, faits = tourner(EXTRAIRE, r, os.path.join(coin, "tar-membre.jsonl"))
+    yield ("membre abîmé : le membre SUIVANT est lu",
+           any("mrobert" == f.get("acteur") for f in faits),
+           "la connexion SSH est APRÈS le membre abîmé dans l'archive")
+
+    # ── 5 · une archive tar tronquée laisse une trace dans les FAITS ──
+    # Elle n'en laissait que sur stderr — or le rapport est bâti sur les faits.
+    r = collecte("tar-tronque", "JOURNAUX")
+    p = os.path.join(r, "JOURNAUX", "PC42_B12_ARTE_ubuntu_var_log.tar.gz")
+    tar_gz(p, [("var/log/auth.log", ssh), ("var/log/secure", ssh),
+               ("var/log/messages", ssh)])
+    with open(p, "rb") as fh:
+        entier = fh.read()
+    with open(p, "wb") as fh:
+        fh.write(entier[:len(entier) // 2])
+    _, faits = tourner(EXTRAIRE, r, os.path.join(coin, "tar-tronque.jsonl"))
+    yield ("tar tronqué : un fait le dit",
+           any(f["categorie"] == "limite" and "var_log.tar.gz" in str(f.get("source", ""))
+               for f in faits),
+           "« journaux 0 faits » se lit sinon comme « rien à signaler »")
+
+    # ── 6 · conformité : .xz et .bz2 lus, .zst dit ──
+    # texte_de ne connaissait que .gz et se taisait sur tout le reste : une
+    # règle réellement ENFREINTE était rendue « conforme », la preuve étant
+    # dans un .xz. Le skill forensic, lui, lisait les cinq compresseurs.
+    r = collecte("compresseurs", "PAQUETS")
+    tar_gz(os.path.join(r, "PAQUETS", "PC42_B12_ARTE_ubuntu_historique.tar.gz"), [
+        ("history.log.2.xz", lzma.compress(b"Commandline: apt install torbrowser-launcher\n")),
+        ("history.log.3.bz2", bz2.compress(b"Commandline: apt install teamviewer\n")),
+        ("history.log.4.zst", b"\x28\xb5\x2f\xfd" + b"\x00" * 40),
+    ])
+    regles = os.path.join(coin, "r.regles")
+    with open(regles, "w", encoding="utf-8") as fh:
+        fh.write("regle: R02\ntitre: navigateur anonymisant\n"
+                 "texte: Un navigateur anonymisant est interdit.\n"
+                 "theme: usage\nprogramme: torbrowser-launcher\n")
+    _, cs = tourner(CONTROLES, r, os.path.join(coin, "compresseurs.jsonl"),
+                    "--regles", regles)
+    yield ("conformité : le .xz est lu",
+           any(c.get("valeur") == "torbrowser-launcher" and c["theme"] == "usage"
+               for c in cs),
+           "la règle était rendue « conforme », la preuve étant dans un .xz")
+    yield ("conformité : le .zst non lu est dit",
+           any(c["theme"] == "limite" and c.get("valeur", "").endswith(".zst") for c in cs),
+           "un constat « limite » nomme le membre")
+
+    # ── 7 · conformité : pas de navigateur ≠ phase « usage » vide ──
+    # Absente était levée hors du filet d'appliquer_regles et emportait les
+    # supports amovibles, qui n'ont pourtant rien à voir avec les navigateurs.
+    r = collecte("sans-navigateur", "JOURNAUX")
+    with open(os.path.join(r, "JOURNAUX", "PC42_B12_ARTE_ubuntu_journal.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("Jan  5 09:00:00 pc42 udisksd[700]: Mounted /run/media/jdupont/CLE_USB\n")
+    _, cs = tourner(CONTROLES, r, os.path.join(coin, "sans-navigateur.jsonl"))
+    yield ("sans navigateur : le support amovible sort",
+           any(c["constat"] == "support amovible monté" for c in cs),
+           "la recherche par domaine ne doit pas emporter le reste de la phase")
+
+
 def main():
     base = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "artefacts")
     shutil.rmtree(base, ignore_errors=True)
@@ -879,6 +1054,11 @@ def main():
     for artefact, ok, detail in blocs_bornes():
         manques += not ok
         print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:28s} {detail}")
+
+    print("\n── PIÈCES ABÎMÉES : LE TROU SE DIT ──")
+    for artefact, ok, detail in pieces_abimees(base):
+        manques += not ok
+        print(f"  {'ok ' if ok else 'MANQUE'}  {artefact:38s} {detail}")
 
     print("\n── REPRISE APRÈS PLANTAGE ──")
     journal = os.path.splitext(faits)[0] + "-reprise.jsonl"
