@@ -295,6 +295,28 @@ compris.
 | `--indicateurs fichier` | vous cherchez une empreinte, une adresse, un nom précis (§4) |
 | `--regles fichier.regles` | vos règles internes sont écrites — à relire contre la charte |
 | `--sans-reprise` | vous voulez tout reparcourir |
+| `--refaire plaso` | **ne relancer QUE cette phase** et reprendre le reste du `faits.jsonl` précédent |
+
+**`--refaire` est ce qui rend une correction tenable.** Vous avez relu une
+super-timeline, corrigé un chemin, ajouté une pièce : relancer trois heures
+d'indicateurs pour ça, c'est ne pas le relancer du tout.
+
+    python3 $K/forensic-linux/scripts/extraire.py scelle -o faits.jsonl --refaire plaso
+
+Un nom partiel suffit (`plaso` vise `super-timeline plaso`), l'option est
+répétable, et les **synthèses sont toujours refaites** — elles ne lisent que
+les faits, et un fait neuf les change toutes. Les faits des phases non
+relancées **gardent leurs identifiants** : le rapport d'hier cite les mêmes
+numéros que celui d'aujourd'hui pour ce qui n'a pas bougé. Les phases reprises
+se voient à l'écran :
+
+      chaînes des disques       211 faits (repris)
+      super-timeline plaso      495 faits
+      indicateurs et intérêts     6 faits (repris)
+
+C'est le champ `phase`, porté par chaque fait, qui le permet. Un `faits.jsonl`
+d'une version antérieure ne l'a pas : l'extracteur le dit et s'arrête, plutôt
+que de jeter des faits au hasard.
 
 **Donnez vos listes dès le premier passage.** Ajouter un `--textes` ou un
 `--indicateurs` invalide le journal de reprise et refait tout, et c'est voulu :

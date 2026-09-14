@@ -25,6 +25,14 @@ COLONNES_CSV = ("id", "categorie", "fait", "valeur", "horodatage", "acteur", "co
                 "source", "methode", "note")
 
 FAITS = []
+# La phase en cours, posée par etape(). Une liste plutôt qu'une variable :
+# etape() n'a pas à se déclarer « global » pour la changer.
+PHASE = ["—"]
+# Le prochain numéro de fait. Distinct de len(FAITS) : « --refaire » recharge
+# des faits dont on GARDE les identifiants, et les numéros libérés par les
+# phases rejetées ne doivent pas être réattribués — F0100 rendu deux fois, ce
+# serait deux faits différents sous la même citation dans le rapport.
+PROCHAIN = [1]
 
 
 # Ces dossiers ne portent pas des FICHIERS mais des octets récupérés : ni date,
@@ -119,8 +127,14 @@ def fait(categorie, quoi, valeur, source, methode, horodatage=None, acteur=None,
     n'est datable ni imputable. Le poser ICI plutôt que dans chaque relecteur
     le rend visible au lecteur du rapport, et impossible à oublier.
     """
-    f = {"id": f"F{len(FAITS) + 1:04d}", "categorie": categorie, "fait": quoi,
-         "valeur": valeur, "source": source, "methode": methode}
+    f = {"id": f"F{PROCHAIN[0]:04d}", "categorie": categorie, "fait": quoi,
+         "valeur": valeur, "source": source, "methode": methode,
+         # QUI a posé ce fait. Une seule ligne, et trois choses en découlent :
+         # « --refaire plaso » sait quels faits jeter et lesquels garder ; le
+         # rapport peut dire « vu dans » sans deviner ; et un fait orphelin se
+         # repère. Estampillé ici, pas dans chaque phase : sinon la phase
+         # ajoutée demain l'oublierait, et rien ne le dirait.
+         "phase": PHASE[0]}
     provenance = ("octets récupérés : ni fichier d'origine, ni date, ni compte"
                   if str(source).startswith(DOSSIERS_SANS_PROVENANCE) else None)
     for k, v in (("horodatage", horodatage), ("acteur", acteur),
@@ -129,6 +143,7 @@ def fait(categorie, quoi, valeur, source, methode, horodatage=None, acteur=None,
         if v is not None:
             f[k] = v
     f = {k: _propre(v) for k, v in f.items()}
+    PROCHAIN[0] += 1
     FAITS.append(f)
     return f
 
@@ -2816,9 +2831,19 @@ def _plaso_sujet(e, genre, ou):
         if ou.lower().endswith(EXT_DOCUMENT):
             return "document", "/".join(ou.rsplit("/", 2)[-2:]), None
     if branche == "journal":
-        m = RE_PLASO_USB.search(str(e.get("body") or e.get("message") or ""))
+        msg = str(e.get("body") or e.get("message") or "")
+        m = RE_PLASO_USB.search(msg)
         if m:
             return "support", _coupe(" ".join(m.group(0).split()), 60), None
+        # Une IP dans une ligne de journal, c'est une connexion datée : la
+        # trace la plus solide qu'une super-timeline porte, et elle n'entrait
+        # dans aucune liste. Les MÊMES motifs que la synthèse des adresses.
+        for genre, motif, valeur_de, _portee in GENRES_ADRESSE:
+            m = motif.search(msg)
+            if m:
+                v = valeur_de(m)
+                if v:
+                    return "adresse", v, None
     return None, None, None
 
 
@@ -2835,6 +2860,7 @@ PLASO_SUJETS = {
     "connexion": "connexion vue dans la super-timeline",
     "paquet": "paquet installé, vu dans la super-timeline",
     "document": "document touché, vu dans la super-timeline",
+    "adresse": "adresse vue dans un journal de la super-timeline",
 }
 # Combien de VALEURS distinctes par sujet on retient, et combien on en cite.
 # La borne existe parce qu'un disque porte des centaines de milliers de
@@ -3316,10 +3342,20 @@ def plaso(c):
             continue
         classees = sorted(table.items(), key=lambda kv: (-kv[1][0], kv[0]))
         for valeur, (n, prem, dern, compte) in classees[:PLASO_SUJET_CITES]:
+            # Le sujet qui EST une adresse la déclare : la synthèse des
+            # adresses la range alors avec les autres, sous « vue dans : la
+            # super-timeline ». Un hôte nu n'aurait été reconnu par aucun motif.
+            porte = {}
+            if sujet in ("site", "téléchargement"):
+                porte = {"adresse": valeur, "adresse_genre": "URL"}
+            elif sujet == "adresse":
+                porte = {"adresse": valeur,
+                         "adresse_genre": "IP" if RE_IPV4.fullmatch(valeur)
+                         else "MAC" if RE_MAC.fullmatch(valeur) else "URL"}
             fait("plaso", libelle, valeur, source,
                  f"événements « {sujet} » de la super-timeline plaso",
                  horodatage=dern, acteur=compte, occurrences=n,
-                 role="plaso-sujet", genre=sujet,
+                 role="plaso-sujet", genre=sujet, **porte,
                  confiance="à vérifier",
                  note=(f"{n} fois" + (f", du {prem} au {dern}" if prem and dern
                                       and prem != dern else
@@ -3680,6 +3716,12 @@ GENRES_ADRESSE = (
 def _adresses_du_fait(f):
     """(genre, valeur, portée) de chaque adresse écrite dans un fait.
 
+    Un fait qui EST une adresse le DIT, par le champ « adresse » : sa forme
+    déjà normalisée, et son genre. On ne la redevine pas à partir d'une phrase.
+    C'est ce qui fait entrer la super-timeline dans la synthèse — ses sujets
+    portent un hôte NU, que RE_URL_HOTE ne reconnaît pas faute de schéma, et
+    ses adresses restaient donc hors des listes du rapport.
+
     Une adresse COLLÉE À UNE COUPURE est écartée. Une valeur tronquée porte un
     « … » à l'endroit du couteau — posé par _coupe(), et par la fenêtre de
     soixante octets qui entoure un motif repéré. Sans cette garde,
@@ -3688,6 +3730,14 @@ def _adresses_du_fait(f):
     machine. Inventer une adresse est plus grave que d'en manquer une — celle-là
     figure de toute façon en entier dans la pièce d'où la valeur est tirée.
     """
+    declaree = f.get("adresse")
+    if declaree:
+        genre = str(f.get("adresse_genre") or "URL")
+        portee = next((p(declaree) for g, _, _, p in GENRES_ADRESSE if g == genre),
+                      None)
+        if portee:
+            yield genre, declaree, portee
+        return
     for champ in CHAMPS_ADRESSE:
         texte = f.get(champ)
         if not isinstance(texte, str):
@@ -4406,6 +4456,45 @@ def _decomprime(nom, ouvrir, etat):
     return None
 
 
+# CE QU'UNE PIÈCE EST, d'après ses premiers octets, et ce que ça change à la
+# lecture. Un « mot de passe » trouvé dans /usr/bin/ssh, ce sont les messages
+# d'erreur du programme, pas un secret de l'utilisateur : une chaîne littérale
+# que le compilateur y a mise. Sans le dire, le rapport donnait le même poids
+# aux deux — et c'est le lecteur qui payait.
+# (premiers octets, ce que c'est, la réserve à écrire — None quand il n'y en a
+#  pas lieu).
+NATURES = (
+    (b"\x7fELF", "binaire ELF", "compilée dans un exécutable"),
+    (b"MZ", "exécutable Windows", "compilée dans un exécutable"),
+    (b"\xca\xfe\xba\xbe", "classe Java", "compilée dans un exécutable"),
+    (b"\x89PNG", "image PNG", "dans les octets d'une image"),
+    (b"\xff\xd8\xff", "image JPEG", "dans les octets d'une image"),
+    (b"GIF8", "image GIF", "dans les octets d'une image"),
+    (b"OggS", "flux Ogg", "dans les octets d'un média"),
+    (b"ID3", "audio MP3", "dans les octets d'un média"),
+    (b"SQLite format 3\x00", "base SQLite", None),
+    (b"%PDF", "document PDF", None),
+    (b"PK\x03\x04", "archive ZIP ou document Office", None),
+    (b"\x1f\x8b", "flux gzip", None),
+    (b"-----BEGIN", "clé ou certificat PEM", None),
+    (b"{", "JSON ou texte structuré", None),
+)
+
+
+def _nature(octets):
+    """(ce que la pièce est, la réserve à écrire) — ou (None, None).
+
+    Rien de deviné au-delà des premiers octets : une pièce que la table ne
+    reconnaît pas ne reçoit AUCUNE nature, et le fait se lit comme avant. Dire
+    « texte » d'un fichier qu'on n'a pas identifié serait une affirmation de
+    plus, et c'est justement ce qu'on cherche à éviter.
+    """
+    for magie, quoi, reserve in NATURES:
+        if octets.startswith(magie):
+            return quoi, reserve
+    return None, None
+
+
 # Le pas d'entrée du décompresseur. Court, parce que zlib lève pour TOUT
 # l'appel : c'est la quantité de contenu sain qu'on accepte de perdre autour
 # d'un octet abîmé. Assez long, cependant, pour que la boucle Python reste
@@ -4613,7 +4702,8 @@ def _rejouer(f):
     retombent sur les mêmes. C'est ce qui permet à un rapport repris de citer
     les mêmes numéros qu'un rapport d'un seul tenant.
     """
-    FAITS.append({"id": f"F{len(FAITS) + 1:04d}", **f})
+    FAITS.append({"id": f"F{PROCHAIN[0]:04d}", **f})
+    PROCHAIN[0] += 1
 
 
 class Avancement:
@@ -4771,7 +4861,15 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
         # tour coûtait plus que l'inscription qu'elle épargnait.
         vus, neufs, depart = set(), set(), 0
         reste = b""
+        nature = reserve = None
+        premier = True
         for brut, clair in blocs:
+            if premier:
+                premier = False
+                # Les seize premiers octets suffisent, et ils sont déjà là :
+                # pas une seconde ouverture de la pièce pour savoir ce qu'elle
+                # est.
+                nature, reserve = _nature(brut[:24])
             av.pas(octets=len(brut))
             for h in hs.values():
                 h.update(brut)
@@ -4859,9 +4957,18 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                  x["valeur"], source,
                  f"motif « {x['valeur']} » cherché dans les octets du fichier",
                  octet=octet, occurrences=n, contexte=contexte, trouve=True,
-                 confiance="à vérifier" if interet else "certaine",
+                 nature=nature,
+                 # Une chaîne littérale d'exécutable n'est pas une donnée de
+                 # l'utilisateur : la confiance ne monte pas au-dessus de « à
+                 # vérifier », même pour un indicateur demandé.
+                 confiance="à vérifier" if interet or reserve else "certaine",
                  note=f"{n} occurrence(s) ; la première vers l'octet {octet}, autour "
                       f"d'elle : « {contexte} »"
+                      + (f". La pièce est un {nature} : la chaîne y est "
+                         f"{reserve}, et n'est donc PAS une donnée de "
+                         "l'utilisateur — à moins que le contenu ci-dessus ne "
+                         "montre le contraire" if reserve else
+                         f". La pièce est un {nature}" if nature else "")
                       + (f" — {x['etiquette']}" if x["etiquette"] else "")
                       + (". Trouvé dans les octets : ni daté, ni imputable, et peut "
                          "venir d'un paquet d'installation autant que d'un fichier du "
@@ -5103,6 +5210,64 @@ def manifeste(c, sortie, argv, prov, signature):
     }
 
 
+# Les phases qui LISENT la collecte. Les synthèses, qui ne lisent que les
+# faits, sont plus bas : elles sont toujours refaites.
+def _producteurs():
+    return (("complétude", completude),
+            ("machine", machine), ("comptes et domaine", comptes),
+            ("sessions", sessions), ("journaux", journaux),
+            ("réseau", reseau), ("navigation", navigation),
+            ("historique des paquets", historique_paquets),
+            ("persistance", persistance), ("supprimés", supprimes),
+            ("chaînes des disques", chaines),
+            ("documents rendus", documents), ("timeline", timeline),
+            ("super-timeline plaso", plaso))
+
+
+def _refaire(args, producteurs):
+    """(phases à relancer, faits repris) — ou (toutes, None) pour un passage neuf.
+
+    Rejouer trois heures d'indicateurs pour relire un plaso corrigé, c'est ce
+    qui fait qu'on ne le relit pas. Les faits gardent leurs identifiants : le
+    rapport d'hier cite les mêmes numéros que celui d'aujourd'hui pour ce qui
+    n'a pas bougé, et c'est tout l'intérêt.
+    """
+    noms = [n for n, _ in producteurs] + ["indicateurs et intérêts"]
+    if not args.refaire:
+        return set(noms), None
+    depuis = args.depuis or args.sortie
+    try:
+        with open(depuis, encoding="utf-8") as fh:
+            anciens = [json.loads(l) for l in fh if l.strip()]
+    except OSError as e:
+        sys.exit(f"--refaire : {depuis} est illisible ({e}). C'est le "
+                 "faits.jsonl d'un passage précédent qu'il faut, ou --depuis.")
+    # Un nom partiel suffit : « plaso » vise « super-timeline plaso ».
+    vises = set()
+    for demande in args.refaire:
+        trouves = [n for n in noms if demande.lower() in n.lower()]
+        if not trouves:
+            sys.exit(f"--refaire {demande} : aucune phase de ce nom. Au "
+                     "choix : " + ", ".join(noms))
+        vises.update(trouves)
+    gardes = [f for f in anciens if f.get("phase") in noms
+              and f.get("phase") not in vises]
+    if len(gardes) == len(anciens) and not anciens:
+        sys.exit(f"--refaire : {depuis} ne porte aucun fait.")
+    sans_phase = sum(1 for f in anciens if not f.get("phase"))
+    if sans_phase:
+        sys.exit(f"--refaire : {sans_phase} fait(s) de {depuis} n'ont pas de "
+                 "champ « phase » — ils viennent d'une version antérieure de "
+                 "l'extracteur. Relancez un passage complet une fois.")
+    FAITS.extend(gardes)
+    PROCHAIN[0] = max((int(f["id"][1:]) for f in anciens
+                       if str(f.get("id", "")).startswith("F")), default=0) + 1
+    print(f"  refaire : {', '.join(sorted(vises))} — {len(gardes)} fait(s) "
+          f"repris de {os.path.basename(depuis)}, "
+          f"numérotation reprise à F{PROCHAIN[0]:04d}", file=sys.stderr)
+    return vises, gardes
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -5115,11 +5280,20 @@ def main():
                     help="chaînes à chercher, UNE PAR LIGNE et sans syntaxe : des "
                          "noms, des références, des mots-clés. Répétable. Cherchées "
                          "à la lettre, sans tenir compte de la casse")
+    ap.add_argument("--refaire", metavar="PHASE", action="append", default=[],
+                    help="ne relancer QUE ces phases, en reprenant les faits "
+                         "des autres depuis un passage précédent. Un nom "
+                         "partiel suffit : « --refaire plaso ». Répétable. "
+                         "Les synthèses sont toujours refaites")
+    ap.add_argument("--depuis", metavar="FICHIER",
+                    help="le faits.jsonl d'où --refaire reprend ; par défaut "
+                         "celui que -o désigne")
     ap.add_argument("--sans-reprise", action="store_true",
                     help="ignorer le journal de reprise et reparcourir toute la "
                          "collecte, même ce qui a déjà été lu")
     args = ap.parse_args()
 
+    PRODUCTEURS = _producteurs()
     c = Collecte(args.collecte)
 
     def etape(nom, fn):
@@ -5130,10 +5304,12 @@ def main():
         abîmée, et un rapport partiel vaut mieux qu'une trace de pile.
         """
         avant = len(FAITS)
+        PHASE[0] = nom
         try:
             fn(c)
         except Exception as e:                                    # noqa: BLE001
             print(f"  ! {nom} : {type(e).__name__} {e}", file=sys.stderr)
+        PHASE[0] = "—"
         print(f"  {nom:22s} {len(FAITS) - avant:5d} faits", file=sys.stderr)
 
     # Les PRODUCTEURS lisent les pièces ; les SYNTHÈSES ne lisent que les faits
@@ -5141,16 +5317,17 @@ def main():
     # de tenir dans un commentaire : une synthèse rangée par mégarde au milieu
     # des producteurs ne verrait que la moitié de ce qu'elle doit voir, sans
     # erreur ni test qui le dise.
-    for nom, fn in (("complétude", completude),
-                    ("machine", machine), ("comptes et domaine", comptes),
-                    ("sessions", sessions), ("journaux", journaux),
-                    ("réseau", reseau), ("navigation", navigation),
-                    ("historique des paquets", historique_paquets),
-                    ("persistance", persistance), ("supprimés", supprimes),
-                    ("chaînes des disques", chaines),
-                    ("documents rendus", documents), ("timeline", timeline),
-                    ("super-timeline plaso", plaso)):
-        etape(nom, fn)
+    # « --refaire plaso » : on recharge les faits d'un passage précédent, on
+    # jette ceux des phases nommées, et on ne relance QUE celles-là. Les
+    # synthèses, elles, sont toujours refaites : elles ne lisent que les faits,
+    # et un fait neuf les change toutes.
+    refaire, gardes = _refaire(args, PRODUCTEURS)
+    for nom, fn in PRODUCTEURS:
+        if nom in refaire:
+            etape(nom, fn)
+        elif gardes is not None:
+            n = sum(1 for f in gardes if f.get("phase") == nom)
+            print(f"  {nom:22s} {n:5d} faits (repris)", file=sys.stderr)
     # Un seul parcours de la collecte pour les deux listes : celle de l'outil,
     # cherchée à chaque fois, et celle de l'analyste quand il en donne une.
     demandes = lire_indicateurs(args.indicateurs) if args.indicateurs else []
@@ -5173,9 +5350,14 @@ def main():
     # plus exposée — elle ouvre chaque archive de la collecte —, et c'était la
     # seule sans le filet qui empêche un plantage d'emporter les quatorze
     # autres avant qu'une seule ligne ne soit écrite.
-    with rep:
-        etape("indicateurs et intérêts",
-              lambda cc: indicateurs(cc, tous, rep, listes))
+    if "indicateurs et intérêts" in refaire:
+        with rep:
+            etape("indicateurs et intérêts",
+                  lambda cc: indicateurs(cc, tous, rep, listes))
+    else:
+        n = sum(1 for f in gardes or () if f.get("phase") == "indicateurs et intérêts")
+        print(f"  {'indicateurs et intérêts':22s} {n:5d} faits (repris)",
+              file=sys.stderr)
     # Les synthèses en DERNIER, après tous les producteurs : la synthèse des
     # adresses relit tous les faits, y compris le contexte des motifs repérés
     # dans les octets bruts.

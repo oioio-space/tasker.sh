@@ -1886,6 +1886,118 @@ def main():
     # erreur, aucun CPU, aucune lecture, rien dans le journal de reprise —
     # l'extraction paraît simplement figée. Reproduit : sans le contrôle, ce
     # test ne rend jamais la main. Le délai est donc l'assertion.
+    # ── NE REFAIRE QUE CE QU'ON DEMANDE ──
+    # Rejouer trois heures d'indicateurs pour relire un plaso corrigé, c'est ce
+    # qui fait qu'on ne le relit pas. Les faits des autres phases gardent leurs
+    # identifiants : le rapport d'hier cite les mêmes numéros que celui
+    # d'aujourd'hui pour ce qui n'a pas bougé.
+    print("\n── NE REFAIRE QUE CE QU'ON DEMANDE ──")
+    coin = os.path.join(base, "chantiers")
+    rr = coin_collecte(coin, "refaire", "SYSTEME", "COMPTES", "PLASO")
+    with open(os.path.join(rr, "COMPTES", "PC42_B12_ARTE_ubuntu_passwd.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("jdupont:x:1000:1000::/home/jdupont:/bin/bash\n")
+
+    def poser_plaso(hote, combien):
+        with open(os.path.join(rr, "PLASO", "p.jsonl"), "w", encoding="utf-8") as fh:
+            for i in range(combien):
+                fh.write(json.dumps({
+                    "data_type": "chrome:history:page_visited",
+                    "parser": "chrome_history", "url": f"https://{hote}/p{i}",
+                    "timestamp": (epoch("2026-01-05T10:00:00") + i * 60) * US,
+                    "timestamp_desc": "Last Visited Time"}) + "\n")
+
+    def hors_plaso(fs):
+        refaites = ("super-timeline plaso", "plaso ↔ artefacts", "périodes",
+                    "supports amovibles", "adresses réseau")
+        return {f["id"]: f["valeur"] for f in fs if f.get("phase") not in refaites}
+
+    def dire(libelle, ok, detail):
+        nonlocal manques
+        manques += not ok
+        print(f"  {'ok ' if ok else 'MANQUE'}  {libelle:44s} {detail}")
+
+    sortie_r = os.path.join(coin, "refaire.jsonl")
+    poser_plaso("premier.example", 3)
+    _, avant_r = tourner(EXTRAIRE, rr, sortie_r)
+    poser_plaso("second.example", 5)
+    code_r, apres_r = tourner(EXTRAIRE, rr, sortie_r, "--refaire", "plaso")
+    dire("refaire : les autres phases ne bougent pas",
+         code_r == 0 and hors_plaso(avant_r) == hors_plaso(apres_r)
+         and len(hors_plaso(avant_r)) > 5,
+         f"{len(hors_plaso(apres_r))} faits repris à l'identique")
+    dire("refaire : aucun identifiant en double",
+         len({f["id"] for f in apres_r}) == len(apres_r),
+         "un numéro rendu deux fois, ce serait deux faits sous une citation")
+    dire("refaire : le nouveau plaso est lu, l'ancien parti",
+         any("second.example" in str(f.get("valeur")) for f in apres_r)
+         and not any("premier.example" in str(f.get("valeur")) for f in apres_r),
+         "seule la phase demandée a été rejouée")
+    vieux = os.path.join(coin, "refaire-vieux.jsonl")
+    with open(vieux, "w", encoding="utf-8") as fh:
+        for f in avant_r:
+            fh.write(json.dumps({k: v for k, v in f.items() if k != "phase"}) + "\n")
+    p_v = subprocess.run([sys.executable, EXTRAIRE, rr, "-o", vieux,
+                          "--refaire", "plaso"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    dire("refaire : un faits.jsonl sans « phase » est refusé",
+         p_v.returncode != 0 and "phase" in p_v.stderr.decode("utf-8", "replace"),
+         "et il dit pourquoi, au lieu de jeter des faits au hasard")
+
+    # ── CE QUE LA PIÈCE EST, ET CE QUE ÇA CHANGE ──
+    # « mot de passe » dans /usr/bin/ssh, ce sont les messages d'erreur du
+    # programme, pas un secret : le rapport donnait le même poids aux deux.
+    print("\n── CE QUE LA PIÈCE EST ──")
+    rn = coin_collecte(coin, "nature", "SYSTEME", "PERSISTANCE")
+    secret = b"password = Bienvenue2025!\n"
+    with open(os.path.join(rn, "PERSISTANCE", "PC42_B12_ARTE_ubuntu_bin.bin"),
+              "wb") as fh:
+        fh.write(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 40 + secret + b"\x00" * 200)
+    with open(os.path.join(rn, "PERSISTANCE", "PC42_B12_ARTE_ubuntu_conf.txt"),
+              "wb") as fh:
+        fh.write(b"# service\n" + secret)
+    _, fn_ = tourner(EXTRAIRE, rn, os.path.join(coin, "nature.jsonl"))
+    par_source = {f["source"].rsplit("_", 1)[-1]: f for f in fn_
+                  if "mot de passe" in str(f.get("valeur"))}
+    elf_, txt_ = par_source.get("bin.bin", {}), par_source.get("conf.txt", {})
+    dire("nature : la chaîne d'un ELF porte sa réserve",
+         elf_.get("nature") == "binaire ELF"
+         and "PAS une donnée de l'utilisateur" in str(elf_.get("note")),
+         f"nature={elf_.get('nature')}")
+    dire("nature : la même chaîne dans un texte n'en porte pas",
+         bool(txt_) and not txt_.get("nature")
+         and "PAS une donnée" not in str(txt_.get("note")),
+         "une pièce non reconnue ne reçoit AUCUNE nature")
+
+    # ── PLASO ENTRE DANS LES LISTES ──
+    # Un sujet qui EST une adresse la déclare : la synthèse la range alors
+    # avec les autres, et la colonne « vue dans » montre la corrélation.
+    print("\n── PLASO DANS LES LISTES ──")
+    ra = coin_collecte(coin, "plaso-adresses", "SYSTEME", "PLASO")
+    with open(os.path.join(ra, "PLASO", "p.jsonl"), "w", encoding="utf-8") as fh:
+        for i in range(3):
+            fh.write(json.dumps({
+                "data_type": "chrome:history:page_visited",
+                "parser": "chrome_history", "url": "https://depot-secret.example/x",
+                "timestamp": (epoch("2026-01-05T10:00:00") + i * 60) * US,
+                "timestamp_desc": "v"}) + "\n")
+        for i in range(4):
+            fh.write(json.dumps({
+                "data_type": "syslog:line", "parser": "syslog",
+                "filename": "/var/log/syslog",
+                "body": "sshd[9]: Accepted publickey for jdupont from 203.0.113.77",
+                "timestamp": (epoch("2026-01-05T12:00:00") + i * 60) * US,
+                "timestamp_desc": "c"}) + "\n")
+    _, fa_ = tourner(EXTRAIRE, ra, os.path.join(coin, "plaso-adresses.jsonl"))
+    adr = {f["valeur"]: f for f in fa_ if f["categorie"] == "adresse"}
+    dire("listes : l'hôte vu par plaso entre dans les adresses",
+         "depot-secret.example" in adr
+         and "plaso" in str(adr["depot-secret.example"].get("ou")),
+         f"vu dans : {adr.get('depot-secret.example', {}).get('ou')}")
+    dire("listes : l'IP d'un journal plaso aussi",
+         "203.0.113.77" in adr,
+         "aucun artefact ne la portait — c'est plaso qui l'apporte")
+
     print("\n── CE QU'ON N'OUVRE PAS ──")
     # Une FIFO par PORTE, et pas une seule sous un nom qu'aucune phase ne
     # cherche : le premier jet posait le tube là où indicateurs() gardait déjà,
