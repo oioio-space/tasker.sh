@@ -34,11 +34,12 @@
 #
 # Réglage FACULTATIF : des dossiers à protéger EN PLUS, un par ligne. Sans ces
 # fichiers, la reconnaissance par structure suffit — c'est le cas courant.
-# TROIS emplacements sont lus, et leurs listes s'AJOUTENT. Posez le fichier où
+# QUATRE emplacements sont lus, et leurs listes s'AJOUTENT. Posez le fichier où
 # vous voulez parmi ceux-là, « --essai » dira lequel il a trouvé :
 #
-#   <à côté de ce script>/scelles.txt   soit <affaire>/outils/scelles.txt
-#   <dossier d'analyse>/scelles.txt     à la racine de l'affaire
+#   <à côté de ce script>/scelles.txt   repéré par le chemin du SCRIPT
+#   <affaire>/outils/scelles.txt        le même, quand la garde est ailleurs
+#   <affaire>/scelles.txt               à la racine de l'affaire
 #   ~/.config/crush/scelles.txt         ce qui vaut pour tout le poste
 #
 # ($XDG_CONFIG_HOME remplace ~/.config s'il est posé, comme pour Crush.)
@@ -51,7 +52,7 @@
 # INTROUVABLE dès qu'on appelle le script depuis /tmp ; l'ancrage sur le
 # script est lu dans les deux cas. N'écrivez donc jamais « ./scelles.txt ».
 #
-# CRUSH_SCELLES remplace les trois, et accepte plusieurs chemins séparés par
+# CRUSH_SCELLES les remplace tous, et accepte plusieurs chemins séparés par
 # « : », comme PATH.
 
 set -u
@@ -65,12 +66,18 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 2
 fi
 
+# $1 : le dossier d'analyse, quand on le connaît. Sans lui, celui où Crush a
+# lancé le hook. UN seul endroit compose la liste — --essai la recomposait à sa
+# façon, et les deux ne coïncidaient que si le script était sous
+# <affaire>/outils/ : le mode qui existe pour dire la vérité sondait alors des
+# fichiers que le vrai hook ne lit jamais.
 _scelles_defaut() {
-    local ici
+    local ici base
     ici=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || ici="."
-    printf '%s:%s:%s' "$ici/scelles.txt" \
-                      "${CRUSH_PROJECT_DIR:-$PWD}/scelles.txt" \
-                      "${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt"
+    base="${1:-${CRUSH_PROJECT_DIR:-$PWD}}"
+    printf '%s:%s:%s:%s' "$ici/scelles.txt" "$base/outils/scelles.txt" \
+                         "$base/scelles.txt" \
+                         "${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt"
 }
 export TK_SCELLES="${CRUSH_SCELLES:-$(_scelles_defaut)}"
 
@@ -404,7 +411,7 @@ if [ "${1:-}" = "--essai" ]; then
     # Les listes déclarées suivent le dossier EXAMINÉ, pas le dossier courant :
     # « --essai ~/analyse/PC01 » depuis ailleurs doit lire le scelles.txt de
     # PC01, sinon l'essai ne dit pas la vérité sur ce dossier-là.
-    export TK_SCELLES="${CRUSH_SCELLES:-$dossier/outils/scelles.txt:$dossier/scelles.txt:${XDG_CONFIG_HOME:-$HOME/.config}/crush/scelles.txt}"
+    export TK_SCELLES="${CRUSH_SCELLES:-$(_scelles_defaut "$dossier")}"
     motif=$(mktemp)
     trap 'rm -f "$motif"' EXIT
 
@@ -420,6 +427,10 @@ if [ "${1:-}" = "--essai" ]; then
     }
 
     printf 'garde des scellés — essai sur %s\n' "$dossier"
+    # Les compteurs AVANT la lecture des listes : posés après, ils effaçaient
+    # le « souci=1 » qu'une liste déclarant un dossier inexistant venait de
+    # poser — et l'essai rendait 0 sur exactement le cas qu'il doit attraper.
+    scelles=0 images=0 souci=0
     lues=0
     IFS=: read -ra _listes <<< "$TK_SCELLES"
     for f in "${_listes[@]}"; do
@@ -437,7 +448,6 @@ if [ "${1:-}" = "--essai" ]; then
         fi
     fi
     echo
-    scelles=0 images=0 souci=0
     for d in "$dossier"/*/; do
         [ -d "$d" ] || continue
         nom=$(basename "$d")
@@ -475,7 +485,8 @@ if [ "${1:-}" = "--essai" ]; then
     fi
     [ "$images" -eq 0 ] && echo "note : aucune image montée ici, c'est permis."
     if [ "$souci" -ne 0 ]; then
-        echo "LA GARDE SE COMPORTE MAL — voyez les lignes ANORMAL ci-dessus."
+        echo "QUELQUE CHOSE NE VA PAS — voyez les lignes « ANORMAL » et"
+        echo "« DÉCLARÉ MAIS ABSENT » ci-dessus."
         exit 1
     fi
     echo "la garde mord."

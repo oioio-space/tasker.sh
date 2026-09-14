@@ -1887,14 +1887,26 @@ def main():
     # l'extraction paraît simplement figée. Reproduit : sans le contrôle, ce
     # test ne rend jamais la main. Le délai est donc l'assertion.
     print("\n── CE QU'ON N'OUVRE PAS ──")
-    rf = collecte_speciale = tempfile.mkdtemp()
+    # Une FIFO par PORTE, et pas une seule sous un nom qu'aucune phase ne
+    # cherche : le premier jet posait le tube là où indicateurs() gardait déjà,
+    # et le test passait donc même sans le correctif de fond. Les portes sont
+    # c.un()/c.chercher(), le parcours des journaux, celui des chaînes, celui
+    # des pièces rendues, et le balayage des indicateurs.
+    rf = tempfile.mkdtemp()
     cs = os.path.join(rf, "PC01_S01_TUBE_LINUX")
-    for d in ("SYSTEME", "COMPTES", "JOURNAUX"):
+    for d in ("SYSTEME", "COMPTES", "JOURNAUX", "STRINGS", "CONNEXIONS",
+              "PHOTOREC/recup_1", "SUPPRIMES"):
         os.makedirs(os.path.join(cs, d))
     with open(os.path.join(cs, "SYSTEME", "os-release"), "w") as fh:
         fh.write("ID=ubuntu\n")
-    os.mkfifo(os.path.join(cs, "JOURNAUX", "PC01_S01_TUBE_LINUX_tube.log"))
-    os.symlink("/nulle/part", os.path.join(cs, "JOURNAUX", "lien-mort"))
+    for porte in (("JOURNAUX", "PC01_S01_TUBE_LINUX_journal.txt"),
+                  ("JOURNAUX", "syslog"),
+                  ("STRINGS", "PC01_S01_TUBE_LINUX_sda.txt"),
+                  ("CONNEXIONS", "wtmp"),
+                  ("PHOTOREC/recup_1", "f0001.pdf"),
+                  ("SUPPRIMES", "PC01_S01_TUBE_LINUX_extrait_0001.bin")):
+        os.mkfifo(os.path.join(cs, *porte))
+    os.symlink("/nulle/part", os.path.join(cs, "SYSTEME", "lien-mort"))
     sortie_s = os.path.join(rf, "f.jsonl")
     fige = False
     try:
@@ -1909,11 +1921,11 @@ def main():
             lim = [json.loads(l) for l in fh if l.strip()]
         lim = [x for x in lim
                if x["fait"] == "pièces qui ne sont pas des fichiers ordinaires"]
-    ok = not fige and lim and lim[0]["valeur"] == "2"
+    ok = not fige and lim and lim[0]["valeur"] == "7"
     manques += not ok
-    print(f"  {'ok ' if ok else 'MANQUE'}  {'une FIFO ne fige pas la lecture':28s} "
+    print(f"  {'ok ' if ok else 'MANQUE'}  {'une FIFO ne fige aucune porte':28s} "
           + ("FIGÉ" if fige else f"{lim[0]['valeur'] if lim else 'AUCUN'} pièce(s) "
-             "écartée(s) et DITES"))
+             "écartée(s) sur 6 portes, et DITES"))
     shutil.rmtree(rf)
 
     print("\n── SYNTHÈSES : LES CHAMPS, PAS SEULEMENT LE LIBELLÉ ──")

@@ -159,6 +159,10 @@ class Collecte:
         self.racine = os.path.abspath(racine)
         self.prefix = os.path.basename(self.racine)
         self.lus = set()          # ce qui a servi, pour le manifeste
+        # Ce qu'on a refusé d'ouvrir. UN ensemble, rempli par ordinaire(),
+        # compté une fois à la fin : une garde par phase, c'était la poser
+        # dans celle qu'on venait d'écrire et pas dans les quatre autres.
+        self.speciales = set()
         # {chemin : sha256}, rempli au fil de la lecture des indicateurs. Le
         # manifeste s'en sert au lieu de relire la collecte entière.
         self.empreintes = {}
@@ -181,14 +185,44 @@ class Collecte:
         sources des faits portent alors tous la même chaîne, écrivable."""
         return _propre(os.path.relpath(chemin, self.racine))
 
+    def ordinaire(self, chemin):
+        """Un fichier ORDINAIRE ? Sinon on ne l'ouvre pas, et on le compte.
+
+        open() sur une FIFO attend qu'on écrive dedans — pour toujours : sans
+        erreur, sans CPU, sans lecture, sans une ligne au journal de reprise.
+        L'extraction paraît figée, et rien ne dit sur quoi. Une socket ou un
+        périphérique posé par une copie maladroite font de même.
+
+        isfile suit les liens, ce qui écarte du même coup les liens morts, qui
+        lèvent à l'ouverture. Le décompte vit ici pour que « non lue » se dise
+        quelle que soit la porte par laquelle la pièce a été refusée — « non
+        lue » et « lue et vide » ne sont pas la même chose, et c'est la preuve
+        « quels octets ont été analysés » qui en dépend.
+        """
+        if os.path.isfile(chemin):
+            return True
+        if os.path.lexists(chemin):
+            self.speciales.add(self.rel(chemin))
+        return False
+
     def chercher(self, motif, sous=None):
-        """Chemins absolus des fichiers dont le nom contient motif."""
+        """Chemins absolus des FICHIERS ORDINAIRES dont le nom contient motif.
+
+        Ordinaires, et la garde est ICI : c'est la porte par laquelle un() et
+        presque toutes les phases découvrent leurs pièces. open() sur une FIFO
+        attend qu'on écrive dedans, pour toujours — sans erreur, sans CPU, sans
+        lecture, sans une ligne au journal. La poser dans chaque phase, c'était
+        la poser dans celle qu'on venait d'écrire et pas dans les trois autres.
+        os.path.isfile suit les liens, ce qui écarte du même coup les liens
+        morts, qui lèvent à l'ouverture.
+        """
         base = os.path.join(self.racine, sous) if sous else self.racine
         trouves = []
         for d, _, fichiers in os.walk(base):
             for n in fichiers:
-                if motif in n:
-                    trouves.append(os.path.join(d, n))
+                chemin = os.path.join(d, n)
+                if motif in n and self.ordinaire(chemin):
+                    trouves.append(chemin)
         return sorted(trouves)
 
     def un(self, motif, sous=None):
@@ -703,10 +737,11 @@ def _utmp_brut(c, nom_fichier, categorie, quoi_defaut, role=None):
     dossier = os.path.join(c.racine, "CONNEXIONS")
     # wtmp, wtmp.1, wtmp-20190901 : les rotations, quel que soit leur style.
     # Mais pas wtmp.db, qui est du sqlite et se lit ailleurs.
-    chemins = sorted(os.path.join(dossier, n) for n in os.listdir(dossier)
-                     if n.startswith(nom_fichier)
-                     and not n.endswith((".txt", ".db"))) \
-        if os.path.isdir(dossier) else []
+    chemins = sorted(x for x in (os.path.join(dossier, n)
+                                 for n in os.listdir(dossier))
+                     if os.path.basename(x).startswith(nom_fichier)
+                     and not x.endswith((".txt", ".db"))
+                     and c.ordinaire(x)) if os.path.isdir(dossier) else []
     poses = 0
     for chemin in chemins:
         poses += _un_utmp(c, chemin, categorie, quoi_defaut, role)
@@ -1001,7 +1036,7 @@ def journaux(c):
     if os.path.isdir(dossier):
         for base in sorted(os.listdir(dossier)):
             chemin = os.path.join(dossier, base)
-            if not os.path.isfile(chemin) or base.endswith((".tar.gz", "_journal.txt")):
+            if not c.ordinaire(chemin) or base.endswith((".tar.gz", "_journal.txt")):
                 continue
             with open(chemin, "rb") as fh:
                 blob = fh.read()
@@ -1919,6 +1954,8 @@ def supprimes(c):
         par_type, n, octets = collections.Counter(), 0, 0
         for dossier, _, fichiers in os.walk(base):
             for f in fichiers:
+                if not c.ordinaire(os.path.join(dossier, f)):
+                    continue
                 n += 1
                 ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
                 par_type[_TYPE_RECUP.get(ext, f".{ext}" if ext else "sans extension")] += 1
@@ -1985,6 +2022,8 @@ def chaines(c):
         return
     for f in sorted(os.listdir(base)):
         chemin = os.path.join(base, f)
+        if not c.ordinaire(chemin):
+            continue
         # L'extrait d'ABORD : lui seul porte un genre connu, et le motif du
         # fichier brut, plus large, l'avalerait.
         m = RE_EXTRAIT.search(f)
@@ -2367,7 +2406,9 @@ def _pieces_rendues(c):
             sous.sort()
             noms.sort()
             for f in noms:
-                yield os.path.join(d, f)
+                chemin = os.path.join(d, f)
+                if c.ordinaire(chemin):
+                    yield chemin
 
 
 def documents(c):
@@ -2671,77 +2712,129 @@ def _plaso_chemin(e):
 # n'importe quelle distribution : /media/<compte>/<étiquette> sur Ubuntu et
 # Debian, /run/media/<compte>/<étiquette> sur Fedora, /mnt/<nom> quand c'est
 # monté à la main. L'étiquette est ce que l'analyste cite — « la clé SYCOBS ».
+# Le MÊME motif que MOTIFS_JOURNAL et que RE_MEDIA de controles.py, dont le
+# commentaire dit pourquoi : « le point final de "Mounted /run/media/x/CLE."
+# ne doit pas entrer dans l'étiquette, sans quoi les deux rapports nomment le
+# même support différemment ». Un « ([^/]+) » naïf le gardait, et la
+# corroboration ne rapprochait alors pas « CLE. » de « CLE » — la même clé
+# sortait deux fois, dont une en « portée par la super-timeline seule ».
+# Groupes NOMMÉS : l'alternance rendait l'étiquette en groupe 2 ou 4, avec un
+# groupe vide posé exprès pour aligner la numérotation.
 RE_PLASO_AMOVIBLE = re.compile(
-    r'^/(?:run/)?media/([^/]+)/([^/]+)|^/mnt/()([^/]+)')
+    r'^/(?:run/)?media/(?P<compte>[^/\s]+)/(?P<etiquette>[^/\s,;:]*[^/\s,;:.])'
+    r'|^/mnt/(?P<seule>[^/\s,;:]*[^/\s,;:.])')
 # Le branchement lui-même, tel que le noyau l'écrit dans dmesg et le journal.
 # Ces deux lignes-là valent la peine d'un coup d'œil au message : elles portent
 # le modèle du matériel, que le point de montage ne donne pas.
 RE_PLASO_USB = re.compile(
     r'(?:New USB device found[^\n]{0,120}|Product:\s*[^\n]{1,60}'
     r'|usb-storage[^\n]{0,80})')
-# Les documents qu'un rapport cite : ce qu'on ouvre, pas ce que le système
-# écrit. Un .so ou un .cache dans la super-timeline n'intéresse personne.
-EXT_DOCUMENT = (".odt", ".ods", ".odp", ".doc", ".docx", ".xls", ".xlsx",
-                ".ppt", ".pptx", ".pdf", ".rtf", ".csv", ".txt", ".zip",
-                ".rar", ".7z", ".jpg", ".jpeg", ".png", ".mp4", ".torrent",
-                ".key", ".pem", ".ovpn", ".kdbx")
+# Les documents qu'un rapport cite, DÉRIVÉS de FAMILLES_RECUP — la table
+# d'extensions du fichier — au lieu d'être recopiés. Les deux listes avaient
+# déjà divergé d'une trentaine d'extensions : un .kdbx touché ressortait, un
+# .p12 non, et une photo .heic était « document » d'un côté du rapport et
+# « image » de l'autre. Les exécutables et scripts sont écartés : un .sh traîne
+# partout sur un disque et noierait le sujet.
+EXT_DOCUMENT = tuple("." + e for fam, exts in FAMILLES_RECUP.items()
+                     if fam != "exécutable ou script"
+                     for e in exts) + (".torrent", ".csv", ".txt")
 
 
 def _hote(url):
-    """L'hôte d'une URL. C'est ce qui se cite : les paramètres d'une requête
-    portent souvent des identifiants, et n'ont rien à faire dans un rapport."""
-    try:
-        h = urllib.parse.urlsplit(url).netloc
-    except ValueError:
-        h = ""
-    return h.lower() or _coupe(url, 60)
+    """L'hôte d'une URL — RE_URL_HOTE et _hote_url, ceux de GENRES_ADRESSE.
+
+    urlsplit().netloc gardait l'identifiant, le mot de passe, le port et le
+    point final : « user:pw@site.example:8443 » et « www.x.fr. » entraient donc
+    dans la valeur d'un fait, et le même site s'écrivait de deux façons dans le
+    même rapport — au § super-timeline d'un côté, au § adresses de l'autre.
+    Mesuré, il est aussi 2,4 fois plus lent (3 299 ns contre 1 389) : le cache
+    de 128 entrées d'urlsplit ne sert à rien sur un historique, où les URL sont
+    par construction toutes distinctes.
+    """
+    m = RE_URL_HOTE.match(url) or RE_URL_HOTE.search(url)
+    return (_hote_url(m) or "") if m else ""
+
+
+def _branche(genre):
+    """Quelle branche de _plaso_sujet ce data_type emprunte — mémorisée.
+
+    Un événement qui ne porte ni URL ni chemin remarquable — l'écrasante
+    majorité — traversait DIX balayages de sous-chaîne avant de rendre rien.
+    Or un flux entier ne porte qu'une dizaine de data_type distincts, pour des
+    millions d'événements : la décision se prend une fois par genre. Mesuré,
+    _plaso_sujet passe de 988 à 801 ns par événement.
+    """
+    b = _BRANCHES.get(genre)
+    if b is None:
+        if genre.startswith("bash:") or genre.startswith("shell:") \
+                or ":command" in genre:
+            b = "commande"
+        elif "utmp" in genre or "lastlog" in genre or genre.endswith(":login"):
+            b = "connexion"
+        elif "dpkg" in genre or "rpm" in genre or "apt" in genre:
+            b = "paquet"
+        elif "syslog" in genre or "journal" in genre:
+            b = "journal"
+        else:
+            b = "chemin"
+        _BRANCHES[genre] = b
+    return b
+
+
+_BRANCHES = {}
 
 
 def _plaso_sujet(e, genre, ou):
-    """(sujet, valeur) : ce que l'événement RACONTE, ou (None, None).
+    """(sujet, valeur, compte) : ce que l'événement RACONTE, ou trois None.
 
     « genre » (le data_type) et « ou » (le chemin) sont déjà en main chez
     l'appelant : les relire coûterait deux accès de plus par événement, et il y
-    en a des millions.
+    en a des millions. Le COMPTE est rendu pour la même raison — le point de
+    montage « /media/jdupont/… » le nomme, et l'appelant rejouait la même
+    expression sur la même chaîne pour l'en tirer.
     """
     url = e.get("url")
     if isinstance(url, str) and url:
-        return ("téléchargement" if "download" in genre else "site"), _hote(url)
-    if genre.startswith("bash:") or genre.startswith("shell:") \
-            or ":command" in genre:
+        return ("téléchargement" if "download" in genre else "site"), \
+            _hote(url), None
+    branche = _branche(genre)
+    if branche == "commande":
         quoi = e.get("command") or e.get("body") or e.get("message") or ""
-        return "commande", _coupe(" ".join(str(quoi).split()), 90)
-    if "utmp" in genre or "lastlog" in genre or genre.endswith(":login"):
+        return "commande", _coupe(" ".join(str(quoi).split()), 90), None
+    if branche == "connexion":
         qui = str(e.get("username") or e.get("user") or "?")
         depuis = str(e.get("hostname") or e.get("ip_address") or "")
-        return "connexion", f"{qui} depuis {depuis}" if depuis else qui
-    if "dpkg" in genre or "rpm" in genre or "apt" in genre:
+        return "connexion", (f"{qui} depuis {depuis}" if depuis else qui), None
+    if branche == "paquet":
         quoi = e.get("body") or e.get("message") or e.get("name") or ""
-        return "paquet", _coupe(" ".join(str(quoi).split()), 80)
+        return "paquet", _coupe(" ".join(str(quoi).split()), 80), None
     if ou:
         m = RE_PLASO_AMOVIBLE.match(ou)
         if m:
-            return "support", m.group(2) or m.group(4)
+            return ("support", m.group("etiquette") or m.group("seule"),
+                    m.group("compte"))
         if ou.lower().endswith(EXT_DOCUMENT):
-            return "document", "/".join(ou.rsplit("/", 2)[-2:])
-    if "syslog" in genre or "journal" in genre:
+            return "document", "/".join(ou.rsplit("/", 2)[-2:]), None
+    if branche == "journal":
         m = RE_PLASO_USB.search(str(e.get("body") or e.get("message") or ""))
         if m:
-            return "support", _coupe(" ".join(m.group(0).split()), 60)
-    return None, None
+            return "support", _coupe(" ".join(m.group(0).split()), 60), None
+    return None, None, None
 
 
-# Les sujets, dans l'ordre où un rapport les lit, avec le libellé du fait et
-# ce qu'une phrase de récit en dit. UNE table : ajouter un sujet à
-# _plaso_sujet et une ligne ici suffit à le faire apparaître partout.
+# Les sujets, dans l'ordre où un rapport les lit, avec le libellé de leur fait.
+# Le second membre valait exactement la clé — « support » pour « support » —, et
+# les deux boucles qui lisaient la table jetaient chacune la moitié qu'elle
+# n'utilisait pas. Ajouter un sujet demande une branche dans _plaso_sujet et une
+# ligne ici ; le rapport, lui, se règle sur les genres RÉELLEMENT vus.
 PLASO_SUJETS = {
-    "support":       ("support amovible vu dans la super-timeline", "support"),
-    "site":          ("site consulté, vu dans la super-timeline", "site"),
-    "téléchargement": ("téléchargement vu dans la super-timeline", "téléchargement"),
-    "commande":      ("commande lancée, vue dans la super-timeline", "commande"),
-    "connexion":     ("connexion vue dans la super-timeline", "connexion"),
-    "paquet":        ("paquet installé, vu dans la super-timeline", "paquet"),
-    "document":      ("document touché, vu dans la super-timeline", "document"),
+    "support": "support amovible vu dans la super-timeline",
+    "site": "site consulté, vu dans la super-timeline",
+    "téléchargement": "téléchargement vu dans la super-timeline",
+    "commande": "commande lancée, vue dans la super-timeline",
+    "connexion": "connexion vue dans la super-timeline",
+    "paquet": "paquet installé, vu dans la super-timeline",
+    "document": "document touché, vu dans la super-timeline",
 }
 # Combien de VALEURS distinctes par sujet on retient, et combien on en cite.
 # La borne existe parce qu'un disque porte des centaines de milliers de
@@ -2780,11 +2873,25 @@ SESSION_MAX_PLASO = timedelta(hours=12)
 # Où chercher le pendant d'un sujet plaso, et comment en tirer la clé de
 # rapprochement. UNE table : le jour où un sujet s'ajoute, la ligne suffit.
 def _cle_hote(v):
-    """L'hôte d'une valeur qui porte une URL, sinon rien."""
-    bas = v.lower()
-    if "://" in bas:
-        return _hote(v)
-    return bas if bas.startswith("www.") else ""
+    """L'hôte d'une valeur d'artefact : une URL, ou un domaine écrit nu.
+
+    Les faits ne portent pas tous une URL complète — « dropbox.com » sort d'un
+    mot de passe enregistré, « intranet.entreprise.fr » d'un favori. Les
+    laisser sans clé les faisait tous ressortir en « porté par la super-timeline
+    seule », c'est-à-dire en fausse piste publiée : la seconde source était là,
+    on ne savait simplement pas la lire.
+    """
+    m = RE_URL_HOTE.search(v)
+    if m:
+        return _hote_url(m) or ""
+    bas = v.strip().lower().rstrip("/.")
+    return bas if RE_HOTE_NU.fullmatch(bas) else ""
+
+
+# Un domaine écrit sans schéma : au moins un point, pas d'espace, une extension
+# alphabétique. Assez strict pour qu'un nom de fichier — « rapport.odt » — n'y
+# tombe pas : ce serait une corroboration inventée.
+RE_HOTE_NU = re.compile(r'[a-z0-9](?:[a-z0-9._-]{0,251}[a-z0-9])?\.[a-z]{2,24}')
 
 
 def _cle_etiquette(v):
@@ -2798,17 +2905,57 @@ def _cle_fichier(v):
     return v.rstrip("/").rsplit("/", 1)[-1].lower()
 
 
-# (sujet plaso, catégories où chercher le pendant, clé côté plaso, clé côté
-#  artefact). Les deux clés diffèrent : plaso range un site par son HÔTE, les
-#  artefacts par l'URL entière.
-CORROBORE = (
-    ("site", ("navigation", "usage", "adresse", "telechargement"),
-     str.lower, _cle_hote),
-    ("support", ("support",), str.lower, _cle_etiquette),
-    ("document", ("usage", "telechargement", "document", "recuperation"),
-     _cle_fichier, _cle_fichier),
-    ("téléchargement", ("telechargement", "navigation"), str.lower, _cle_hote),
-)
+# Le sujet plaso et la clé sous laquelle on le range. Plus de liste de
+# CATÉGORIES : c'était une devinette sur le contenu des autres phases, et elle
+# était déjà fausse dans les deux sens — « appareil », la catégorie du support
+# le mieux établi (celui qui porte le numéro de série), n'y figurait pas, et
+# « chaines », où survit le domaine dont l'historique a été vidé, non plus.
+# C'est pourtant exactement le cas que la corroboration invoque pour exister.
+CORROBORE = (("site", str.lower), ("téléchargement", str.lower),
+             ("support", _cle_etiquette), ("document", _cle_fichier))
+
+# Les rôles que la super-timeline pose elle-même : ils ne sont pas une seconde
+# source d'eux-mêmes.
+_ROLES_PLASO = ("plaso-sujet", "plaso-journee", "plaso-recensement",
+                "plaso-famille", "rapprochement-temporel", "rapprochement-chemin")
+
+
+def _index_artefacts():
+    """Ce que les AUTRES phases ont posé, rangé par clé de rapprochement.
+
+    UN parcours, et surtout : on se règle sur les mécanismes que le fichier a
+    déjà — _adresses_du_fait pour les hôtes (avec sa garde contre les valeurs
+    collées à une coupure, que le rapprochement n'avait pas) et le RÔLE pour
+    les supports. Pas sur la catégorie, qui est un rangement de rapport et non
+    un contrat.
+    """
+    par = {"site": {}, "support": {}, "document": {}}
+    for f in FAITS:
+        if f.get("role") in _ROLES_PLASO:
+            continue
+        v = str(f.get("valeur") or "")
+        for genre, valeur, _portee in _adresses_du_fait(f):
+            if genre == "URL":
+                par["site"].setdefault(valeur, []).append(f)
+        nu = _cle_hote(v)          # un domaine écrit sans schéma
+        if nu:
+            par["site"].setdefault(nu, []).append(f)
+        # Les supports : le rôle du montage, et le champ « montages » que la
+        # synthèse des appareils porte — c'est là que sont les étiquettes.
+        chemins = [v] if f.get("role") == "montage-amovible" else []
+        if f.get("montages"):
+            chemins += str(f["montages"]).split(" / ")
+        for ch in chemins:
+            k = _cle_etiquette(ch)
+            if k:
+                par["support"].setdefault(k, []).append(f)
+        if "/" in v or "." in v:
+            k = _cle_fichier(v)
+            if k and "." in k:
+                par["document"].setdefault(k, []).append(f)
+    # Un téléchargement se rapproche des mêmes hôtes qu'une visite.
+    par["téléchargement"] = par["site"]
+    return par
 
 
 def corroboration(c):
@@ -2821,21 +2968,13 @@ def corroboration(c):
     if not sujets:
         return
     source = sujets[0]["source"]
-    for sujet, categories, cle_plaso, cle_autre in CORROBORE:
-        # L'index des autres faits, construit une fois par sujet : les faits se
-        # comptent en milliers, les sujets en unités.
-        ailleurs = {}
-        for f in FAITS:
-            if f.get("categorie") not in categories or f.get("role") == "plaso-sujet":
-                continue
-            k = cle_autre(str(f.get("valeur") or ""))
-            if k:
-                ailleurs.setdefault(k, []).append(f)
+    ailleurs = _index_artefacts()
+    for sujet, cle_plaso in CORROBORE:
+        index = ailleurs.get(sujet) or {}
         for p in sujets:
             if p.get("genre") != sujet:
                 continue
-            k = cle_plaso(str(p["valeur"]))
-            pendants = ailleurs.get(k)
+            pendants = index.get(cle_plaso(str(p["valeur"])))
             if pendants:
                 autre = pendants[0]
                 fait("plaso", "confirmé par une seconde source", p["valeur"],
@@ -2954,7 +3093,11 @@ def plaso(c):
     # sont bornées : PLASO_SUJET_MAX valeurs distinctes par sujet, trois
     # exemples par jour et par sujet. Un disque porte des centaines de milliers
     # de chemins — sans borne, la table croîtrait avec le fichier.
-    sujets = {k: {} for k in PLASO_SUJETS}
+    # Alimenté par setdefault : un sujet rendu par _plaso_sujet mais absent de
+    # PLASO_SUJETS levait un KeyError avalé par etape(), et la phase plaso
+    # entière tombait — le rapport sortait sans super-timeline, sur une ligne
+    # de stderr.
+    sujets = {}
     recit = {}
     # Le SCHÉMA réellement lu : les classes dfdatetime rencontrées et les
     # champs du premier événement. C'est ce qui permet de dire, sans rien
@@ -2987,16 +3130,21 @@ def plaso(c):
             genres[genre] += 1
             analyseurs[str(e.get("parser") or "?")] += 1
             quand = _plaso_horo(e)
+            jour = None
             if quand is None:
                 sans_date += 1
             else:
                 premier = quand if premier is None else min(premier, quand)
                 dernier = quand if dernier is None else max(dernier, quand)
-                jours.add(quand[:10])
+                # Tranché UNE fois : la même tranche servait ici et huit lignes
+                # plus bas, sur des millions d'événements.
+                jour = quand[:10]
+                jours.add(jour)
             ou = _plaso_chemin(e)
-            sujet, valeur = _plaso_sujet(e, genre, ou)
+            sujet, valeur, monteur = _plaso_sujet(e, genre, ou)
+            vu = None
             if valeur:
-                table = sujets[sujet]
+                table = sujets.setdefault(sujet, {})
                 vu = table.get(valeur)
                 if vu is None and len(table) < PLASO_SUJET_MAX:
                     vu = table[valeur] = [0, quand, quand, None]
@@ -3005,8 +3153,13 @@ def plaso(c):
                     if quand is not None:
                         vu[1] = quand if vu[1] is None else min(vu[1], quand)
                         vu[2] = quand if vu[2] is None else max(vu[2], quand)
-                if quand is not None:
-                    j = recit.setdefault(quand[:10], {})
+                if jour is not None:
+                    # setdefault({}) alloue un dict NEUF à chaque événement, y
+                    # compris les millions de fois où la clé existe déjà :
+                    # l'argument par défaut est évalué à chaque appel.
+                    j = recit.get(jour)
+                    if j is None:
+                        j = recit[jour] = {}
                     d = j.get(sujet)
                     if d is None:
                         d = j[sujet] = [0, []]
@@ -3024,17 +3177,19 @@ def plaso(c):
                 bas = ou.lower()
                 compte = (maisons.get("/".join(bas.split("/", 3)[:3]))
                           or maisons.get("/".join(bas.split("/", 2)[:2])))
-                if compte is None:
-                    # /media/<compte>/<étiquette> : le point de montage porte
-                    # le nom de qui a monté le support. C'est plus fort que le
-                    # dossier personnel — un service n'y écrit pas —, et ça se
-                    # perdait, faute d'être un chemin de maison.
-                    m = RE_PLASO_AMOVIBLE.match(ou)
-                    if m and m.group(1) and m.group(1) in comptes_noms:
-                        compte = m.group(1)
+                # /media/<compte>/<étiquette> : le point de montage porte le
+                # nom de qui a monté le support — plus fort que le dossier
+                # personnel, un service n'y écrit pas. _plaso_sujet l'a déjà
+                # tiré de la MÊME chaîne : le rejouer ici faisait 1,62 match
+                # par événement là où un seul suffit.
+                if compte is None and monteur in comptes_noms:
+                    compte = monteur
                 if compte:
-                    if valeur and sujets[sujet].get(valeur) is not None:
-                        sujets[sujet][valeur][3] = compte
+                    # « vu » désigne déjà cette liste : la retrouver par trois
+                    # indexations coûtait 57 ns par événement attribué, et
+                    # obligeait à remonter vingt lignes pour comprendre.
+                    if vu is not None:
+                        vu[3] = compte
                     p = par_compte.setdefault(compte, [0, None, None])
                     p[0] += 1
                     if quand is not None:
@@ -3155,8 +3310,8 @@ def plaso(c):
     # questions qu'un rapport pose vraiment — où il est allé, ce qu'il a
     # branché, ce qu'il a lancé — là où le seul recensement disait combien
     # d'événements, ce qui n'apprend rien à personne.
-    for sujet, (libelle, _mot) in PLASO_SUJETS.items():
-        table = sujets[sujet]
+    for sujet, libelle in PLASO_SUJETS.items():
+        table = sujets.get(sujet) or {}
         if not table:
             continue
         classees = sorted(table.items(), key=lambda kv: (-kv[1][0], kv[0]))
@@ -3188,13 +3343,19 @@ def plaso(c):
     actives = sorted(recit.items(), key=lambda kv: (-sum(v[0] for v in kv[1].values()),
                                                     kv[0]))
     for jour, quoi in actives[:PLASO_JOURS_CITES]:
-        morceaux = []
-        for sujet, (_libelle, mot) in PLASO_SUJETS.items():
+        # Le détail part en CHAMP STRUCTURÉ, pas seulement en prose : le
+        # rapport refendait la note sur « ; » puis sur les huit premiers mots
+        # de RAPPROCHEMENT — une constante écrite une fois précisément pour
+        # n'être pas recopiée. La reformuler d'une virgule vidait la section
+        # « jour par jour », sans erreur ni test rouge.
+        morceaux, detail = [], {}
+        for sujet in PLASO_SUJETS:
             d = quoi.get(sujet)
             if not d:
                 continue
             n, exemples = d
-            morceaux.append(f"{mot} : {n} trace{'s' if n > 1 else ''}"
+            detail[sujet] = d
+            morceaux.append(f"{sujet} : {n} trace{'s' if n > 1 else ''}"
                             + (f" ({', '.join(exemples)})" if exemples else ""))
         if not morceaux:
             continue
@@ -3202,7 +3363,7 @@ def plaso(c):
              "événements plaso du jour, rangés par sujet",
              horodatage=jour + "T00:00:00Z", role="plaso-journee",
              occurrences=sum(v[0] for v in quoi.values()),
-             confiance="à vérifier",
+             confiance="à vérifier", sujets=detail,
              note=" ; ".join(morceaux) + f". {RAPPROCHEMENT}")
     if len(actives) > PLASO_JOURS_CITES:
         fait("limite", "journées d'activité plaso non détaillées",
@@ -4475,10 +4636,6 @@ class Avancement:
         self.pieces = self.octets = 0
         self.ou, self.dit = "", False
 
-    @staticmethod
-    def _volume(n):
-        return f"{n / (1 << 30):.1f} Go" if n >= 1 << 30 else f"{n >> 20} Mo"
-
     def pas(self, ou=None, octets=0):
         """Une pièce de plus (ou=son chemin), ou des octets de plus dedans."""
         if ou is not None:
@@ -4492,7 +4649,7 @@ class Avancement:
         ecoule = int(maintenant - self.depart)
         ligne = (f"      {self.quoi} : {self.ou or '.'} — {self.pieces} "
                  f"pièce{'s' if self.pieces > 1 else ''}, "
-                 f"{self._volume(self.octets)}, "
+                 f"{_taille(self.octets)}, "
                  f"{ecoule // 60} min {ecoule % 60:02d} s")
         print(f"\r{ligne:<100.100s}" if self.tty else ligne,
               end="" if self.tty else "\n", file=sys.stderr, flush=True)
@@ -4526,6 +4683,9 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
     empreintes = {g: {x["valeur"]: x for x in liste if x["genre"] == g}
                   for g in ("sha256", "sha1", "md5")}
     empreintes = {g: d for g, d in empreintes.items() if d}
+    # Hissé hors d'examiner() : il ne dépend que des indicateurs, qui ne
+    # changent pas, et l'union de deux ensembles se refaisait par source.
+    _genres_empreinte = sorted(set(empreintes) | {"sha256"})
     noms = [x for x in liste if x["genre"] == "fichier"]
     motifs = [x for x in liste if x["motif"] is not None]
     cribles = any(x.get("crible") for x in motifs)
@@ -4535,7 +4695,6 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
     nouveaux = []      # les valeurs trouvées, dans l'ordre, pour le journal
 
     av = Avancement("lecture")
-    speciaux = []      # ce qui n'est pas un fichier ordinaire, et qu'on n'ouvre pas
 
     def trouve(x):
         """Note qu'un indicateur vient d'être vu — une fois, à sa découverte."""
@@ -4583,13 +4742,17 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                      trouve=True, note=x["etiquette"])
         if blocs is None:
             return
-        # sha256 TOUJOURS, même quand personne ne cherche d'empreinte : c'est
-        # celle du manifeste, et _blocs garantit déjà que « brut » porte le
-        # fichier ENTIER — plafond d'archive compris. La calculer ici évite au
-        # manifeste de relire toute la collecte une seconde fois, en silence,
-        # après la dernière phase. Sur un scellé à cent mille pièces, c'était
-        # une passe complète de plus.
-        hs = {g: hashlib.new(g) for g in set(empreintes) | {"sha256"}}
+        # sha256 dès que la source est un FICHIER — « garder » le dit : c'est
+        # l'empreinte du manifeste, et _blocs garantit déjà que « brut » porte
+        # le fichier ENTIER, plafond d'archive compris. La calculer ici évite
+        # au manifeste de relire toute la collecte une seconde fois, en
+        # silence, après la dernière phase.
+        # Mais PAS pour les membres d'archive, qui n'entrent pas au manifeste :
+        # leur empreinte était calculée sur chaque octet puis jetée. Mesuré sur
+        # une collecte jouet : 65 Mo hachés pour UNE empreinte conservée sur 61
+        # sources, soit 55 s perdues pour 20 Go de membres à 374 Mo/s.
+        hs = {g: hashlib.new(g) for g in _genres_empreinte if g != "sha256"
+              or garder}
         comptes_, contextes = {}, {}
         # Les (motif, position absolue de début) déjà comptés. La
         # déduplication ne peut PAS se faire sur la fin de la correspondance :
@@ -4671,7 +4834,10 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
         # « garder » est le chemin sur le disque, quand la source en est un :
         # le manifeste veut l'empreinte des FICHIERS, pas des membres d'archive.
         if garder:
-            c.empreintes[garder] = hs["sha256"].hexdigest()
+            # digest() et non hexdigest() : 65 octets contre 113 par pièce,
+            # soit 19 Mo de moins pour 400 000 pièces — et la table vit de la
+            # première phase jusqu'au manifeste.
+            c.empreintes[garder] = hs["sha256"].digest()
         for g, attendus in empreintes.items():
             h = hs[g].hexdigest()
             if h in attendus:
@@ -4761,14 +4927,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             chemin, rel = os.path.join(d, f), c.rel(os.path.join(d, f))
             if rel in soi:
                 continue
-            # UN FICHIER ORDINAIRE, ou rien. open() sur une FIFO attend qu'on
-            # écrive dedans — pour toujours : l'extraction se fige alors sans
-            # le moindre signe, ni CPU, ni lecture, et rien dans le journal.
-            # Une socket ou un périphérique posé par une copie maladroite font
-            # de même. os.path.isfile suit les liens et écarte du même coup les
-            # liens morts, qui lèveraient à l'ouverture.
-            if not os.path.isfile(chemin):
-                speciaux.append(rel)
+            if not c.ordinaire(chemin):
                 continue
             av.pas(rel)
             deja = reprise.reutilisable(rel, chemin) if reprise else None
@@ -4782,7 +4941,7 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
                 # recopié est perdu pour la reprise d'après
                 reprise.reporter(deja)
                 if deja.get("sha256"):
-                    c.empreintes[chemin] = deja["sha256"]
+                    c.empreintes[chemin] = bytes.fromhex(deja["sha256"])
                 # La pièce a bien été ANALYSÉE, même si elle ne l'a pas été à
                 # ce passage-ci : le manifeste doit la porter. Sans cette
                 # ligne, une reprise rendait un manifeste amputé — il listait
@@ -4797,18 +4956,21 @@ def indicateurs(c, liste, reprise=None, fichiers=()):
             debut_faits, debut_trouves = len(FAITS), len(nouveaux)
             parcourir(chemin, rel)
             if reprise:
+                sha = c.empreintes.get(chemin)
                 reprise.noter(rel, chemin, FAITS[debut_faits:],
-                              nouveaux[debut_trouves:], c.empreintes.get(chemin))
+                              nouveaux[debut_trouves:],
+                              sha.hex() if sha else None)
     av.fin()
     # Une pièce écartée se DIT : « non lue » et « lue et vide » ne sont pas la
     # même chose, et c'est la preuve « quels octets ont été analysés » qui en
     # dépend.
-    if speciaux:
+    if c.speciales:
+        speciaux = sorted(c.speciales)
         fait("limite", "pièces qui ne sont pas des fichiers ordinaires",
              str(len(speciaux)), c.prefix, "parcours de la collecte",
              note="non ouvertes — une FIFO, une socket ou un lien mort bloque "
                   "ou lève à l'ouverture, et rien n'y est analysable : "
-                  + ", ".join(sorted(speciaux)[:5])
+                  + ", ".join(speciaux[:5])
                   + (" …" if len(speciaux) > 5 else ""))
     for x in liste:
         if x.get("absent") is False:
@@ -4921,6 +5083,8 @@ def manifeste(c, sortie, argv, prov, signature):
             if sha is None:
                 av.pas(c.rel(chemin), octets)
                 sha = empreinte(chemin)
+            else:
+                sha = sha.hex()
             pieces[c.rel(chemin)] = {"sha256": sha, "octets": octets}
         except OSError:
             continue

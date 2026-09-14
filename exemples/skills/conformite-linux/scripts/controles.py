@@ -940,7 +940,11 @@ def usage(c, pieces):
     try:
         for famille, brut in FAMILLES:
             for t in _chercher_domaine(pieces, None, brut, famille):
-                ou = ("dans la super-timeline plaso" if "plaso" in t["quoi"]
+                # Sur un CHAMP, pas sur le libellé français : celui-ci est du
+                # texte de rapport, il se reformule, et le dépôt a déjà payé
+                # une fois pour avoir sélectionné dessus.
+                ou = ("dans la super-timeline plaso"
+                      if t.get("origine") == "plaso"
                       else "dans un profil de navigateur")
                 constat("usage", f"service {famille} présent {ou}",
                         t["valeur"], t["source"], t["methode"], acteur=t["acteur"],
@@ -1240,12 +1244,21 @@ def lire_faits(chemin):
 # historique effacé ne font plus disparaître l'usage. La super-timeline, elle,
 # a gardé la trace, et une règle doit pouvoir s'appuyer dessus.
 def _plaso_sujets(faits):
-    """Les sujets rendus par la super-timeline, rangés par genre."""
-    par = {}
+    """({genre : [faits]}, {valeurs confirmées par une seconde source}).
+
+    Les deux en UN parcours, et surtout séparés : un fait « corroboration »
+    porte la MÊME valeur que le « plaso-sujet » dont il sort. Les ranger sous
+    le même genre faisait sortir chaque support confirmé DEUX FOIS en constat,
+    donc deux fois dans le rapport et deux fois au décompte par thème.
+    """
+    par, confirme = {}, set()
     for f in faits:
-        if f.get("role") in ("plaso-sujet", "corroboration"):
+        role = f.get("role")
+        if role == "plaso-sujet":
             par.setdefault(str(f.get("genre") or ""), []).append(f)
-    return par
+        elif role == "corroboration":
+            confirme.add(str(f.get("valeur")))
+    return par, confirme
 
 
 def plaso(pieces):
@@ -1255,26 +1268,28 @@ def plaso(pieces):
     donc ce qui est OBSERVÉ — un support branché, une commande lancée — avec la
     question qu'une charte devra trancher.
     """
-    sujets = pieces["plaso_sujets"]
+    sujets, confirme = pieces["plaso_sujets"], pieces["plaso_confirmes"]
     if not sujets:
         return
-    confirme = {str(f.get("valeur")) for f in pieces["faits"]
-                if f.get("role") == "corroboration"}
-    for genre, quoi, question in (
-            ("support", "support amovible vu dans la super-timeline",
+    # Le LIBELLÉ vient du fait — il était recopié au caractère près depuis
+    # PLASO_SUJETS de l'autre script, et un accent qui bouge suffisait à ne
+    # plus rien produire, sans erreur ni test rouge. Ici ne reste que ce qui
+    # est propre à la conformité : la question que la charte devra trancher.
+    for genre, question in (
+            ("support",
              "la charte encadre-t-elle l'usage des supports amovibles, et "
              "celui-ci était-il autorisé ?"),
-            ("commande", "commande lancée, vue dans la super-timeline",
+            ("commande",
              "cette commande sort-elle de ce que la charte autorise — copie "
              "vers l'extérieur, effacement de traces ?"),
-            ("paquet", "paquet installé, vu dans la super-timeline",
+            ("paquet",
              "la charte réserve-t-elle l'installation de logiciels à "
              "l'administrateur ?"),
-            ("téléchargement", "téléchargement vu dans la super-timeline",
+            ("téléchargement",
              "la charte encadre-t-elle ce qui est téléchargé sur le poste ?")):
         for f in sujets.get(genre, ()):
             deux = str(f.get("valeur")) in confirme
-            constat("usage", quoi, str(f.get("valeur")),
+            constat("usage", str(f.get("fait") or genre), str(f.get("valeur")),
                     str(f.get("source") or "super-timeline plaso"),
                     "événements de la super-timeline, lus par le skill "
                     "forensic-linux et repris ici depuis faits.jsonl",
@@ -1311,7 +1326,8 @@ def _chercher_domaine(pieces, motif, brut, ident):
         v = str(f.get("valeur") or "")
         if not filtre.search(v):
             continue
-        yield dict(quoi="domaine vu dans la super-timeline plaso", valeur=v,
+        yield dict(quoi="domaine vu dans la super-timeline plaso",
+                   origine="plaso", valeur=v,
                    source=str(f.get("source") or "super-timeline plaso"),
                    acteur=f.get("acteur"), date=f.get("horodatage"),
                    methode=f"motif « {brut} » cherché dans les sites que la "
@@ -1719,9 +1735,10 @@ def main():
     # tous les motifs de domaine — familles fixes et règles — en un balayage
     motifs = list(FAMILLES) + [((r["regle"], brut), brut) for r in regles
                                for cle, _, _, brut in r["indices"] if cle == "domaine"]
+    sujets_plaso, confirmes_plaso = _plaso_sujets(faits)
     pieces = {"faits": faits, "fuseau": fuseau,
               "visites": _visites_par_compte(faits),
-              "plaso_sujets": _plaso_sujets(faits),
+              "plaso_sujets": sujets_plaso, "plaso_confirmes": confirmes_plaso,
               "ouvertures": _ouvertures(faits, fuseau)}
     pieces["comptes"] = etape("lecture des comptes", lire_comptes, c, Balayage(motifs), defaut={})
     pieces["inventaires"] = etape("inventaires", lire_inventaires, c, defaut={})

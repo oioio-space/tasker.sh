@@ -26,16 +26,25 @@ mkdir -p "$C"/{SYSTEME,COMPTES,JOURNAUX,RESEAU,TIMELINE} "$travail/analyse"
 mkdir -p "$travail/travail/RESEAU"
 
 manques=0
-essai() {                       # <libellé> <code attendu> <json>
-    local code
-    printf '%s' "$3" | bash "$garde" >/dev/null 2>&1
-    code=$?
-    if [[ "$code" == "$2" ]]; then
+# UN verdict, un seul endroit où « MANQUE » s'écrit et où le compteur monte.
+# Cinq fonctions portaient ce bloc recopié, dont deux qui ne différaient que
+# par un « cd » : oublier d'incrémenter dans l'une faisait DISPARAÎTRE un
+# échec du décompte, sans que rien ne le dise.
+verdict() {                     # <libellé> <attendu> <obtenu> [détail]
+    if [[ "$3" == "$2" ]]; then
         printf "  ok      %s\n" "$1"
     else
-        printf "  MANQUE  %s — code=%d, attendu %d\n" "$1" "$code" "$2"
+        printf "  MANQUE  %s — %s, attendu %s%s\n" "$1" "$3" "$2" "${4:+ ($4)}"
         manques=$((manques + 1))
     fi
+}
+
+# <libellé> <code attendu> <json> [script] [dossier de lancement]
+essai() {
+    local code
+    ( cd "${5:-$PWD}" && printf '%s' "$3" | bash "${4:-$garde}" >/dev/null 2>&1 )
+    code=$?
+    verdict "$1" "$2" "$code"
 }
 
 echo "── CE QUE LA GARDE DOIT LAISSER PASSER ──"
@@ -154,17 +163,9 @@ CRUSH_SCELLES="$travail/affaire-tk/scelles.txt:$travail/conf-tk-crush.txt" \
 mkdir -p "$travail/aff-outils/outils" "$travail/nas_rh"
 cp "$garde" "$travail/aff-outils/outils/garde-scelles.sh"
 printf '%s\n' "$travail/nas_rh" > "$travail/aff-outils/outils/scelles.txt"
-depuis_ailleurs() {             # <libellé> <code attendu> <json>
-    local code
-    ( cd / && printf '%s' "$3" \
-        | bash "$travail/aff-outils/outils/garde-scelles.sh" >/dev/null 2>&1 )
-    code=$?
-    if [[ "$code" == "$2" ]]; then printf "  ok      %s\n" "$1"
-    else printf "  MANQUE  %s — code=%d, attendu %d\n" "$1" "$code" "$2"
-         manques=$((manques + 1)); fi
-}
-depuis_ailleurs "outils/scelles.txt, lu depuis un autre dossier" 2 \
-  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/nas_rh/x\"}}"
+essai "outils/scelles.txt, lu depuis un autre dossier" 2 \
+  "{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/nas_rh/x\"}}" \
+  "$travail/aff-outils/outils/garde-scelles.sh" /
 
 # LES CHEMINS RELATIFS, résolus depuis le FICHIER qui les porte — et non
 # depuis le dossier courant. « ../scelle » dans <affaire>/outils/scelles.txt
@@ -172,15 +173,8 @@ depuis_ailleurs "outils/scelles.txt, lu depuis un autre dossier" 2 \
 mkdir -p "$travail/aff-rel/outils" "$travail/aff-rel/coffre"
 cp "$garde" "$travail/aff-rel/outils/garde-scelles.sh"
 printf '../coffre\n' > "$travail/aff-rel/outils/scelles.txt"
-d_ailleurs() {                  # <libellé> <code attendu> <depuis> <json>
-    local code
-    ( cd "$3" && printf '%s' "$4" \
-        | bash "$travail/aff-rel/outils/garde-scelles.sh" >/dev/null 2>&1 )
-    code=$?
-    if [[ "$code" == "$2" ]]; then printf "  ok      %s\n" "$1"
-    else printf "  MANQUE  %s — code=%d, attendu %d\n" "$1" "$code" "$2"
-         manques=$((manques + 1)); fi
-}
+rel_garde="$travail/aff-rel/outils/garde-scelles.sh"
+d_ailleurs() { essai "$1" "$2" "$4" "$rel_garde" "$3"; }
 j_coffre="{\"tool_name\":\"write\",\"tool_input\":{\"file_path\":\"$travail/aff-rel/coffre/x\"}}"
 d_ailleurs "« ../coffre » depuis le dossier d'affaire" 2 "$travail/aff-rel" "$j_coffre"
 d_ailleurs "« ../coffre » depuis /"                    2 "/"                "$j_coffre"
@@ -215,19 +209,18 @@ echo "── UN VERDICT SUR UN CHEMIN ──"
 v_aff="$travail/aff-verdict"
 mkdir -p "$v_aff"/{outils,scelle/{SYSTEME,COMPTES,JOURNAUX},mnt/{etc,usr,var,bin,lib}}
 cp "$garde" "$v_aff/outils/garde-scelles.sh"
-verdict_dit() {                 # <libellé> <chemin> <motif attendu>
+mode_verdict() {                # <libellé> <chemin> <motif attendu>
     local sortie
     sortie=$( cd "$v_aff" && bash outils/garde-scelles.sh --verdict "$2" 2>&1 )
-    if grep -qF "$3" <<< "$sortie"; then printf "  ok      %s\n" "$1"
-    else printf "  MANQUE  %s — attendu « %s », obtenu :\n%s\n" "$1" "$3" "$sortie"
-         manques=$((manques + 1)); fi
+    grep -qF "$3" <<< "$sortie" && sortie="$3"
+    verdict "$1" "$3" "$sortie"
 }
-verdict_dit "« scelle » relatif est reconnu"      "scelle"   "SCELLÉ"
-verdict_dit "« ./scelle » aussi"                  "./scelle" "SCELLÉ"
-verdict_dit "« mnt » est une IMAGE, pas un scellé" "mnt"     "IMAGE"
-verdict_dit "le chemin RÉSOLU est affiché"        "scelle"   "$v_aff/scelle"
-verdict_dit "un rapport à créer reste libre"      "rapport.md" "libre"
-verdict_dit "un parent absent est DIT"            "nulle/part/x" "NE DÉSIGNE RIEN"
+mode_verdict "« scelle » relatif est reconnu"      "scelle"   "SCELLÉ"
+mode_verdict "« ./scelle » aussi"                  "./scelle" "SCELLÉ"
+mode_verdict "« mnt » est une IMAGE, pas un scellé" "mnt"     "IMAGE"
+mode_verdict "le chemin RÉSOLU est affiché"        "scelle"   "$v_aff/scelle"
+mode_verdict "un rapport à créer reste libre"      "rapport.md" "libre"
+mode_verdict "un parent absent est DIT"            "nulle/part/x" "NE DÉSIGNE RIEN"
 # Et le code de sortie : 1 seulement quand un chemin ne désigne rien.
 ( cd "$v_aff" && bash outils/garde-scelles.sh --verdict scelle >/dev/null 2>&1 )
 [[ $? == 0 ]] && printf "  ok      un chemin réel rend 0\n" \
@@ -240,35 +233,38 @@ echo "── LA GARDE SE CONTRÔLE ELLE-MÊME ──"
 aff="$travail/affaire-essai"
 mkdir -p "$aff"/{outils,scelle,mnt}
 
-verdict() {                     # <libellé> <code attendu> <motif attendu>
-    local sortie code
-    sortie=$(bash "$garde" --essai "$aff" 2>&1); code=$?
-    if [[ "$code" == "$2" ]] && grep -qF "$3" <<< "$sortie"; then
-        printf "  ok      %s\n" "$1"
-    else
-        printf "  MANQUE  %s — code=%d (attendu %s), sortie :\n%s\n" \
-               "$1" "$code" "$2" "$sortie"
-        manques=$((manques + 1))
-    fi
+# La sortie de --essai est prise UNE fois, puis relue autant qu'on veut :
+# trois assertions d'affilée relançaient trois essais complets, chacun une
+# quinzaine de python3.
+essai_courant=""
+essai_code=0
+relancer_essai() { essai_courant=$(bash "$garde" --essai "$aff" 2>&1); essai_code=$?; }
+mode_essai() {                  # <libellé> <code attendu> <motif attendu>
+    local vu="code $essai_code"
+    grep -qF "$3" <<< "$essai_courant" || vu="$vu, « $3 » absent"
+    verdict "$1" "code $2" "$vu" "$(head -3 <<< "$essai_courant")"
 }
 
 # Rien de monté : c'est le cas qu'un « code 0 » tapé à la main ne distinguait
 # PAS d'une garde cassée. Ici il est nommé, et l'essai échoue.
-verdict "rien de monté : l'essai le DIT" 1 "AUCUN SCELLÉ RECONNU"
+relancer_essai
+mode_essai "rien de monté : l'essai le DIT" 1 "AUCUN SCELLÉ RECONNU"
 
 # Un scellé, reconnu à sa structure sous un nom quelconque.
 mkdir -p "$aff/scelle"/{SYSTEME,COMPTES,JOURNAUX}
-verdict "un scellé monté : la garde mord" 0 "la garde mord."
-verdict "et l'essai le nomme SCELLÉ" 0 "SCELLÉ"
-verdict "sans image, il le dit sans échouer" 0 "aucune image montée"
+relancer_essai
+mode_essai "un scellé monté : la garde mord" 0 "la garde mord."
+mode_essai "et l'essai le nomme SCELLÉ" 0 "SCELLÉ"
+mode_essai "sans image, il le dit sans échouer" 0 "aucune image montée"
 
 # Une image : l'écriture refusée, la LECTURE libre — c'est tout l'intérêt.
 mkdir -p "$aff/mnt"/{etc,usr,var,home,root,boot}
-verdict "une image montée : lecture libre" 0 "lecture libre"
+relancer_essai
+mode_essai "une image montée : lecture libre" 0 "lecture libre"
 
 # Le dossier d'analyse lui-même doit rester écrivable : une garde qui refuse
 # tout est aussi cassée qu'une garde qui ne refuse rien.
-verdict "le rapport reste écrivable" 0 "le rapport peut y être écrit"
+mode_essai "le rapport reste écrivable" 0 "le rapport peut y être écrit"
 
 # Le mode --essai ne doit pas changer le comportement normal : sans argument,
 # la garde lit toujours son JSON sur l'entrée standard.

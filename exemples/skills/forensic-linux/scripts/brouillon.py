@@ -510,10 +510,15 @@ def main():
             n = f.get("occurrences") or 0
             S.append(f"\n**{f['valeur']}** — {n} trace{'s' if n > 1 else ''} "
                      f"({f['id']})\n")
-            for m in str(f.get("note") or "").split(". C'est un RAPPROCHEMENT")[0] \
-                    .split(" ; "):
-                if m.strip():
-                    S.append(f"- {m.strip()}")
+            # Le CHAMP, pas la prose. Refendre la note sur « ; » puis sur les
+            # premiers mots de la réserve faisait dépendre le rapport d'une
+            # phrase française que l'extracteur peut reformuler — et
+            # brouillon.py porte lui-même, vingt lignes plus haut, l'invariant
+            # « sélection sur le RÔLE, jamais sur le libellé ».
+            for sujet, d in (f.get("sujets") or {}).items():
+                n_, exemples = (d + [None, None])[:2] if isinstance(d, list) else (d, [])
+                S.append(f"- {sujet} : {n_} trace{'s' if (n_ or 0) > 1 else ''}"
+                         + (f" ({', '.join(exemples)})" if exemples else ""))
         S.append("")
     # DEUX SOURCES INDÉPENDANTES. C'est ce qui distingue un indice d'un fait
     # établi, et c'est la première chose qu'un lecteur de rapport cherche.
@@ -543,7 +548,16 @@ def main():
                  "quelles dates, quels analyseurs ont tourné.\n")
     sujets = par_role("plaso-sujet")
     if sujets:
-        for genre, titre in PLASO_TABLEAUX:
+        # Sur les genres PRÉSENTS, pas sur une liste recopiée : un huitième
+        # sujet ajouté côté extracteur ne sortait ni en tableau, ni en
+        # « limite » — produit et invisible. Le titre a un repli sur le genre
+        # brut, comme _GENRE_CHAINE : « honnête à défaut d'être élégant ».
+        vus = list(dict.fromkeys(f.get("genre") for f in sujets))
+        ordre = [g for g, _ in PLASO_TABLEAUX]
+        vus.sort(key=lambda g: ordre.index(g) if g in ordre else len(ordre))
+        titres = dict(PLASO_TABLEAUX)
+        for genre in vus:
+            titre = titres.get(genre, f"Sujet « {genre} »")
             lignes = [f for f in sujets if f.get("genre") == genre]
             if not lignes:
                 continue

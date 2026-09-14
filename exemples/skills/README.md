@@ -734,13 +734,14 @@ garantie réelle ; le reste est une ceinture.
 
 Un partage NAS, un dossier d'affaire, une extraction à part : ce qui n'est pas
 une collecte et doit quand même être intouchable se **liste un par ligne**, en
-plus de la reconnaissance par structure et jamais à sa place. **Trois
+plus de la reconnaissance par structure et jamais à sa place. **Quatre
 emplacements sont lus, et leurs listes s'additionnent** — posez le fichier où
 vous voulez parmi ceux-là :
 
 | fichier | portée |
 |---|---|
-| `<affaire>/outils/scelles.txt` | cette machine-là, rangé à côté du script |
+| `<à côté du script>/scelles.txt` | repéré par le chemin du script, où qu'on appelle la garde |
+| `<affaire>/outils/scelles.txt` | le même, quand la garde est installée ailleurs |
 | `<affaire>/scelles.txt` | cette machine-là, à la racine |
 | `~/.config/crush/scelles.txt` | le poste, toutes affaires |
 
@@ -779,12 +780,15 @@ chemin absolu reste absolu.
 La liste sert aux dossiers que la **structure ne peut pas reconnaître** : un
 partage NAS, un dossier d'affaire, une extraction posée à part.
 
-`CRUSH_SCELLES` remplace les deux et accepte plusieurs chemins séparés par
-`:`, comme `PATH`. Ce que la garde a lu se voit dans `--essai` :
+`CRUSH_SCELLES` les remplace tous et accepte plusieurs chemins séparés par
+`:`, comme `PATH`. Ce que la garde a lu se voit dans `--essai`, qui compose sa
+liste **par le même code** que le hook — il la recomposait à sa façon, et les
+deux ne coïncidaient que si le script était sous `<affaire>/outils/` :
 
     garde des scellés — essai sur /home/…/analyse/PC01_B13_SYCOBS_LINUX
-      liste déclarée : /home/…/analyse/PC01_B13_SYCOBS_LINUX/scelles.txt
-      liste déclarée : /home/…/.config/crush/scelles.txt
+      liste lue : /home/…/analyse/PC01_B13_SYCOBS_LINUX/outils/scelles.txt
+      liste lue : /home/…/.config/crush/scelles.txt
+      déclaré : /mnt/nas_sycobs/partage_rh
 
 **N'ancrez pas ce chemin sur le dossier courant** — ni `./scelles.txt`, ni
 `$PWD/outils/scelles.txt`. Crush lance bien le hook dans le dossier du projet,
