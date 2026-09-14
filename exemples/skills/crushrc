@@ -24,7 +24,11 @@
 # complet. Ne « source » jamais un fichier que vous n'avez pas lu.
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/crush"
+BASE_URL="http://dgx.local:8000/v1"      # LE serveur, nommé une fois
 MODELE="dgx/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B"
+# Le même modèle, sur le même serveur, déclaré une seconde fois sans
+# raisonnement — voyez « le titre de session » plus bas.
+MODELE_DIRECT="dgx-direct/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B"
 
 # ── le serveur d'inférence ────────────────────────────────────────────
 # Réglages tirés de la carte du modèle : temperature 1.0 et top_p 0.95 pour
@@ -34,7 +38,7 @@ MODELE="dgx/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B"
 provider add dgx \
     --name "Nemotron 3 Super (DGX)" \
     --type openai-compat \
-    --base-url "http://dgx.local:8000/v1" \
+    --base-url "$BASE_URL" \
     --api-key "sans-objet" \
     --discover-models false \
     --extra-body '{"chat_template_kwargs":{"enable_thinking":true}}'
@@ -85,7 +89,52 @@ model add "$MODELE" \
 # 16000 laisse de quoi l'absorber. C'est un choix de sécurité, pas un optimum :
 # montez-le si les réponses sont tronquées, baissez-le au moindre Bad Request.
 model large "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 16000
-model small "$MODELE" --temperature 1.0 --top-p 0.95 --max-tokens 8000
+
+# ── LE TITRE DE SESSION COÛTAIT AUTANT QU'UNE RÉPONSE ─────────────────
+# Crush demande au modèle de nommer la session à chaque lancement. Avec
+# can-reason true il alloue default-max-tokens — 16 000 jetons — au lieu
+# de 40 (internal/agent/agent.go : « tok := int64(40) ; if CanReason {
+# tok = DefaultMaxTokens } »), et l'extra-body force enable_thinking sur
+# TOUTES les requêtes, celle-là comprise. Nemotron raisonnait donc, avec
+# 16 000 jetons de budget, pour écrire cinq mots de titre. Capturé avec
+# un faux vLLM : max_tokens=16000, enable_thinking=true.
+#
+# Second fournisseur : MÊME serveur, même URL, même modèle — sans
+# raisonnement et avec un budget de 64 jetons. Le « small » y pointe, et
+# c'est la seule chose qu'il sert ici : le résumé de contexte, lui, passe
+# par le modèle LARGE (agent.go:1336). Capturé après : max_tokens=40,
+# enable_thinking=false. L'agent ne change pas — il raisonne toujours, là
+# où ça sert.
+provider add dgx-direct \
+    --name "Nemotron 3 Super (DGX) — sans raisonnement" \
+    --type openai-compat \
+    --base-url "$BASE_URL" \
+    --api-key "sans-objet" \
+    --discover-models false \
+    --extra-body '{"chat_template_kwargs":{"enable_thinking":false}}'
+model add "$MODELE_DIRECT" \
+    --name "Nemotron 3 Super — titre seulement" \
+    --context-window 240000 \
+    --default-max-tokens 64 \
+    --can-reason false \
+    --supports-images false \
+    --price-input 0 \
+    --price-output 0
+model small "$MODELE_DIRECT" --temperature 1.0 --top-p 0.95 --max-tokens 64
+
+# ── LES OUTILS QU'ON N'A PAS ──────────────────────────────────────────
+# Les définitions d'outils repartent À CHAQUE requête : 23 232 octets sur
+# 47 431, soit 48 % de ce qu'on envoie. Sur un poste hors ligne, sans
+# serveur de langage, sans réseau et sans MCP, dix-neuf d'entre eux ne
+# peuvent rien faire. Capturé : 22 outils et 11 857 jetons avant, 9 outils
+# et 9 575 jetons après — 19 % de moins sur CHAQUE appel, sans rien perdre.
+# « deny » les retire de l'agent (options.disabled_tools), là où « allow »
+# ne fait que sauter la demande de permission.
+permissions deny fetch agentic_fetch sourcegraph download
+permissions deny lsp_diagnostics lsp_references lsp_restart lsp_symbols
+permissions deny lsp_definition lsp_call_hierarchy lsp_rename lsp_replace_symbol
+permissions deny list_mcp_resources read_mcp_resource
+permissions deny multiedit crush_logs crush_info job_output job_kill
 
 # NB : --think et --reasoning-effort seraient INERTES ici. reasoning_effort
 # exige que le modèle déclare reasoning_levels, et « think » n'est traduit que

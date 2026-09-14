@@ -114,9 +114,35 @@
     "vLLM avec VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 et --max-model-len 1048576. Si vous le",
     "faites, montez cette valeur à 1048576 ici aussi. Voir README.md §9.",
     "",
-    "Crush veut un modèle « large » et un « small » (les sous-agents, les résumés). Le DGX",
-    "n'en sert qu'un : small est donc le même, avec un budget de réponse plus court. Si un",
-    "second modèle est servi (un Nemotron Nano, par exemple), c'est ici qu'il se déclare."
+    "DEUX FOURNISSEURS, UN SEUL SERVEUR — et c'est une optimisation, pas une complication.",
+    "Mesuré en capturant les requêtes que Crush envoie vraiment, avec un faux vLLM :",
+    "",
+    "  LE TITRE DE SESSION coûtait autant qu'une réponse. Crush demande au modèle de nommer",
+    "  la session à chaque « crush run ». Avec can_reason=true, il alloue default_max_tokens",
+    "  — 16 000 jetons — au lieu de 40 (agent.go : « tok := int64(40) ; if CanReason { tok =",
+    "  DefaultMaxTokens } »), et extra_body force enable_thinking sur TOUTES les requêtes,",
+    "  celle-là comprise. Nemotron raisonnait donc, avec 16 000 jetons de budget, pour",
+    "  écrire cinq mots de titre. Capturé : max_tokens=16000, enable_thinking=true.",
+    "",
+    "  « dgx-direct » est le même serveur, la même URL, le même modèle — sans raisonnement",
+    "  et avec un budget de 64 jetons. Le « small » y pointe. Capturé après : max_tokens=40,",
+    "  enable_thinking=false. L'agent, lui, ne change pas : il raisonne toujours, là où ça",
+    "  sert. C'est la seule chose que « small » sert ici (le résumé de contexte, lui, passe",
+    "  par le modèle LARGE — agent.go:1336).",
+    "",
+    "  LES OUTILS QU'ON N'A PAS. Les définitions d'outils sont renvoyées À CHAQUE requête :",
+    "  23 232 octets sur 47 431, soit 48 % de la requête. Sur un poste hors ligne sans",
+    "  serveur de langage, sans réseau et sans MCP, dix-neuf d'entre eux ne peuvent rien",
+    "  faire. Capturé : 22 outils et 11 857 jetons avant, 9 outils et 9 575 jetons après,",
+    "  soit 19 % de moins SUR CHAQUE APPEL, sans rien perdre — agent, bash, edit, glob,",
+    "  grep, ls, todos, view et write restent.",
+    "",
+    "  CÔTÉ vLLM, le plus gros levier n'est pas ici : les 9 575 jetons d'en-tête (invite",
+    "  système + outils) sont IDENTIQUES d'un tour à l'autre. Servez avec",
+    "  --enable-prefix-caching et ce préfixe n'est calculé qu'une fois.",
+    "",
+    "Si un second modèle est servi (un Nemotron Nano, par exemple), c'est dans « small »",
+    "qu'il se déclare — il ira encore plus vite."
   ],
   "providers": {
     "dgx": {
@@ -142,6 +168,30 @@
           "cost_per_1m_out": 0
         }
       ]
+    },
+    "dgx-direct": {
+      "name": "Nemotron 3 Super (DGX) — sans raisonnement",
+      "type": "openai-compat",
+      "base_url": "http://dgx.local:8000/v1",
+      "api_key": "sans-objet",
+      "discover_models": false,
+      "extra_body": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "models": [
+        {
+          "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
+          "name": "Nemotron 3 Super 120B-A12B",
+          "context_window": 240000,
+          "default_max_tokens": 64,
+          "can_reason": false,
+          "supports_attachments": false,
+          "cost_per_1m_in": 0,
+          "cost_per_1m_out": 0
+        }
+      ]
     }
   },
   "models": {
@@ -153,11 +203,11 @@
       "max_tokens": 16000
     },
     "small": {
-      "provider": "dgx",
+      "provider": "dgx-direct",
       "model": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B",
       "temperature": 1.0,
       "top_p": 0.95,
-      "max_tokens": 8000
+      "max_tokens": 64
     }
   },
   "permissions": {
@@ -174,7 +224,22 @@
       "fetch",
       "agentic_fetch",
       "sourcegraph",
-      "download"
+      "download",
+      "lsp_diagnostics",
+      "lsp_references",
+      "lsp_restart",
+      "lsp_symbols",
+      "lsp_definition",
+      "lsp_call_hierarchy",
+      "lsp_rename",
+      "lsp_replace_symbol",
+      "list_mcp_resources",
+      "read_mcp_resource",
+      "multiedit",
+      "crush_logs",
+      "crush_info",
+      "job_output",
+      "job_kill"
     ],
     "disable_provider_auto_update": true,
     "disable_metrics": true

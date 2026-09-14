@@ -1227,6 +1227,62 @@ Dans le doute, la valeur servie fait foi et se lit sur le serveur :
 
     curl -s http://dgx.local:8000/v1/models | python3 -m json.tool
 
+### Trois choses qui font gagner du temps, mesurées
+
+Crush renvoie **tout** à chaque tour : l'invite système, les définitions
+d'outils, la conversation. Une requête d'agent a été capturée en pointant
+`base_url` sur un faux vLLM qui enregistre le corps — voici ce qu'elle contient.
+
+    invite système       23 518 o   ≈ 5 879 jetons  (celle de Crush, non modifiable)
+    définitions d'outils 23 232 o   ≈ 5 808 jetons  (48 % de la requête)
+    la conversation         442 o
+    ────────────────────────────────
+    total                47 431 o   ≈ 11 857 jetons, à CHAQUE appel
+
+**1 · Retirer les outils qui n'existent pas ici.** Sur un poste hors ligne,
+sans serveur de langage, sans réseau et sans MCP, dix-neuf des vingt-deux
+outils ne peuvent rien faire — et leur schéma repart quand même à chaque
+requête. `options.disabled_tools` les retire de l'agent (`permissions deny`
+en `crushrc`). Mesuré :
+
+| | outils | jetons par requête |
+|---|---|---|
+| avant | 22 | 11 857 |
+| après | 9 | **9 575** — 19 % de moins |
+
+Restent `agent`, `bash`, `edit`, `glob`, `grep`, `ls`, `todos`, `view`,
+`write` : tout ce dont les deux skills se servent.
+
+**2 · Le titre de session coûtait autant qu'une réponse.** Crush demande au
+modèle de nommer la session à chaque lancement. Avec `can_reason: true` il
+alloue `default_max_tokens` — **16 000 jetons** — au lieu de 40
+(`internal/agent/agent.go` : `tok := int64(40)` puis `if CanReason { tok =
+DefaultMaxTokens }`), et `extra_body` force `enable_thinking` sur **toutes**
+les requêtes, celle-là comprise. Nemotron raisonnait donc, avec 16 000 jetons
+de budget, pour écrire cinq mots. Capturé :
+
+    requête TITRE   max_tokens=16000   enable_thinking=true
+
+La correction est un **second fournisseur sur le même serveur** — même URL,
+même modèle — sans raisonnement et avec un budget de 64 jetons, sur lequel
+pointe le modèle `small`. C'est la seule chose que `small` sert ici : le
+résumé de contexte, lui, passe par le modèle **large** (`agent.go:1336`).
+Capturé après :
+
+    requête TITRE   max_tokens=40      enable_thinking=false
+    requête AGENT   max_tokens=16000   enable_thinking=true   ← inchangé
+
+L'agent raisonne toujours, là où ça sert. Les deux formes livrées — `crush.json`
+et `crushrc` — le font, et rendent la même configuration.
+
+**3 · Le plus gros levier n'est pas dans Crush.** Les ~9 600 jetons d'en-tête
+(invite système + outils) sont **identiques d'un tour à l'autre**. Servez avec
+`--enable-prefix-caching` et ce préfixe n'est calculé qu'une fois au lieu d'être
+re-préfixé à chaque appel. C'est le réglage vLLM qui compte le plus ici.
+
+Si un second modèle est servi (un Nemotron Nano, par exemple), c'est dans
+`small` qu'il se déclare — le titre ira encore plus vite.
+
 ### Ce qui reste à confirmer sur votre poste
 
 Deux points n'ont pas pu être tranchés sans lancer Crush contre votre serveur,
