@@ -465,18 +465,57 @@ deux des champs `data_type`, `timestamp_desc`, `parser`, `__container_type__`,
 
 **Ce que l'extraction en fait — et ne fait pas.** Une super-timeline compte des
 millions de lignes ; les recopier en faits n'apprendrait rien et noierait le
-rapport. `extraire.py` en tire quatre choses :
+rapport. `extraire.py` en tire cinq choses :
 
-1. un **recensement** — combien d'événements, sur quelle période, combien de
+1. **CE QUI S'EST PASSÉ** — le point le plus important, et celui qui manquait.
+   Compter les événements, c'est s'arrêter sur le seuil : « 495 événements pour
+   jdupont » ne dit ni où il est allé, ni ce qu'il a branché, ni ce qu'il a
+   lancé. Le `data_type` NOMME la nature de chaque événement, et les champs
+   propres en portent la valeur. Sept sujets en sortent, chacun avec ses valeurs
+   les plus vues, leur compte, leurs dates et le compte auquel elles se
+   rattachent :
+
+   | sujet | d'où il vient | ce qu'il répond |
+   |---|---|---|
+   | `support` | `/media/<compte>/<étiquette>`, `/run/media/…`, `/mnt/…`, et les lignes `New USB device found` du journal | ce qu'il a branché |
+   | `site` | le champ `url`, réduit à son **hôte** | où il est allé |
+   | `téléchargement` | `url` d'un `file_downloaded` | ce qu'il a récupéré |
+   | `commande` | `bash:history`, `shell:*`, `*:command` | ce qu'il a lancé |
+   | `connexion` | `utmp`, `lastlog`, `*:login` | qui s'est connecté, depuis où |
+   | `paquet` | `dpkg`, `rpm`, `apt` | ce qui a été installé |
+   | `document` | un chemin qui finit par une extension de document | quels fichiers ont été touchés |
+
+   L'**hôte** et non l'URL entière : les paramètres d'une requête portent
+   souvent un identifiant, qui n'a rien à faire dans un rapport. Le point de
+   montage d'un support, lui, NOMME le compte qui l'a monté — c'est une
+   attribution plus forte que le dossier personnel, puisqu'un service n'écrit
+   pas sous `/media/<compte>/`.
+
+   Puis, par-dessus, un **récit jour par jour** : pour les douze journées les
+   plus chargées, une ligne par sujet, avec trois exemples nommés. C'est la
+   forme que prend un récit quand on refuse d'inventer — des traces comptées,
+   rapprochées par le calendrier, et rien d'autre qui les relie :
+
+       2026-01-05 — 18 traces
+       - support : 10 traces (SYCOBS_USB, New USB device found, idVendor=0951…)
+       - site : 4 traces (www.yggtorrent.wtf, mail.google.com, wetransfer.com)
+       - téléchargement : 1 trace (wetransfer.com)
+       - commande : 3 traces (scp -r Documents/ ailleurs:/tmp, history -c…)
+
+   Les tables sont **bornées** : 4 000 valeurs distinctes par sujet retenues,
+   les 15 plus fréquentes citées, et les bornes se disent. Un disque porte des
+   centaines de milliers de chemins ; sans borne, la table croîtrait avec le
+   fichier ;
+2. un **recensement** — combien d'événements, sur quelle période, combien de
    familles d'artefact (`data_type`) et d'analyseurs (`parser`), avec les 25
    familles les plus nombreuses. C'est lui qui dit ce que la pièce PEUT
    répondre : lisez-le avant de lui demander quoi que ce soit ;
-2. les **questions déjà posées** par les autres faits — un fichier téléchargé,
+3. les **questions déjà posées** par les autres faits — un fichier téléchargé,
    un point de montage amovible — rejouées sur plaso, avec la même exigence que
    sur mactime : « fichier retrouvé » vaut **au chemin annoncé**, « fichier de
    MÊME NOM » est une homonymie, sans acteur ;
-3. les **chemins sensibles**, bornés à 300, et la borne se dit ;
-4. un fait `limite` comptant les lignes qu'il n'a pas su lire ou dater.
+4. les **chemins sensibles**, bornés à 300, et la borne se dit ;
+5. un fait `limite` comptant les lignes qu'il n'a pas su lire ou dater.
 
 **Et trois RECOUPEMENTS avec le reste des faits** — c'est là qu'une
 super-timeline vaut plus que la somme de ses lignes :

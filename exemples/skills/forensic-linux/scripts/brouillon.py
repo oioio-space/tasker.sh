@@ -144,7 +144,18 @@ EVENEMENTS = ("evenement", "support", "telechargement", "paquet", "suspect",
               "persistance", "usage", "timeline", "plaso")
 # Ce que le § 5 montre déjà : le réimprimer dans la chronologie du § 6 ferait
 # compter deux fois le même identifiant.
-ROLES_HORS_CHRONO = ("plaso-recensement", "plaso-famille", "rapprochement-chemin")
+ROLES_HORS_CHRONO = ("plaso-recensement", "plaso-famille", "rapprochement-chemin",
+                     "plaso-sujet", "plaso-journee")
+# Les sujets d'une super-timeline, dans l'ordre où un rapport les lit — et le
+# titre de leur tableau. Le MÊME ordre que PLASO_SUJETS côté extracteur : c'est
+# celui qui répond d'abord aux questions qu'on pose d'un poste.
+PLASO_TABLEAUX = (("support", "Ce qui a été branché"),
+                  ("site", "Où il a été"),
+                  ("téléchargement", "Ce qui a été téléchargé"),
+                  ("commande", "Ce qui a été lancé"),
+                  ("connexion", "Qui s'est connecté"),
+                  ("paquet", "Ce qui a été installé"),
+                  ("document", "Quels documents ont été touchés"))
 SESSION_MAX = timedelta(hours=12)      # une session sans fin connue ne dure pas plus
 RE_OU = re.compile(r'(tty [^\s,]+|depuis [^\s,]+|port [\d.-]+|/run/media/\S+|/dev/sd\w+)')
 RE_VISITES = re.compile(r'(\d+) visite')
@@ -485,6 +496,38 @@ def main():
         S.append("\n" + table(["famille d'artefact", "événements", "id"],
                               [(f["valeur"], f.get("occurrences"), f["id"])
                                for f in familles]))
+    # CE QUI S'EST PASSÉ, et pas seulement combien de fois. Un recensement
+    # d'événements ne répond à aucune des questions d'un rapport : le tableau
+    # des familles dit « 12 000 fs:stat », ce qui n'apprend rien à personne.
+    journees = par_role("plaso-journee")
+    if journees:
+        S.append("\n### Ce que la super-timeline raconte, jour par jour\n")
+        S.append("Les journées les plus chargées, et ce qu'on y lit. Chaque "
+                 "ligne est **comptée**, pas interprétée : ce sont des traces "
+                 "rapprochées par le calendrier, et rien d'autre ne les relie.\n")
+        for f in sorted(journees, key=lambda x: x["valeur"]):
+            n = f.get("occurrences") or 0
+            S.append(f"\n**{f['valeur']}** — {n} trace{'s' if n > 1 else ''} "
+                     f"({f['id']})\n")
+            for m in str(f.get("note") or "").split(". C'est un RAPPROCHEMENT")[0] \
+                    .split(" ; "):
+                if m.strip():
+                    S.append(f"- {m.strip()}")
+        S.append("")
+    sujets = par_role("plaso-sujet")
+    if sujets:
+        for genre, titre in PLASO_TABLEAUX:
+            lignes = [f for f in sujets if f.get("genre") == genre]
+            if not lignes:
+                continue
+            S.append(f"\n**{titre}** — d'après la super-timeline :\n")
+            S.append(table(["ce qui a été vu", "traces", "dernier", "compte", "id"],
+                           [(f["valeur"], f.get("occurrences"), quand(f),
+                             f.get("acteur"), f["id"]) for f in lignes]))
+        S.append("\n> Ces lignes viennent des ÉVÉNEMENTS de plaso, pas d'une "
+                 "lecture de la pièce elle-même : un chemin sous un dossier "
+                 "personnel ne prouve pas que la personne a agi. Confirmez sur "
+                 "la pièce citée avant d'en tirer une conclusion.\n")
     if maisons:
         S.append("\n**Par compte**, d'après le chemin des événements :\n")
         S.append(table(["compte", "événements", "dernier", "id"],

@@ -811,6 +811,7 @@ def lire(chemin, cle):
 # passer un contrôle rouge pour un plantage de toute la suite.
 EXTRAIRE = os.path.join(SKILLS, "forensic-linux", "scripts", "extraire.py")
 CONTROLES = os.path.join(SKILLS, "conformite-linux", "scripts", "controles.py")
+BROUILLON = os.path.join(SKILLS, "forensic-linux", "scripts", "brouillon.py")
 
 
 def coin_collecte(coin, nom, *dossiers):
@@ -1300,6 +1301,115 @@ def pieces_abimees(base):
     yield ("plaso : le trou entre dans le tableau des périodes",
            trou.get("jours") == 46 and trou.get("valeur") == "2026-01-05 → 2026-02-20",
            f"{trou.get('jours')} jours, {trou.get('valeur')}")
+
+    # ── 6 quater bis · CE QUE LA SUPER-TIMELINE RACONTE ──
+    # Compter les événements, c'est s'arrêter sur le seuil : « 495 événements
+    # pour jdupont » ne dit ni où il est allé, ni ce qu'il a branché, ni ce
+    # qu'il a lancé. plaso porte tout cela, et le data_type le nomme.
+    r4 = collecte("plaso-recit", "SYSTEME", "COMPTES", "PLASO")
+    with open(os.path.join(r4, "COMPTES", "PC42_B12_ARTE_ubuntu_passwd.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("jdupont:x:1000:1000::/home/jdupont:/bin/bash\n"
+                 "marie:x:1001:1001::/home/marie:/bin/bash\n")
+    rec = []
+    for i, u in enumerate(("https://www.yggtorrent.wtf/search?q=x",
+                           "https://www.yggtorrent.wtf/torrent/42",
+                           "https://mail.google.com/mail")):
+        rec.append({"data_type": "chrome:history:page_visited",
+                    "parser": "chrome_history", "url": u,
+                    "timestamp": (epoch("2026-01-05T10:00:00") + i * 300) * US,
+                    "timestamp_desc": "Last Visited Time"})
+    rec.append({"data_type": "chrome:history:file_downloaded",
+                "parser": "chrome_history",
+                "url": "https://wetransfer.com/dl/dossier-clients.zip",
+                "filename": "/home/jdupont/Téléchargements/dossier-clients.zip",
+                "timestamp": epoch("2026-01-05T10:30:00") * US,
+                "timestamp_desc": "Start Time"})
+    # Un support amovible : le point de montage porte l'étiquette ET le compte
+    # qui l'a monté — un service n'écrit pas sous /media/<compte>/.
+    rec += [{"data_type": "fs:stat", "parser": "filestat",
+             "timestamp": (epoch("2026-01-05T11:00:00") + i * 60) * US,
+             "timestamp_desc": "crtime",
+             "filename": f"/media/jdupont/SYCOBS_USB/client{i}.xlsx"}
+            for i in range(9)]
+    rec += [{"data_type": "fs:stat", "parser": "filestat",
+             "timestamp": (epoch("2026-01-05T12:00:00") + i * 60) * US,
+             "timestamp_desc": "crtime",
+             "filename": f"/run/media/marie/PERSO/photo{i}.jpg"} for i in range(4)]
+    rec += [{"data_type": "bash:history:command", "parser": "bash_history",
+             "timestamp": (epoch("2026-01-05T11:30:00") + i * 120) * US,
+             "timestamp_desc": "Command Executed", "command": cmd}
+            for i, cmd in enumerate(("scp -r Documents/ ailleurs:/tmp",
+                                     "history -c"))]
+    rec.append({"data_type": "syslog:line", "parser": "syslog",
+                "timestamp": epoch("2026-01-05T10:55:00") * US,
+                "timestamp_desc": "Content Modification Time",
+                "filename": "/var/log/syslog",
+                "body": "kernel: usb 2-1: New USB device found, idVendor=0951"})
+    rec.append({"data_type": "dpkg:line", "parser": "dpkg",
+                "timestamp": epoch("2026-01-06T09:00:00") * US,
+                "timestamp_desc": "Content Modification Time",
+                "body": "install transmission-cli 3.00"})
+    rec += [{"data_type": "fs:stat", "parser": "filestat",
+             "timestamp": (epoch("2026-01-07T14:00:00") + i * 60) * US,
+             "timestamp_desc": "mtime",
+             "filename": f"/home/jdupont/Documents/rapport{i}.odt"} for i in range(3)]
+    with open(os.path.join(r4, "PLASO", "PC42_B12_ARTE_ubuntu_plaso.jsonl"),
+              "w", encoding="utf-8") as fh:
+        for e in rec:
+            fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+    sortie4 = os.path.join(coin, "plaso-recit.jsonl")
+    _, f4 = tourner(EXTRAIRE, r4, sortie4)
+    vu = {}
+    for x in f4:
+        if x.get("role") == "plaso-sujet":
+            vu.setdefault(x.get("genre"), []).append(x)
+    def val(genre):
+        return {x["valeur"] for x in vu.get(genre, ())}
+    yield ("plaso : où il est allé",
+           val("site") == {"www.yggtorrent.wtf", "mail.google.com"},
+           f"{sorted(val('site')) or 'AUCUN SITE'} — l'hôte, pas la requête, "
+           "qui porte souvent un identifiant")
+    yield ("plaso : ce qu'il a branché",
+           {"SYCOBS_USB", "PERSO"} <= val("support"),
+           f"{sorted(val('support')) or 'AUCUN SUPPORT'}")
+    # Le point de montage NOMME le compte : c'est une attribution plus forte
+    # que le dossier personnel, et elle se perdait entièrement.
+    portes = {x["valeur"]: x.get("acteur") for x in vu.get("support", ())}
+    yield ("plaso : le support est attribué au compte qui l'a monté",
+           portes.get("SYCOBS_USB") == "jdupont" and portes.get("PERSO") == "marie",
+           f"{portes or 'AUCUN'}")
+    yield ("plaso : ce qu'il a lancé",
+           any("scp -r" in v for v in val("commande")),
+           f"{sorted(val('commande')) or 'AUCUNE COMMANDE'}")
+    yield ("plaso : ce qu'il a téléchargé",
+           val("téléchargement") == {"wetransfer.com"},
+           f"{sorted(val('téléchargement')) or 'AUCUN'}")
+    yield ("plaso : ce qui a été installé",
+           any("transmission" in v for v in val("paquet")),
+           f"{sorted(val('paquet')) or 'AUCUN PAQUET'}")
+    yield ("plaso : les documents touchés",
+           val("document") == {f"Documents/rapport{i}.odt" for i in range(3)},
+           f"{sorted(val('document')) or 'AUCUN'} — deux segments, pas le "
+           "chemin entier qui remplit la ligne")
+    # Le RÉCIT : une journée, une phrase, avec des exemples nommés.
+    jours_dits = {x["valeur"]: str(x.get("note") or "")
+                  for x in f4 if x.get("role") == "plaso-journee"}
+    n5 = jours_dits.get("2026-01-05", "")
+    yield ("plaso : la journée se raconte",
+           "SYCOBS_USB" in n5 and "yggtorrent" in n5 and "scp -r" in n5,
+           f"{n5[:90] or 'AUCUNE JOURNÉE'}")
+    # Et tout cela doit ATTEINDRE le rapport : produit et invisible, c'est
+    # exactement ce que le dépôt a déjà payé une fois.
+    rap4 = os.path.join(coin, "plaso-recit.md")
+    subprocess.run([sys.executable, BROUILLON, sortie4, "-o", rap4],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    texte4 = open(rap4, encoding="utf-8").read()
+    yield ("plaso : le récit atteint le rapport",
+           all(x in texte4 for x in ("Ce qui a été branché", "Où il a été",
+                                     "SYCOBS_USB", "yggtorrent",
+                                     "jour par jour")),
+           "titres, supports, sites et journées dans rapport-forensic.md")
 
     # ── 6 quinquies · les unités de dfdatetime ──
     # Un plaso récent sérialise « date_time » comme un objet dfdatetime, dont le

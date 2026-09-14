@@ -2655,6 +2655,102 @@ def _plaso_chemin(e):
     return ""
 
 
+# ── CE QU'UNE SUPER-TIMELINE RACONTE ──────────────────────────────────────
+#
+# « 495 événements pour jdupont » ne répond à AUCUNE des questions d'un
+# rapport : où est-il allé, qu'a-t-il branché, qu'a-t-il lancé, qu'a-t-il
+# téléchargé. plaso porte tout cela — le « data_type » NOMME la nature de
+# l'événement, et les champs propres portent la valeur. Compter les événements
+# sans les lire, c'était s'arrêter sur le seuil.
+#
+# On se range sur le data_type et sur les champs propres, pas sur le message :
+# balayer le texte de chaque événement coûterait la lecture entière, et le
+# message est de la prose que chaque version de plaso reformule.
+
+# Un support amovible se reconnaît à son POINT DE MONTAGE. C'est vrai de
+# n'importe quelle distribution : /media/<compte>/<étiquette> sur Ubuntu et
+# Debian, /run/media/<compte>/<étiquette> sur Fedora, /mnt/<nom> quand c'est
+# monté à la main. L'étiquette est ce que l'analyste cite — « la clé SYCOBS ».
+RE_PLASO_AMOVIBLE = re.compile(
+    r'^/(?:run/)?media/([^/]+)/([^/]+)|^/mnt/()([^/]+)')
+# Le branchement lui-même, tel que le noyau l'écrit dans dmesg et le journal.
+# Ces deux lignes-là valent la peine d'un coup d'œil au message : elles portent
+# le modèle du matériel, que le point de montage ne donne pas.
+RE_PLASO_USB = re.compile(
+    r'(?:New USB device found[^\n]{0,120}|Product:\s*[^\n]{1,60}'
+    r'|usb-storage[^\n]{0,80})')
+# Les documents qu'un rapport cite : ce qu'on ouvre, pas ce que le système
+# écrit. Un .so ou un .cache dans la super-timeline n'intéresse personne.
+EXT_DOCUMENT = (".odt", ".ods", ".odp", ".doc", ".docx", ".xls", ".xlsx",
+                ".ppt", ".pptx", ".pdf", ".rtf", ".csv", ".txt", ".zip",
+                ".rar", ".7z", ".jpg", ".jpeg", ".png", ".mp4", ".torrent",
+                ".key", ".pem", ".ovpn", ".kdbx")
+
+
+def _hote(url):
+    """L'hôte d'une URL. C'est ce qui se cite : les paramètres d'une requête
+    portent souvent des identifiants, et n'ont rien à faire dans un rapport."""
+    try:
+        h = urllib.parse.urlsplit(url).netloc
+    except ValueError:
+        h = ""
+    return h.lower() or _coupe(url, 60)
+
+
+def _plaso_sujet(e, genre, ou):
+    """(sujet, valeur) : ce que l'événement RACONTE, ou (None, None).
+
+    « genre » (le data_type) et « ou » (le chemin) sont déjà en main chez
+    l'appelant : les relire coûterait deux accès de plus par événement, et il y
+    en a des millions.
+    """
+    url = e.get("url")
+    if isinstance(url, str) and url:
+        return ("téléchargement" if "download" in genre else "site"), _hote(url)
+    if genre.startswith("bash:") or genre.startswith("shell:") \
+            or ":command" in genre:
+        quoi = e.get("command") or e.get("body") or e.get("message") or ""
+        return "commande", _coupe(" ".join(str(quoi).split()), 90)
+    if "utmp" in genre or "lastlog" in genre or genre.endswith(":login"):
+        qui = str(e.get("username") or e.get("user") or "?")
+        depuis = str(e.get("hostname") or e.get("ip_address") or "")
+        return "connexion", f"{qui} depuis {depuis}" if depuis else qui
+    if "dpkg" in genre or "rpm" in genre or "apt" in genre:
+        quoi = e.get("body") or e.get("message") or e.get("name") or ""
+        return "paquet", _coupe(" ".join(str(quoi).split()), 80)
+    if ou:
+        m = RE_PLASO_AMOVIBLE.match(ou)
+        if m:
+            return "support", m.group(2) or m.group(4)
+        if ou.lower().endswith(EXT_DOCUMENT):
+            return "document", "/".join(ou.rsplit("/", 2)[-2:])
+    if "syslog" in genre or "journal" in genre:
+        m = RE_PLASO_USB.search(str(e.get("body") or e.get("message") or ""))
+        if m:
+            return "support", _coupe(" ".join(m.group(0).split()), 60)
+    return None, None
+
+
+# Les sujets, dans l'ordre où un rapport les lit, avec le libellé du fait et
+# ce qu'une phrase de récit en dit. UNE table : ajouter un sujet à
+# _plaso_sujet et une ligne ici suffit à le faire apparaître partout.
+PLASO_SUJETS = {
+    "support":       ("support amovible vu dans la super-timeline", "support"),
+    "site":          ("site consulté, vu dans la super-timeline", "site"),
+    "téléchargement": ("téléchargement vu dans la super-timeline", "téléchargement"),
+    "commande":      ("commande lancée, vue dans la super-timeline", "commande"),
+    "connexion":     ("connexion vue dans la super-timeline", "connexion"),
+    "paquet":        ("paquet installé, vu dans la super-timeline", "paquet"),
+    "document":      ("document touché, vu dans la super-timeline", "document"),
+}
+# Combien de VALEURS distinctes par sujet on retient, et combien on en cite.
+# La borne existe parce qu'un disque porte des centaines de milliers de
+# chemins : sans elle, la table croîtrait avec le fichier.
+PLASO_SUJET_MAX = 4000
+PLASO_SUJET_CITES = 15
+PLASO_JOURS_CITES = 12
+
+
 # La MÊME réserve, écrite une fois. Recopiée à la main dans trois notes, elle
 # avait déjà dérivé en trois forces différentes — « à confirmer sur la pièce »,
 # « pas une imputation », « cela ne dit toujours pas ». C'est le point qui
@@ -2745,9 +2841,19 @@ def plaso(c):
     # loin le plus fréquent.
     fins_max = list(itertools.accumulate((w[1] for w in fenetres), max))
     maisons = _comptes_connus()
+    comptes_noms = set(maisons.values())
     par_session = collections.Counter()          # id du fait d'ouverture → n
     par_compte = {}                              # compte → [n, premier, dernier]
     jours = set()                                # les journées qui portent une trace
+    # CE QUI S'EST PASSÉ, et pas seulement combien de fois. Deux tables :
+    #   sujets[sujet][valeur] = [n, premier, dernier, compte]
+    #   recit[jour][sujet]    = [n, exemples]
+    # La première dit « ce qu'il a fait », la seconde « quel jour ». Les deux
+    # sont bornées : PLASO_SUJET_MAX valeurs distinctes par sujet, trois
+    # exemples par jour et par sujet. Un disque porte des centaines de milliers
+    # de chemins — sans borne, la table croîtrait avec le fichier.
+    sujets = {k: {} for k in PLASO_SUJETS}
+    recit = {}
     # Le SCHÉMA réellement lu : les classes dfdatetime rencontrées et les
     # champs du premier événement. C'est ce qui permet de dire, sans rien
     # demander à personne, quelle forme la version installée de plaso produit —
@@ -2775,7 +2881,8 @@ def plaso(c):
             dt = e.get("date_time")
             if isinstance(dt, dict):
                 classes.add(str(dt.get("__class_name__") or "?"))
-            genres[str(e.get("data_type") or "?")] += 1
+            genre = str(e.get("data_type") or "?")
+            genres[genre] += 1
             analyseurs[str(e.get("parser") or "?")] += 1
             quand = _plaso_horo(e)
             if quand is None:
@@ -2785,6 +2892,25 @@ def plaso(c):
                 dernier = quand if dernier is None else max(dernier, quand)
                 jours.add(quand[:10])
             ou = _plaso_chemin(e)
+            sujet, valeur = _plaso_sujet(e, genre, ou)
+            if valeur:
+                table = sujets[sujet]
+                vu = table.get(valeur)
+                if vu is None and len(table) < PLASO_SUJET_MAX:
+                    vu = table[valeur] = [0, quand, quand, None]
+                if vu is not None:
+                    vu[0] += 1
+                    if quand is not None:
+                        vu[1] = quand if vu[1] is None else min(vu[1], quand)
+                        vu[2] = quand if vu[2] is None else max(vu[2], quand)
+                if quand is not None:
+                    j = recit.setdefault(quand[:10], {})
+                    d = j.get(sujet)
+                    if d is None:
+                        d = j[sujet] = [0, []]
+                    d[0] += 1
+                    if len(d[1]) < 3 and valeur not in d[1]:
+                        d[1].append(valeur)
             if ou:
                 # Le dossier personnel range l'événement sous un COMPTE. C'est
                 # une imputation faible — un service peut écrire chez
@@ -2796,7 +2922,17 @@ def plaso(c):
                 bas = ou.lower()
                 compte = (maisons.get("/".join(bas.split("/", 3)[:3]))
                           or maisons.get("/".join(bas.split("/", 2)[:2])))
+                if compte is None:
+                    # /media/<compte>/<étiquette> : le point de montage porte
+                    # le nom de qui a monté le support. C'est plus fort que le
+                    # dossier personnel — un service n'y écrit pas —, et ça se
+                    # perdait, faute d'être un chemin de maison.
+                    m = RE_PLASO_AMOVIBLE.match(ou)
+                    if m and m.group(1) and m.group(1) in comptes_noms:
+                        compte = m.group(1)
                 if compte:
+                    if valeur and sujets[sujet].get(valeur) is not None:
+                        sujets[sujet][valeur][3] = compte
                     p = par_compte.setdefault(compte, [0, None, None])
                     p[0] += 1
                     if quand is not None:
@@ -2912,6 +3048,67 @@ def plaso(c):
                   "« forme du fichier plaso » ci-dessus, puis une ligne du "
                   "fichier — l'horodatage n'est alors ni « timestamp », ni "
                   "« date_time », ni « datetime »")
+    # ── CE QUI S'EST PASSÉ ──
+    # Sujet par sujet, les valeurs les plus vues. C'est la réponse aux
+    # questions qu'un rapport pose vraiment — où il est allé, ce qu'il a
+    # branché, ce qu'il a lancé — là où le seul recensement disait combien
+    # d'événements, ce qui n'apprend rien à personne.
+    for sujet, (libelle, _mot) in PLASO_SUJETS.items():
+        table = sujets[sujet]
+        if not table:
+            continue
+        classees = sorted(table.items(), key=lambda kv: (-kv[1][0], kv[0]))
+        for valeur, (n, prem, dern, compte) in classees[:PLASO_SUJET_CITES]:
+            fait("plaso", libelle, valeur, source,
+                 f"événements « {sujet} » de la super-timeline plaso",
+                 horodatage=dern, acteur=compte, occurrences=n,
+                 role="plaso-sujet", genre=sujet,
+                 confiance="à vérifier",
+                 note=(f"{n} fois" + (f", du {prem} au {dern}" if prem and dern
+                                      and prem != dern else
+                                      f", le {dern}" if dern else ", non daté"))
+                      + (f", sous le dossier personnel de {compte}" if compte else "")
+                      + f". {RAPPROCHEMENT}")
+        if len(classees) > PLASO_SUJET_CITES:
+            fait("limite", f"{sujet}s non cités dans la super-timeline",
+                 str(len(classees) - PLASO_SUJET_CITES), source,
+                 f"événements « {sujet} » de la super-timeline plaso",
+                 note=f"{len(classees)} valeurs distinctes, les "
+                      f"{PLASO_SUJET_CITES} plus fréquentes sont citées"
+                      + (f". La table est bornée à {PLASO_SUJET_MAX} valeurs "
+                         "distinctes : au-delà, seules celles déjà vues sont "
+                         "recomptées" if len(table) >= PLASO_SUJET_MAX else ""))
+
+    # ── QUEL JOUR, ET QUOI CE JOUR-LÀ ──
+    # Une journée, une phrase. C'est la forme que prend un récit quand on ne
+    # veut pas inventer : des faits comptés, avec leurs exemples, et rien qui
+    # les relie que le calendrier.
+    actives = sorted(recit.items(), key=lambda kv: (-sum(v[0] for v in kv[1].values()),
+                                                    kv[0]))
+    for jour, quoi in actives[:PLASO_JOURS_CITES]:
+        morceaux = []
+        for sujet, (_libelle, mot) in PLASO_SUJETS.items():
+            d = quoi.get(sujet)
+            if not d:
+                continue
+            n, exemples = d
+            morceaux.append(f"{mot} : {n} trace{'s' if n > 1 else ''}"
+                            + (f" ({', '.join(exemples)})" if exemples else ""))
+        if not morceaux:
+            continue
+        fait("plaso", "ce que la super-timeline montre ce jour-là", jour, source,
+             "événements plaso du jour, rangés par sujet",
+             horodatage=jour + "T00:00:00Z", role="plaso-journee",
+             occurrences=sum(v[0] for v in quoi.values()),
+             confiance="à vérifier",
+             note=" ; ".join(morceaux) + f". {RAPPROCHEMENT}")
+    if len(actives) > PLASO_JOURS_CITES:
+        fait("limite", "journées d'activité plaso non détaillées",
+             str(len(actives) - PLASO_JOURS_CITES), source,
+             "événements plaso rangés par jour",
+             note=f"{len(actives)} journées portent une activité lisible, les "
+                  f"{PLASO_JOURS_CITES} plus chargées sont détaillées")
+
     # ── ce que plaso RECOUPE avec le reste ──
     for ident, n in sorted(par_session.items()):
         w = next((x for x in fenetres if x[3] == ident), None)
