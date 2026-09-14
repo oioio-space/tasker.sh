@@ -428,6 +428,28 @@ mérite d'être lue.
 
 
 
+## Les quatre synthèses, et ce qu'elles valent
+
+Quatre tableaux du rapport ne lisent aucune pièce : ils relisent les faits
+établis, chaque ligne citant les identifiants dont elle sort.
+
+- **Les comptes**, avec première et dernière session, et la pièce qui le dit.
+  Un compte à zéro session n'est **pas** inutilisé : c'est un compte dont
+  `wtmp` ne porte aucune session. Dites-le ainsi.
+- **Les périodes sans trace.** `wtmp` est tourné, les journaux purgés, un usage
+  qui n'écrit rien ne laisse rien. **N'écrivez jamais « le poste n'a pas
+  servi »** : écrivez « la collecte ne porte aucune trace entre le X et le Y ».
+- **Les supports amovibles**, un par ligne, `idVendor:idProduct` et numéro de
+  série — rattaché au branchement **par le temps**, d'où la confiance
+  « forte ». Sans numéro de série, deux supports du même modèle ne se
+  distinguent pas, et le tableau le dit.
+- **Les adresses réseau** — IP, MAC, hôtes web —, chacune avec la colonne
+  **« vue dans »**, qui est ce qui compte : la même IP dans un profil réseau et
+  dans le slack d'un disque ne raconte pas la même chose. Deux pièges que la
+  colonne « portée » signale : une IP **privée** ne prouve rien seule, et une
+  MAC **« administrée localement »** est tirée au hasard — **elle n'identifie
+  pas un matériel**.
+
 ## PLASO/ — la super-timeline
 
 `log2timeline` parcourt l'image et rend un **événement daté par artefact

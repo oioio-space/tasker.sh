@@ -940,7 +940,9 @@ def usage(c, pieces):
     try:
         for famille, brut in FAMILLES:
             for t in _chercher_domaine(pieces, None, brut, famille):
-                constat("usage", f"service {famille} présent dans un profil de navigateur",
+                ou = ("dans la super-timeline plaso" if "plaso" in t["quoi"]
+                      else "dans un profil de navigateur")
+                constat("usage", f"service {famille} présent {ou}",
                         t["valeur"], t["source"], t["methode"], acteur=t["acteur"],
                         date=t.get("date"),
                         question=f"la charte encadre-t-elle l'usage d'un service {famille} "
@@ -1227,11 +1229,97 @@ def lire_faits(chemin):
 # Les chercheurs : un par type d'indice. Chacun rend des dicts prêts pour le
 # constat — quoi, valeur, source, methode, et acteur/portee/date/note — et lève
 # Absente quand la pièce qu'il lui faut n'est pas là.
+# ── LA SUPER-TIMELINE, PAR LES FAITS DU SKILL FORENSIC ────────────────────
+#
+# conformite-linux ne lit PAS le plaso lui-même, et c'est délibéré :
+# extraire.py l'a déjà lu, et deux lecteurs du même fichier finiraient par en
+# dire deux choses différentes dans deux rapports qui se citent. On consomme
+# ses FAITS, par --faits — le même chemin que pour les dates et le fuseau.
+#
+# Ce que ça change : une base de navigateur vidée, un journal tourné, un
+# historique effacé ne font plus disparaître l'usage. La super-timeline, elle,
+# a gardé la trace, et une règle doit pouvoir s'appuyer dessus.
+def _plaso_sujets(faits):
+    """Les sujets rendus par la super-timeline, rangés par genre."""
+    par = {}
+    for f in faits:
+        if f.get("role") in ("plaso-sujet", "corroboration"):
+            par.setdefault(str(f.get("genre") or ""), []).append(f)
+    return par
+
+
+def plaso(pieces):
+    """Ce que la super-timeline montre, et qu'une règle peut vouloir juger.
+
+    Un constat, pas un manquement : c'est la règle fournie qui décide. On pose
+    donc ce qui est OBSERVÉ — un support branché, une commande lancée — avec la
+    question qu'une charte devra trancher.
+    """
+    sujets = pieces["plaso_sujets"]
+    if not sujets:
+        return
+    confirme = {str(f.get("valeur")) for f in pieces["faits"]
+                if f.get("role") == "corroboration"}
+    for genre, quoi, question in (
+            ("support", "support amovible vu dans la super-timeline",
+             "la charte encadre-t-elle l'usage des supports amovibles, et "
+             "celui-ci était-il autorisé ?"),
+            ("commande", "commande lancée, vue dans la super-timeline",
+             "cette commande sort-elle de ce que la charte autorise — copie "
+             "vers l'extérieur, effacement de traces ?"),
+            ("paquet", "paquet installé, vu dans la super-timeline",
+             "la charte réserve-t-elle l'installation de logiciels à "
+             "l'administrateur ?"),
+            ("téléchargement", "téléchargement vu dans la super-timeline",
+             "la charte encadre-t-elle ce qui est téléchargé sur le poste ?")):
+        for f in sujets.get(genre, ()):
+            deux = str(f.get("valeur")) in confirme
+            constat("usage", quoi, str(f.get("valeur")),
+                    str(f.get("source") or "super-timeline plaso"),
+                    "événements de la super-timeline, lus par le skill "
+                    "forensic-linux et repris ici depuis faits.jsonl",
+                    acteur=f.get("acteur"), date=f.get("horodatage"),
+                    question=question,
+                    note=f"{f.get('occurrences')} trace(s) ; fait {f['id']} du "
+                         "rapport forensique"
+                         + (". CONFIRMÉ par une seconde source : la "
+                            "super-timeline et une pièce lue ailleurs portent "
+                            "la même chose" if deux else
+                            ". Porté par la super-timeline seule — la pièce "
+                            "d'origine a pu être vidée. À remonter avant d'en "
+                            "tirer un manquement"))
+
+
 def _chercher_domaine(pieces, motif, brut, ident):
     """ident : ce que Balayage a compté sous ce nom — (règle, motif) ou famille."""
     comptes_ = pieces["comptes"]
-    if not any(p["navigateurs"] for p in comptes_.values()):
-        raise Absente("aucune base de navigateur dans la collecte")
+    sites = pieces["plaso_sujets"].get("site", ())
+    # La base de navigateur PEUT manquer sans que l'usage disparaisse : vidée,
+    # reconstruite, ou simplement absente de la collecte. La super-timeline en
+    # garde la trace, et une règle doit pouvoir s'appuyer dessus — sans quoi
+    # effacer son historique suffisait à ne plus rien avoir à se reprocher.
+    if not any(p["navigateurs"] for p in comptes_.values()) and not sites:
+        raise Absente("aucune base de navigateur dans la collecte, et aucun "
+                      "site dans la super-timeline")
+    # « motif » est None quand l'appel vient des FAMILLES : c'est « brut » qui
+    # porte alors l'expression. Sans ce rattrapage, chaque famille acceptait
+    # TOUT site de la super-timeline — mesuré : un seul domaine ressortait en
+    # six fausses accusations, stockage, messagerie, IA, réseau social, dépôt
+    # de code et accès distant à la fois. re garde les motifs compilés.
+    filtre = motif if motif is not None else re.compile(brut)
+    for f in sites:
+        v = str(f.get("valeur") or "")
+        if not filtre.search(v):
+            continue
+        yield dict(quoi="domaine vu dans la super-timeline plaso", valeur=v,
+                   source=str(f.get("source") or "super-timeline plaso"),
+                   acteur=f.get("acteur"), date=f.get("horodatage"),
+                   methode=f"motif « {brut} » cherché dans les sites que la "
+                           "super-timeline porte, repris de faits.jsonl",
+                   note=f"{f.get('occurrences')} trace(s) dans la "
+                        f"super-timeline ; fait {f['id']} du rapport forensique. "
+                        "La base de navigateur peut être vide ou absente : "
+                        "c'est plaso qui porte cet usage")
     faits, visites = pieces["faits"], pieces["visites"]
     for compte, p in sorted(comptes_.items()):
         for source, comptages in p["navigateurs"]:
@@ -1633,6 +1721,7 @@ def main():
                                for cle, _, _, brut in r["indices"] if cle == "domaine"]
     pieces = {"faits": faits, "fuseau": fuseau,
               "visites": _visites_par_compte(faits),
+              "plaso_sujets": _plaso_sujets(faits),
               "ouvertures": _ouvertures(faits, fuseau)}
     pieces["comptes"] = etape("lecture des comptes", lire_comptes, c, Balayage(motifs), defaut={})
     pieces["inventaires"] = etape("inventaires", lire_inventaires, c, defaut={})
@@ -1645,6 +1734,7 @@ def main():
     etape("secrets", secrets, pieces["comptes"])
     etape("usage", usage, c, pieces)
     etape("partage de compte", partage, pieces, locaux)
+    etape("super-timeline plaso", plaso, pieces)
     if regles:
         etape(f"règles fournies ({len(regles)})", appliquer_regles, c, regles, pieces)
 

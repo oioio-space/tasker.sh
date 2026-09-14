@@ -145,7 +145,8 @@ EVENEMENTS = ("evenement", "support", "telechargement", "paquet", "suspect",
 # Ce que le § 5 montre déjà : le réimprimer dans la chronologie du § 6 ferait
 # compter deux fois le même identifiant.
 ROLES_HORS_CHRONO = ("plaso-recensement", "plaso-famille", "rapprochement-chemin",
-                     "plaso-sujet", "plaso-journee")
+                     "plaso-sujet", "plaso-journee",
+                     "corroboration", "corroboration-seul")
 # Les sujets d'une super-timeline, dans l'ordre où un rapport les lit — et le
 # titre de leur tableau. Le MÊME ordre que PLASO_SUJETS côté extracteur : c'est
 # celui qui répond d'abord aux questions qu'on pose d'un poste.
@@ -514,6 +515,32 @@ def main():
                 if m.strip():
                     S.append(f"- {m.strip()}")
         S.append("")
+    # DEUX SOURCES INDÉPENDANTES. C'est ce qui distingue un indice d'un fait
+    # établi, et c'est la première chose qu'un lecteur de rapport cherche.
+    confirmes, seuls = par_role("corroboration"), par_role("corroboration-seul")
+    if confirmes:
+        S.append("\n### Ce que la super-timeline CONFIRME\n")
+        S.append("Chacune de ces lignes est portée par **deux sources "
+                 "indépendantes** : la super-timeline, et une pièce lue "
+                 "ailleurs dans la collecte. C'est le degré de certitude le "
+                 "plus élevé que cette extraction produise.\n")
+        S.append(table(["quoi", "ce qui est confirmé", "dernier", "compte",
+                        "autre source", "id"],
+                       [(f.get("genre"), f["valeur"], quand(f), f.get("acteur"),
+                         f.get("confirme"), f["id"]) for f in confirmes]))
+    if seuls:
+        S.append("\n### Ce que la super-timeline est SEULE à porter\n")
+        S.append("Aucun autre fait ne reprend ces lignes. La pièce d'origine a "
+                 "pu être **vidée** — un historique effacé, un journal tourné, "
+                 "une base reconstruite — et plaso en garder la trace. Ce sont "
+                 "des pistes à remonter, pas des conclusions.\n")
+        S.append(table(["quoi", "vu seulement ici", "dernier", "compte", "id"],
+                       [(f.get("genre"), f["valeur"], quand(f), f.get("acteur"),
+                         f["id"]) for f in seuls]))
+        S.append("\n> L'inverse ne figure PAS dans ce rapport : « vu dans les "
+                 "artefacts, absent de plaso » ne veut rien dire tant qu'on ne "
+                 "sait pas ce que la super-timeline couvre — quels volumes, "
+                 "quelles dates, quels analyseurs ont tourné.\n")
     sujets = par_role("plaso-sujet")
     if sujets:
         for genre, titre in PLASO_TABLEAUX:

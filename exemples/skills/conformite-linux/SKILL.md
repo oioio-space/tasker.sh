@@ -56,9 +56,23 @@ python3 scripts/controles.py <dossier PREFIX/> -o constats.jsonl
 Le champ **`question`** est la charnière : il dit ce qu'une règle doit
 prévoir pour que ce constat devienne un manquement.
 
-Lancez aussi le skill **`forensic-linux`** : son `faits.jsonl` porte les
-**dates** — quand la clé USB a été branchée, quand le service a été visité.
-Un manquement daté vaut mieux qu'un manquement constaté.
+**Lancez le skill `forensic-linux` D'ABORD, et passez son `faits.jsonl` ici.**
+Ce n'est pas un confort : `--faits` apporte trois choses que la collecte seule
+ne donne pas.
+
+1. Les **dates** — quand la clé USB a été branchée, quand le service a été
+   visité. Un manquement daté vaut mieux qu'un manquement constaté.
+2. La **super-timeline plaso**, que `controles.py` ne lit jamais lui-même : il
+   consomme les faits que `forensic-linux` en a tirés. Deux lecteurs du même
+   fichier finiraient par en dire deux choses différentes dans deux rapports
+   qui se citent. Ce que ça change : **une base de navigateur vidée ne fait
+   plus disparaître l'usage.** Sans plaso, effacer son historique suffisait à
+   n'avoir plus rien à se reprocher ; avec lui, la règle trouve quand même le
+   domaine. Les supports branchés, les commandes lancées et les paquets
+   installés entrent aussi en constats par cette voie.
+3. La **corroboration** : un constat porté par deux sources indépendantes est
+   marqué comme tel. Citez-le en priorité — c'est le plus solide que vous
+   ayez.
 
 **Quand les règles sont déjà écrites dans un fichier `.regles`**, ajoutez-le :
 
@@ -77,6 +91,30 @@ dossier personnel, un `su` ou `sudo -u` vers un compte local dans l'historique
 ou le journal, une même clé SSH acceptée par deux comptes, deux ouvertures du
 même compte depuis deux origines à quelques minutes. Aucune de ces traces ne
 prouve seule le partage ; chacune se cite avec sa limite.
+
+### 1 bis · Répartir sur des sous-agents — faites-le, ne l'envisagez pas
+
+**Dès que `constats.jsonl` dépasse quelques centaines de lignes**, ne le
+chargez pas en entier : lancez l'outil `agent`, un appel par thème, **dans un
+seul message** pour qu'ils tournent en parallèle. Crush restreint les
+sous-agents aux outils de **lecture seule** — ils ne peuvent ni écrire dans les
+scellés ni lancer une commande.
+
+    grep -o '"theme":"[a-z]*"' constats.jsonl | sort | uniq -c   # avant tout
+
+Un sous-agent par thème : `comptes`, `authentification`, `secrets`,
+`durcissement`, `usage`, `partage`, `limite`. La consigne, identique pour tous :
+
+> Lis `constats.jsonl` dans le dossier courant. Ne retiens que les lignes dont
+> le champ `theme` vaut `usage` (utilise `grep`, n'ouvre pas tout le fichier).
+> Rends un résumé de dix lignes au plus. Chaque affirmation suivie des
+> identifiants qui la portent — `C0014`. Recopie le champ `question` de chaque
+> constat : c'est lui qui dira si la règle en fait un manquement. N'invente
+> rien, ne conclus rien, ne qualifie rien de manquement : c'est la règle qui
+> juge, pas toi.
+
+**Un sous-agent lit et résume ; il ne juge pas.** Le rapprochement avec la
+charte et la rédaction restent à vous.
 
 ### 2 · Lire les règles
 

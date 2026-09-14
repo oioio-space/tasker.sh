@@ -87,8 +87,7 @@ jetons ; une de ses sections, six cents.
 
 Trois sources disent ce qu'il y a **sans dire quand ni par qui** : les chaînes
 des disques (`STRINGS/`), ce que photorec et `xfs_undelete` rendent sans nom, et
-les motifs que l'outil repère seul (`interet`). Leurs faits portent tous
-`provenance`.
+les motifs repérés seuls (`interet`). Leurs faits portent tous `provenance`.
 
 **La règle vaut pour les trois, sans exception :** le contenu est établi, la
 provenance ne l'est pas. « L'adresse figure dans les octets du volume racine »
@@ -97,48 +96,39 @@ le porte. **Ouvrez la pièce citée avant d'en écrire un mot**, et rayez le res
 en disant pourquoi.
 
 `SUPPRIMES/` n'existe que pour un volume **xfs** ; ailleurs les fichiers rendus
-viennent de photorec seul, et un fait le dit — ce n'est pas une collecte
-incomplète.
-
-Pour chercher : `--textes fichier` prend **une chaîne par ligne, sans syntaxe** ;
-`--indicateurs` mêle empreintes, adresses et expressions. Les deux fouillent
-aussi les `.gz`, les `.docx` et les PDF. Détail : `references/indicateurs.md`
-et `references/artefacts.md`.
+viennent de photorec seul, et un fait le dit. Pour chercher :
+`--textes` prend une chaîne par ligne sans syntaxe, `--indicateurs` mêle
+empreintes, adresses et expressions — `references/indicateurs.md`.
 
 ### Quatre synthèses, et ce qu'elles valent
 
 Quatre tableaux ne lisent aucune pièce : ils relisent les faits établis, chaque
-ligne citant les identifiants dont elle sort.
+ligne citant les identifiants dont elle sort — **comptes**, **périodes sans
+trace**, **supports amovibles**, **adresses réseau**. Ce qu'ils valent et leurs
+pièges (série d'un support, IP privée, MAC tirée au hasard) :
+`references/artefacts.md`.
 
-- **Les comptes**, avec première et dernière session, et la pièce qui le dit.
-  Un compte à zéro session n'est **pas** inutilisé : c'est un compte dont `wtmp`
-  ne porte aucune session. Dites-le ainsi.
-- **Les périodes sans trace.** `wtmp` est tourné, les journaux purgés, un usage
-  qui n'écrit rien ne laisse rien. **N'écrivez jamais « le poste n'a pas
-  servi »** : écrivez « la collecte ne porte aucune trace entre le X et le Y ».
-- **Les supports amovibles**, un par ligne, `idVendor:idProduct` et numéro de
-  série — rattaché au branchement **par le temps**, d'où « forte ». Sans numéro
-  de série, deux supports du même modèle ne se distinguent pas.
-- **Les adresses réseau** — IP, MAC, hôtes web —, chacune avec la colonne
-  **« vue dans »**, qui est ce qui compte : la même IP dans un profil réseau et
-  dans le slack d'un disque ne raconte pas la même chose. Deux pièges que la
-  colonne « portée » signale : une IP **privée** ne prouve rien seule, et une MAC
-  **« administrée localement »** est tirée au hasard — **elle n'identifie pas un
-  matériel**. Détail : `references/artefacts.md`.
+Deux phrases à ne JAMAIS écrire, parce qu'elles disent plus que la pièce :
 
-**Une super-timeline plaso** est cherchée par son CONTENU, où qu'elle soit
-rangée et quel que soit son nom : plaso ouvre les bases, les journaux et les
-caches que mactime ne regarde pas. L'extraction n'en recopie pas les millions
-d'événements — elle en fait le recensement, et la RECOUPE avec le reste :
-événements par session ouverte, par compte, et intervalles sans une seule trace.
-`grep -A 40 'super-timeline' references/artefacts.md`.
+- « ce compte est inutilisé » — il est sans session **dans `wtmp`**, ce qui
+  n'est pas la même chose ;
+- « le poste n'a pas servi » — écrivez « la collecte ne porte aucune trace
+  entre le X et le Y ». Un usage qui n'écrit rien ne laisse rien.
+
+**La super-timeline plaso** est cherchée par son CONTENU, où qu'elle soit et
+quel que soit son nom. Elle n'est pas recopiée : elle est LUE. Il en sort ce qui
+s'est passé — ce qui a été **branché**, **où il a été**, ce qu'il a **lancé**,
+**téléchargé**, **installé** —, un **récit jour par jour**, et le recoupement
+avec le reste des faits : `role` = `corroboration` marque ce que **deux sources
+indépendantes** portent, `corroboration-seul` ce que plaso est seul à porter
+— la pièce d'origine a pu être vidée. Détail :
+`grep -A 60 'super-timeline' references/artefacts.md`.
 
 **Si l'extraction plante, relancez la même commande** : elle reprend où elle
 s'est arrêtée.
 
-**Avant un `grep` sur la collecte**, vérifiez `ripgrep` (`command -v rg`) : sans
-lui l'outil se rabat sur un parcours qui **ignore son propre délai de garde** et
-ne rend jamais la main sur une timeline de plusieurs gigaoctets. Visez un
+**Avant un `grep` sur la collecte**, vérifiez `ripgrep` (`command -v rg`) :
+sans lui l'outil ne rend jamais la main sur une grosse pièce. Visez un
 sous-dossier, jamais la racine.
 
 ### 2 · Vérifier avant d'écrire
@@ -192,32 +182,48 @@ pièce et dit par quoi chacune a été remplacée. Quand le doute demeure :
    elle avait été là. Un rapport qui attend une pièce ne sert personne ; un
    rapport qui masque ce qu'il ignore est pire.
 
-### 3 · Répartir, quand la collecte est grosse
+### 3 · Répartir sur des sous-agents — faites-le, ne l'envisagez pas
 
-Un `faits.jsonl` de dizaines de milliers de lignes ne tient pas dans une
-fenêtre de contexte. **N'en chargez jamais la totalité pour « voir ».** Comptez
-d'abord, sans lire :
+**Lancez les sous-agents dès que `faits.jsonl` dépasse quelques centaines de
+lignes** : c'est la façon normale de travailler ici, pas une option pour les
+grosses collectes. Comptez d'abord, sans rien charger :
 
 ```bash
 cut -d'"' -f8 faits.jsonl | sort | uniq -c | sort -rn   # faits par catégorie
+wc -l faits.jsonl
 ```
 
-- **Quelques milliers** : lisez par catégorie, au `grep`.
-- **Au-delà** : répartissez sur des **sous-agents** si l'outil `agent` est
-  disponible. Crush les lance en parallèle et les restreint aux outils de
-  **lecture seule** — un sous-agent ne peut, par construction, rien écrire
-  dans les scellés. Une catégorie par sous-agent, la même consigne pour tous :
+**N'ouvrez jamais `faits.jsonl` en entier « pour voir »** : vous y brûlez la
+fenêtre de contexte, et vous n'aurez plus de place pour rédiger.
 
-  > Lis `faits.jsonl`, ne retiens que les lignes dont la catégorie est
-  > `reseau`. Rends un résumé de dix lignes au plus, chaque affirmation
-  > suivie des identifiants de faits qui la portent (`F0123`). N'invente
-  > rien, ne conclus rien : je recoupe ensuite.
+Puis l'outil `agent`, **un appel par thème, dans un seul message** pour qu'ils
+tournent en parallèle. Crush les restreint aux outils de **lecture seule**
+(`view`, `grep`, `glob`, `ls`) : un sous-agent ne peut ni écrire dans les
+scellés ni lancer une commande.
 
-**Un sous-agent lit et résume ; il ne conclut pas**, ne qualifie rien de
-suspect, ne décide pas de ce qui entre au rapport — ses identifiants servent à
-le revérifier sans le croire sur parole. Le recoupement et la rédaction restent
-à vous : le jugement est là. Sans l'outil `agent`, lisez par catégorie dans
-l'ordre du plan, en écrivant chaque section dès que vous en avez la matière.
+| sous-agent | son filtre dans `faits.jsonl` |
+|---|---|
+| machine | `categorie` = `machine`, `reseau`, `adresse` |
+| comptes | `compte`, `evenement` |
+| navigation | `navigation`, `telechargement`, `usage` |
+| **super-timeline** | `role` = `plaso-journee`, `plaso-sujet` |
+| **corroboration** | `role` = `corroboration`, `corroboration-seul` |
+| supports | `support`, `appareil` |
+| suspect | `suspect`, `persistance`, `interet`, `recuperation` |
+| limites | `limite` — ce que l'extraction n'a PAS pu lire |
+
+La consigne, la même pour tous, une seule ligne à changer :
+
+> Lis `faits.jsonl` dans le dossier courant. Ne retiens que les lignes dont le
+> champ `categorie` vaut `reseau` — utilise `grep`, n'ouvre pas tout le
+> fichier. Rends dix lignes au plus, chaque affirmation suivie des
+> identifiants qui la portent (`F0123`). Cite les valeurs telles quelles.
+> N'invente rien, ne conclus rien, ne qualifie rien de suspect : je recoupe.
+
+**Un sous-agent lit et résume ; il ne conclut pas.** Ses identifiants servent à
+le revérifier sans le croire sur parole : le jugement reste à vous. Si l'outil
+`agent` manque — `options.disabled_tools` peut le retirer —, dites-le dans le
+rapport et lisez par catégorie dans l'ordre du plan.
 
 ### 4 · Recouper
 

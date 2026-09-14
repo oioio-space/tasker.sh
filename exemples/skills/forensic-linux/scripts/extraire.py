@@ -2764,6 +2764,108 @@ RAPPROCHEMENT = ("C'est un RAPPROCHEMENT, pas une imputation : la coïncidence "
 SESSION_MAX_PLASO = timedelta(hours=12)
 
 
+# ── CE QUE LA SUPER-TIMELINE CONFIRME ─────────────────────────────────────
+#
+# Deux sources INDÉPENDANTES qui disent la même chose, c'est ce qui transforme
+# un indice en fait : l'historique du navigateur d'un côté, la super-timeline
+# de l'autre. Et ce que plaso porte SEUL vaut tout autant — la pièce d'origine
+# a pu être vidée (un historique effacé, un journal tourné, une base
+# reconstruite), alors que la super-timeline, elle, a gardé la trace.
+#
+# L'inverse ne se publie PAS. « Vu dans les artefacts, absent de plaso » ne
+# veut rien dire : on ne sait pas ce que la super-timeline couvre — quels
+# volumes, quelles dates, quels analyseurs ont tourné. Une absence n'est un
+# fait que si l'on sait ce qui a été regardé, et ici on ne le sait pas.
+
+# Où chercher le pendant d'un sujet plaso, et comment en tirer la clé de
+# rapprochement. UNE table : le jour où un sujet s'ajoute, la ligne suffit.
+def _cle_hote(v):
+    """L'hôte d'une valeur qui porte une URL, sinon rien."""
+    bas = v.lower()
+    if "://" in bas:
+        return _hote(v)
+    return bas if bas.startswith("www.") else ""
+
+
+def _cle_etiquette(v):
+    """L'étiquette d'un point de montage : « /run/media/jdupont/SANDISK32 »."""
+    return v.rstrip("/").rsplit("/", 1)[-1].lower() if "/" in v else v.lower()
+
+
+def _cle_fichier(v):
+    """Le nom du fichier, sans son chemin ni son échappement d'URL."""
+    v = urllib.parse.unquote(v)
+    return v.rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+# (sujet plaso, catégories où chercher le pendant, clé côté plaso, clé côté
+#  artefact). Les deux clés diffèrent : plaso range un site par son HÔTE, les
+#  artefacts par l'URL entière.
+CORROBORE = (
+    ("site", ("navigation", "usage", "adresse", "telechargement"),
+     str.lower, _cle_hote),
+    ("support", ("support",), str.lower, _cle_etiquette),
+    ("document", ("usage", "telechargement", "document", "recuperation"),
+     _cle_fichier, _cle_fichier),
+    ("téléchargement", ("telechargement", "navigation"), str.lower, _cle_hote),
+)
+
+
+def corroboration(c):
+    """Ce que plaso CONFIRME, et ce qu'il porte seul.
+
+    Une synthèse : elle ne lit que les faits déjà posés, jamais la collecte.
+    Elle tourne donc APRÈS tout le monde — plaso compris.
+    """
+    sujets = [f for f in FAITS if f.get("role") == "plaso-sujet"]
+    if not sujets:
+        return
+    source = sujets[0]["source"]
+    for sujet, categories, cle_plaso, cle_autre in CORROBORE:
+        # L'index des autres faits, construit une fois par sujet : les faits se
+        # comptent en milliers, les sujets en unités.
+        ailleurs = {}
+        for f in FAITS:
+            if f.get("categorie") not in categories or f.get("role") == "plaso-sujet":
+                continue
+            k = cle_autre(str(f.get("valeur") or ""))
+            if k:
+                ailleurs.setdefault(k, []).append(f)
+        for p in sujets:
+            if p.get("genre") != sujet:
+                continue
+            k = cle_plaso(str(p["valeur"]))
+            pendants = ailleurs.get(k)
+            if pendants:
+                autre = pendants[0]
+                fait("plaso", "confirmé par une seconde source", p["valeur"],
+                     f"{source} + {autre.get('source')}",
+                     f"même {sujet} dans la super-timeline et dans « "
+                     f"{autre['fait']} »",
+                     horodatage=p.get("horodatage") or autre.get("horodatage"),
+                     acteur=p.get("acteur") or autre.get("acteur"),
+                     genre=sujet, confirme=autre["id"], role="corroboration",
+                     confiance="certaine",
+                     note=f"la super-timeline ({p['id']}, {p.get('occurrences')} "
+                          f"traces) et {autre['id']} « {autre['fait']} » portent "
+                          f"le même {sujet}"
+                          + (f", et {len(pendants) - 1} autre(s) fait(s) aussi"
+                             if len(pendants) > 1 else "")
+                          + ". Deux sources indépendantes : c'est ce qui "
+                            "distingue un indice d'un fait établi")
+            else:
+                fait("plaso", "porté par la super-timeline seule", p["valeur"],
+                     source, f"{sujet} sans pendant dans les autres faits",
+                     horodatage=p.get("horodatage"), acteur=p.get("acteur"),
+                     genre=sujet, role="corroboration-seul",
+                     confiance="à vérifier",
+                     note=f"{p['id']} le porte, aucun autre fait ne le reprend. "
+                          "La pièce d'origine a pu être VIDÉE — un historique "
+                          "effacé, un journal tourné, une base reconstruite — "
+                          "et la super-timeline en garder la trace. C'est une "
+                          "piste à remonter, pas une conclusion")
+
+
 def _fenetres_session():
     """[(début, fin, acteur, id du fait)] — les sessions déjà établies.
 
@@ -4914,7 +5016,11 @@ def main():
     # adresses relit tous les faits, y compris le contexte des motifs repérés
     # dans les octets bruts.
     for nom, fn in (("périodes", periodes), ("supports amovibles", supports),
-                    ("adresses réseau", adresses)):
+                    ("adresses réseau", adresses),
+                    # EN DERNIER : elle confronte les sujets de la
+                    # super-timeline à tout ce que les autres ont posé, y
+                    # compris les synthèses ci-dessus.
+                    ("plaso ↔ artefacts", corroboration)):
         etape(nom, fn)
 
     with open(args.sortie, "w", encoding="utf-8") as fh:
