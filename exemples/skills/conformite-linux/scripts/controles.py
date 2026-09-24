@@ -1633,11 +1633,18 @@ def _visites_par_compte(faits):
 
 
 def _ouvertures(faits, fuseau):
-    """[(fait, instant)] des ouvertures de session datées, dans le fuseau du poste."""
+    """[(fait, instant)] des ouvertures de session datées, dans le fuseau du poste.
+
+    Sur le RÔLE, pas sur le libellé français : wtmp n'est plus la seule source.
+    Une ouverture lue dans le journal — PAM, systemd-logind, le login de la
+    console, auditd — porte le même rôle, et c'est tout ce que Fedora ou Arch
+    donnent, leurs images récentes n'ayant plus de wtmp du tout. Le libellé
+    reste accepté pour les faits produits avant ce rôle."""
     out = []
     for f in faits:
-        if f.get("categorie") == "evenement" and "ouverture de session" in f.get("fait", "") \
-                and f.get("acteur"):
+        if f.get("categorie") == "evenement" and f.get("acteur") \
+                and (f.get("role") == "session-ouverture"
+                     or "ouverture de session" in f.get("fait", "")):
             q = instant(f.get("horodatage"), fuseau)
             if q:
                 out.append((f, q))

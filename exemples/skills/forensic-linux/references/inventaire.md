@@ -36,13 +36,21 @@ sert que si vous voulez l'inventaire complet de ce que la collecte NE dit pas.
 
 | question | trace | pièce | lu | limite |
 |---|---|---|---|---|
-| comptes locaux | `/etc/passwd` | `COMPTES/passwd` | oui | exister ≠ avoir servi |
+| comptes locaux | `/etc/passwd` | `COMPTES/passwd` | oui | exister ≠ avoir servi. Le fichier est copié **entier** : rien n'est perdu. Ce sont les étapes rejouées par compte — dates, artefacts, sessions — qui sautent les comptes **sans session** : `nologin` où qu'il soit (`/sbin`, `/usr/sbin`, `/usr/bin`), mais aussi `/bin/false`, que posent openSUSE et Alpine, `/bin/sync`, `/dev/null`, `/nonexistent`. Un champ vide n'est **pas** un refus : `login` lance alors `/bin/sh`, et le compte est gardé. Les comptes écartés sont nommés au journal de la collecte |
 | comptes du domaine | cache SSSD | `COMPTES/…_domaine.tar.gz` → `var/lib/sss/db` | oui | **indispensable** : `/etc/passwd` ne les a pas |
 | sessions ouvertes | `wtmp` **et ses rotations** | **les binaires d'abord**, le texte de `last` à défaut | oui | le binaire porte l'epoch : l'heure exacte, en UTC. Le texte de `last` a été écrit par le poste d'analyse dans **son** fuseau — un fait qui en vient est marqué « forte », pas « certaine ». La collecte prend `wtmp`, `wtmp.1` **et** `wtmp-20190901` : les deux styles de rotation |
 | échecs | `btmp` et ses rotations | texte de `lastb`, **ou les binaires** | oui | souvent vide ou désactivé |
 | SSH, sudo, su (Debian, Ubuntu) | `var/log/auth.log` | `JOURNAUX/…_var_log.tar.gz` | oui | **la ligne syslog n'a pas d'année** : elle est déduite de la date du fichier, et le fait est marqué « forte », pas « certaine » |
 | SSH, sudo, su (RHEL ancien) | `var/log/secure` | idem | oui | même remarque sur l'année |
-| SSH, sudo, su (Fedora, RHEL récent) | journal systemd | `JOURNAUX/…_journal.txt` | oui | date complète, avec fuseau |
+| SSH, sudo, su (openSUSE) | `var/log/messages`, `var/log/warn` | idem | oui | openSUSE n'écrit **pas** de `secure` |
+| SSH, sudo, su (Fedora, Arch, RHEL récent) | journal systemd | `JOURNAUX/…_journal.txt` | oui | date complète, avec fuseau. Sur ces familles c'est souvent la **seule** source : ni `auth.log`, ni `secure`, et plus de `wtmp` sur les images récentes |
+| ouverture de session, toutes familles | `pam_unix(<service>:session): session opened for user` | le journal où qu'il soit | oui | la ligne de **PAM**, identique de Debian à Alpine |
+| échec d'authentification, toutes familles | `pam_unix(<service>:auth): authentication failure` | idem | oui | porte `user=` et `rhost=` : le compte visé et l'origine |
+| ouverture de session locale | `systemd-logind: New session N of user` | idem | oui | la seule trace d'une session locale quand `utmp` n'existe plus |
+| connexion console (busybox) | `login[…]: <compte> login on 'tty1'` | `var/log/messages` | oui | Alpine ; son `login` ne dit ni `LOGIN ON`, ni `Failed password` |
+| connexion et échec audités | `type=USER_LOGIN … res=success` / `res=failed` | `JOURNAUX/…_var_log.tar.gz` → `var/log/audit/audit.log` | oui | RHEL durci : ne dépend pas de syslog, et l'heure est un **epoch UTC**, datée au suffixe |
+| compte verrouillé | `pam_faillock … account temporarily locked` | le journal | oui | dit qu'une rafale d'échecs a eu lieu, même si `btmp` est vide |
+| relevé prêt à lire | les deux précédents, triés | `CONNEXIONS/…_auth_succes.txt`, `…_auth_echecs.txt` | — | écrits par la collecte : tous les journaux de l'image mis bout à bout, succès d'un côté, échecs de l'autre |
 | dernière connexion | `lastlog`, `lastlog2.db` | `CONNEXIONS/` | oui (binaire 292 o et sqlite) | écrasée à chaque fois |
 | sessions (Fedora 40+) | `wtmp.db` sqlite | `CONNEXIONS/wtmp.db` | oui | |
 | qui était au clavier | — | — | — | **aucune pièce ne le dit jamais** |

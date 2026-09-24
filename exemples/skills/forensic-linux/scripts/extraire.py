@@ -891,22 +891,110 @@ def sessions(c):
 
 
 # ── 4 · le journal systemd et /var/log ────────────────────────────────
+RE_PAM_RHOST = re.compile(r"\brhost=(\S+)")
+RE_PAM_USER = re.compile(r"\buser=(\S+)")
+RE_AUDIT_ACCT = re.compile(r'acct="([^"]*)"')
+RE_AUDIT_ID = re.compile(r"\b(?:auid|id)=(\d+)")
+RE_AUDIT_ADDR = re.compile(r"\b(?:addr|hostname)=(?!\?)(\S+)")
+
+
+def _pam_echec(m):
+    """« pam_unix(sshd:auth): authentication failure; … rhost=… user=… » —
+    la ligne d'échec commune à toutes les distributions. Le compte et l'adresse
+    sont en fin de ligne, dans un ordre qui varie : on les cueille à part."""
+    ligne, u, r = m.group(0), RE_PAM_USER.search(m.group(0)), RE_PAM_RHOST.search(m.group(0))
+    detail = f"service {m.group(1)}" + (f", depuis {r.group(1)}" if r else "")
+    return (u.group(1) if u else None, detail,
+            {"origine": r.group(1)} if r else {})
+
+
+def _audit_qui(ligne):
+    m = RE_AUDIT_ACCT.search(ligne)
+    if m and m.group(1):
+        return m.group(1)
+    m = RE_AUDIT_ID.search(ligne)
+    # 4294967295 est le -1 d'auditd : personne.
+    return f"uid {m.group(1)}" if m and m.group(1) != "4294967295" else None
+
+
+def _audit_ou(ligne, defaut):
+    m = RE_AUDIT_ADDR.search(ligne)
+    return f"{defaut} depuis {m.group(1)}" if m else defaut
+
+
 # (catégorie, fait, littéral, motif, ce qu'on en tire). Le littéral est un
 # mot que la ligne DOIT contenir : un « in » sur la ligne coûte cent fois
 # moins que l'expression, et un journal fait des millions de lignes.
 MOTIFS_JOURNAL = [
+    # ROLE_SESSION, et non le libellé : c'est LUI que la corrélation plaso et
+    # le skill conformite lisent. Sans lui, une ouverture de session vue dans
+    # le journal ne comptait pas — et sur Fedora ou Arch, sans wtmp, il n'y
+    # avait plus une seule session nulle part.
     ("evenement", "connexion SSH acceptée", 'Accepted',
      re.compile(r'sshd.*Accepted\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)'),
-     lambda m: (m.group(2), f"depuis {m.group(3)} par {m.group(1)}", {"origine": m.group(3)})),
+     lambda m: (m.group(2), f"depuis {m.group(3)} par {m.group(1)}",
+                {"origine": m.group(3), "role": ROLE_SESSION})),
     ("evenement", "échec SSH", 'Failed',
      re.compile(r'sshd.*Failed\s+\S+\s+for\s+(?:invalid user\s+)?(\S+)\s+from\s+(\S+)'),
      lambda m: (m.group(1), f"depuis {m.group(2)}")),
+    ("evenement", "compte inexistant tenté en SSH", 'nvalid user',
+     re.compile(r"sshd.*[Ii]nvalid user\s+(\S+)\s+from\s+(\S+)"),
+     lambda m: (m.group(1), f"depuis {m.group(2)}")),
+    ("evenement", "échec SSH", 'Connection closed by authenticating user',
+     re.compile(r"Connection closed by authenticating user\s+(\S+)\s+(\S+)"),
+     lambda m: (m.group(1), f"depuis {m.group(2)}, coupée avant la fin")),
+    ("evenement", "échec SSH", 'maximum authentication attempts',
+     re.compile(r"maximum authentication attempts exceeded for\s+(\S+)\s+from\s+(\S+)"),
+     lambda m: (m.group(1), f"depuis {m.group(2)}, trop de tentatives")),
+    ("evenement", "mot de passe sudo refusé", 'incorrect password attempt',
+     re.compile(r"sudo(?:\[\d+\])?:\s*(\S+)\s*:\s*(\d+) incorrect password attempt"),
+     lambda m: (m.group(1), f"{m.group(2)} tentative(s) refusée(s)")),
     ("evenement", "commande sudo", 'COMMAND=',
      re.compile(r'sudo(?:\[\d+\])?:\s+(\S+)\s*:.*COMMAND=(.+)$'),
      lambda m: (m.group(1), f"a lancé {m.group(2).strip()}")),
     ("evenement", "changement d'utilisateur (su)", 'session opened',
      re.compile(r"\bsu(?:\[\d+\])?:.*session opened for user ([^\s(]+)(?:\(uid=\d+\))? by ([^\s(]+)"),
      lambda m: (m.group(2), f"est devenu {m.group(1)}", {"cible": m.group(1)})),
+    # Ce qui suit rattrape les distributions où sshd et su ne disent rien :
+    # Fedora et Arch n'ont ni auth.log ni secure, et leurs images récentes
+    # n'ont même plus wtmp ni btmp. Les deux lignes de PAM, elles, sont les
+    # mêmes partout ; logind et login couvrent les ouvertures locales, auditd
+    # les machines RHEL où syslog est absent. L'ordre compte : le motif le
+    # plus précis d'abord, le premier qui prend une ligne la garde.
+    ("evenement", "session ouverte (PAM)", 'session opened',
+     re.compile(r"pam_unix\(([\w.-]+):session\):\s*session opened for user\s+([^\s(]+)"),
+     lambda m: (m.group(2), f"service {m.group(1)}", {"role": ROLE_SESSION})),
+    ("evenement", "session ouverte (systemd-logind)", 'New session',
+     re.compile(r"New session (\w+) of user\s+([^\s.]+)"),
+     lambda m: (m.group(2), f"session {m.group(1)}", {"role": ROLE_SESSION})),
+    ("evenement", "connexion sur la console", 'LOGIN ON',
+     re.compile(r"LOGIN ON\s+(\S+)\s+BY\s+(\S+)"),
+     lambda m: (m.group(2), f"sur {m.group(1)}", {"role": ROLE_SESSION})),
+    # busybox, donc Alpine : « login[1234]: root login on 'tty1' »
+    ("evenement", "connexion sur la console", ' login on ',
+     re.compile(r"login(?:\[\d+\])?:\s+(\S+)\s+login on\s+'?([^'\s]+)"),
+     lambda m: (m.group(1), f"sur {m.group(2)}", {"role": ROLE_SESSION})),
+    ("evenement", "échec d'authentification (PAM)", 'authentication failure',
+     re.compile(r"pam_unix\(([\w.-]+):auth\):\s*authentication failure;.*"),
+     _pam_echec),
+    ("evenement", "échec de connexion sur la console", 'nvalid password for',
+     re.compile(r"[Ii]nvalid password for\s+'?([^'\s]+)'?\s+on\s+'?([^'\s]+)"),
+     lambda m: (m.group(1), f"sur {m.group(2)}")),
+    ("evenement", "échec de connexion sur la console", 'FAILED LOGIN',
+     re.compile(r"FAILED LOGIN\s*(?:\(\d+\))?\s*on\s+'?([^'\s]+)'?\s+FOR\s+'?([^'\s,]+)"),
+     lambda m: (m.group(2), f"sur {m.group(1)}")),
+    ("evenement", "compte verrouillé après des échecs", 'temporarily locked',
+     re.compile(r"pam_faillock.*for user\s+(\S+)\s+account temporarily locked"),
+     lambda m: (m.group(1), "verrouillé par pam_faillock")),
+    # auditd : la seule source qui ne dépend pas de syslog, et celle des
+    # machines RHEL durcies. res=success ou res=failed tranche à lui seul.
+    ("evenement", "connexion auditée (auditd)", 'res=success',
+     re.compile(r"type=USER_(?:LOGIN|AUTH|START)\b.*res=success"),
+     lambda m: (_audit_qui(m.group(0)), _audit_ou(m.group(0), "connexion acceptée"),
+                {"role": ROLE_SESSION})),
+    ("evenement", "échec d'authentification audité (auditd)", 'res=failed',
+     re.compile(r"type=USER_(?:LOGIN|AUTH|ACCT)\b.*res=failed"),
+     lambda m: (_audit_qui(m.group(0)), _audit_ou(m.group(0), "authentification refusée"))),
     # « role » est un nom de MACHINE, que la synthèse et le brouillon peuvent
     # reconnaître. Le libellé en français, lui, est du texte de rapport : le
     # reformuler ne doit pas vider le tableau des supports sans un mot d'erreur,
@@ -961,6 +1049,7 @@ RE_ISO = re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+\-]\d{4})\s+(\S+)\s+(.*)
 # les comparer demande de tolérer l'écart des fuseaux, de −12 à +14 heures.
 MARGE_FUSEAU = timedelta(hours=26)
 RE_SYSLOG = re.compile(r'^(\w{3})\s+(\d{1,2})\s+(\d\d:\d\d:\d\d)\s+(\S+)\s+(.*)$')
+RE_AUDIT_TS = re.compile(r'\baudit\((\d{9,11})\.\d+:\d+\)')
 
 
 def _ligne_journal(ligne, fin_fichier=None):
@@ -993,6 +1082,13 @@ def _ligne_journal(ligne, fin_fichier=None):
         return m.group(1), m.group(3), False
     m = RE_SYSLOG.match(ligne)
     if not m:
+        # auditd : « type=USER_LOGIN msg=audit(1767859800.123:456): … ».
+        # Un epoch, donc de l'UTC vrai — il sort daté, suffixe compris, à la
+        # différence des lignes syslog.
+        m = RE_AUDIT_TS.search(ligne)
+        if m:
+            return (datetime.fromtimestamp(int(m.group(1)), timezone.utc).isoformat(),
+                    ligne, False)
         return None, ligne, False
     if fin_fichier is None:
         return None, m.group(5), False
@@ -1061,8 +1157,11 @@ def journaux(c):
                           datetime.fromtimestamp(os.path.getmtime(chemin), timezone.utc))
 
 
+# « warn » est le journal d'openSUSE, « sulog » celui de su sur les Unix
+# anciens : sans eux, deux familles ne rendaient aucune authentification.
 JOURNAUX_LUS = ("secure", "auth.log", "messages", "syslog", "dmesg",
-                "boot.log", "cron", "audit", "maillog", "yum.log")
+                "boot.log", "cron", "audit", "maillog", "yum.log",
+                "warn", "sulog", "user.log", "daemon.log")
 
 
 def _garde_journaux(nom):

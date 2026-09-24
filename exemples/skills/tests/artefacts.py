@@ -262,7 +262,13 @@ def batir(base):
       "2026-01-05T11:40:12+0100 pc42 udisksd[900]: Mounted /dev/sdb1 at "
       "/run/media/jdupont/SANDISK32 on behalf of uid 1000\n"
       "2026-01-05T18:40:00+0100 pc42 su: pam_unix(su:session): session opened for user "
-      "mrobert(uid=1001) by jdupont(uid=1000)\n")
+      "mrobert(uid=1001) by jdupont(uid=1000)\n"
+      # Une ouverture que ni wtmp ni sshd ne portent : sur Fedora ou Arch,
+      # dont les images récentes n'ont plus de wtmp du tout, c'est la SEULE
+      # trace qu'une session ait été ouverte.
+      "2026-01-07T08:12:00+0100 pc42 systemd-logind[700]: New session 9 of user jdupont.\n"
+      "2026-01-07T08:11:00+0100 pc42 sshd[701]: pam_unix(sshd:auth): authentication "
+      "failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.9 user=root\n")
     # Le journal TOURNÉ, comprimé, RANGÉ DANS LE TAR : c'est la forme la plus
     # courante de tout /var/log, et le seul endroit où vit la chaîne ci-dessous.
     # Si les membres d'archive ne sont pas décomprimés avant d'être soumis aux
@@ -679,6 +685,23 @@ ATTENDUS_CHAMPS = [
     ("syslog : l'année ne recule pas", {"fait": "connexion SSH acceptée",
                                         "horodatage": "2026-01-08T13:30:00",
                                         "acteur": "jdupont"}),
+
+    # ── une ouverture de session lue dans le journal ──────────────────
+    # Le RÔLE, pas le libellé : la corrélation plaso et le skill conformite
+    # sélectionnent dessus. Sans lui, une ouverture vue dans le journal ne
+    # comptait nulle part, et une image sans wtmp — Fedora, Arch — n'avait
+    # plus une seule session.
+    ("journal : l'ouverture logind est là",
+     {"fait": "session ouverte (systemd-logind)", "acteur": "jdupont"}),
+    ("journal : l'ouverture logind porte le rôle",
+     {"fait": "session ouverte (systemd-logind)", "role": "session-ouverture"}),
+    ("journal : la connexion SSH porte le rôle",
+     {"fait": "connexion SSH acceptée", "role": "session-ouverture"}),
+    # L'échec de PAM est la ligne commune à TOUTES les distributions : elle
+    # rattrape celles qui n'ont ni auth.log, ni secure, ni btmp.
+    ("journal : l'échec PAM nomme le compte et l'origine",
+     {"fait": "échec d'authentification (PAM)", "acteur": "root",
+      "origine": "203.0.113.9"}),
 
     # ── l'historique de navigation n'est pas borné ────────────────────
     # Le piège pose 22 pages dans places.sqlite — dont 20 anciennes — et 1 dans

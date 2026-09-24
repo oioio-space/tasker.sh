@@ -88,8 +88,11 @@ def main():
     ll2 = sqlite_blob(["CREATE TABLE Lastlog2(Name TEXT PRIMARY KEY, Time INTEGER, TTY TEXT, RemoteHost TEXT, PamService TEXT)"],
                       [("INSERT INTO Lastlog2 VALUES(?,?,?,?,?)", [("alice", epoch("2026-01-10T14:00:00"), "pts/0", "10.0.0.9", "sshd")])])
     w("CONNEXIONS/wtmp.db", wdb); w("CONNEXIONS/lastlog2.db", ll2)
-    w(f"JOURNAUX/{P}_journal.txt", "2026-01-06T09:15:03+0100 pc01 sudo[4242]: alice : TTY=tty2 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/dnf install kodi\n2026-01-06T10:00:00+0100 pc01 kernel: usb 1-1: New USB device found, idVendor=0781, idProduct=5583\n")
-    T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/dnf.log": "x\n"})
+    # Fedora n'installe plus rsyslog : ni auth.log, ni secure. Le journal
+    # systemd et auditd sont les seules sources d'authentification.
+    w(f"JOURNAUX/{P}_journal.txt", "2026-01-06T09:15:03+0100 pc01 sudo[4242]: alice : TTY=tty2 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/dnf install kodi\n2026-01-06T10:00:00+0100 pc01 kernel: usb 1-1: New USB device found, idVendor=0781, idProduct=5583\n2026-01-06T08:05:00+0100 pc01 systemd-logind[700]: New session 5 of user alice.\n2026-01-06T08:04:00+0100 pc01 sshd[800]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=10.0.0.9 user=root\n")
+    T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/dnf.log": "x\n",
+        "var/log/audit/audit.log": 'type=USER_LOGIN msg=audit(%d.101:88): pid=800 uid=0 auid=4294967295 msg=\'op=login acct="root" exe="/usr/sbin/sshd" hostname=10.0.0.9 addr=10.0.0.9 terminal=ssh res=failed\'\n' % epoch("2026-01-06T07:04:00")})
     T(f"RESEAU/{P}_reseau.tar.gz", {"etc/NetworkManager/system-connections/Maison.nmconnection": "[connection]\nid=Maison\nuuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\ntype=wifi\n\n[wifi]\nssid=Livebox-Maison\n",
                                                        "var/lib/NetworkManager/timestamps": "[timestamps]\naaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa=1767800000\n", "etc/ssh/sshd_config": "PermitRootLogin no\n", "etc/firewalld/firewalld.conf": "DefaultZone=public\n"})
 
@@ -102,7 +105,7 @@ def main():
                                                               "var/log/apt/history.log": "Start-Date: 2026-01-04  18:29:58\nCommandline: apt install transmission-gtk\nInstall: transmission-gtk:amd64 (4.0.6-1)\nEnd-Date: 2026-01-04  18:30:05\n",
                                                               "var/log/apt/history.log.1.gz": gzip.compress(b"Start-Date: 2025-12-01  10:00:00\nCommandline: apt remove kodi\nRemove: kodi:amd64 (20.5)\nEnd-Date: 2025-12-01  10:00:04\n")})
     w("CONNEXIONS/wtmp.db", wtmpdb([("alice", "2026-01-04T17:50:00", "2026-01-04T19:00:00", "tty2", "", "login")]))
-    T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/auth.log": "Jan  4 18:29:50 pc02 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt install transmission-gtk\nJan  4 18:40:00 pc02 su: (to bob) alice on pts/1\nJan  4 18:40:00 pc02 su: pam_unix(su:session): session opened for user bob(uid=1001) by alice(uid=1000)\n",
+    T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/auth.log": "Jan  4 18:29:50 pc02 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt install transmission-gtk\nJan  4 18:40:00 pc02 su: (to bob) alice on pts/1\nJan  4 18:40:00 pc02 su: pam_unix(su:session): session opened for user bob(uid=1001) by alice(uid=1000)\nJan  4 17:50:00 pc02 login[900]: LOGIN ON tty2 BY alice\nJan  4 17:45:00 pc02 login[899]: FAILED LOGIN (1) on \'/dev/tty2\' FOR \'root\', Authentication failure\nJan  4 17:40:00 pc02 sshd[880]: Failed password for invalid user admin from 10.0.0.9 port 40000 ssh2\n",
                                                             "var/log/syslog.1.gz": gzip.compress(b"Dec 30 08:00:00 pc02 kernel: usb 2-1: New USB device found, idVendor=0951, idProduct=1666\nDec 30 08:00:00 pc02 kernel: usb 2-1: SerialNumber: 0019E06B0001\n")})
     T(f"RESEAU/{P}_reseau.tar.gz", {"etc/wpa_supplicant/wpa_supplicant.conf": 'ctrl_interface=/run/wpa_supplicant\nnetwork={\n    ssid="McDonalds Free WiFi"\n    key_mgmt=NONE\n}\nnetwork={\n    ssid="Bureau-5G"\n    psk="secret"\n}\n',
                                                        "etc/network/interfaces": "auto eth0\niface eth0 inet dhcp\n", "etc/ssh/sshd_config": "PasswordAuthentication yes\n", "etc/nftables.conf": "table inet filter {}\n"})
@@ -115,6 +118,10 @@ def main():
     T(f"PAQUETS/{P}_historique.tar.gz", {"var/log/zypp/history": "# 2025-03-01 10:00:00|command|root@pc03|'zypper' 'in' 'patterns-base'|\n2025-03-01 10:00:05|install|filesystem|84.87-1.1|x86_64|root@pc03|repo-oss|abc|\n# 2026-01-05 21:10:00|command|alice@pc03|'zypper' 'in' 'steam'|\n2026-01-05 21:10:30|install|steam|1.0.0.79-1.1|x86_64|alice@pc03|non-oss|def|\n2026-01-07 09:00:00|remove|kodi|21.0-1.1|x86_64|root@pc03|\n"})
     w("CONNEXIONS/wtmp", utmp([(2, 0, "~", "reboot", "6.12", "2026-01-05T07:00:00"), (7, 500, "tty7", "alice", "", "2026-01-05T07:30:00"), (7, 600, "pts/2", "bob", "192.168.0.5", "2026-01-05T20:00:00"), (8, 500, "tty7", "", "", "2026-01-05T22:00:00")]))
     w(f"JOURNAUX/{P}_journal.txt", "2026-01-05T21:09:50+0100 pc03 sudo[77]: alice : TTY=pts/1 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/zypper in steam\n")
+    # openSUSE n'a pas de var/log/secure : rsyslog y écrit messages et warn.
+    T(f"JOURNAUX/{P}_var_log.tar.gz", {
+        "var/log/messages": "Jan  5 07:30:00 pc03 login[400]: pam_unix(login:session): session opened for user alice(uid=1000) by (uid=0)\n",
+        "var/log/warn": "Jan  5 06:59:00 pc03 sshd[410]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.9 user=bob\n"})
     T(f"RESEAU/{P}_reseau.tar.gz", {"etc/NetworkManager/system-connections/Gare.nmconnection": "[connection]\nid=Gare\nuuid=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\ntype=wifi\npermissions=user:alice:;\n\n[wifi]\nssid=SNCF_WIFI\n", "etc/ssh/sshd_config": "PermitRootLogin yes\n", "etc/firewalld/zones/public.xml": "<zone/>\n"})
 
     # ── Arch : pacman local (desc, %INSTALLDATE%) + pacman.log, iwd (dont un SSID en
@@ -127,7 +134,9 @@ def main():
                                                               "local/qbittorrent-5.0.3-1/desc": "%%NAME%%\nqbittorrent\n\n%%VERSION%%\n5.0.3-1\n\n%%INSTALLDATE%%\n%d\n" % epoch("2026-01-06T20:05:00")})
     T(f"PAQUETS/{P}_historique.tar.gz", {"var/log/pacman.log": "[2024-12-01T10:00:00+0100] [PACMAN] Running 'pacman -S base'\n[2024-12-01T10:00:02+0100] [ALPM] installed filesystem (2024.11.21-1)\n[2026-01-06T20:00:00+0100] [PACMAN] Running 'pacman -S lutris qbittorrent'\n[2026-01-06T20:00:01+0100] [ALPM] installed lutris (0.5.18-1)\n[2026-01-06T20:05:00+0100] [ALPM] installed qbittorrent (5.0.3-1)\n[2026-01-07T08:00:00+0100] [ALPM] removed kodi (21.0-1)\n"})
     w("CONNEXIONS/wtmp", utmp([(7, 900, "tty1", "alice", "", "2026-01-06T19:50:00")]))
-    w(f"JOURNAUX/{P}_journal.txt", "2026-01-06T19:59:58+0100 pc04 sudo[9]: alice : TTY=tty1 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/pacman -S lutris qbittorrent\n")
+    # Arch : ni auth.log, ni secure, ni audit — le journal systemd, et rien
+    # d'autre. Sans les motifs PAM et logind, rien ne se lit de cette machine.
+    w(f"JOURNAUX/{P}_journal.txt", "2026-01-06T19:59:58+0100 pc04 sudo[9]: alice : TTY=tty1 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/pacman -S lutris qbittorrent\n2026-01-06T19:50:00+0100 pc04 systemd-logind[300]: New session 2 of user alice.\n2026-01-06T19:49:00+0100 pc04 login[299]: pam_faillock(login:auth): Consecutive login failures for user root account temporarily locked\n")
     T(f"RESEAU/{P}_reseau.tar.gz", {"var/lib/iwd/Bureau-5G.psk": "[Security]\nPreSharedKey=abc\n", "var/lib/iwd/=4d63446f204672656520576946692e.psk": "[Security]\nPassphrase=x\n", "etc/ssh/sshd_config": "PermitRootLogin no\n", "etc/iptables/iptables.rules": "*filter\nCOMMIT\n"})
 
     # ── Alpine : apk, pas de wtmp ni de journal systemd (musl, OpenRC), messages de
@@ -137,7 +146,7 @@ def main():
     w(f"PAQUETS/{P}_paquets.txt", "busybox-1.37.0-r9\ntransmission-cli-4.0.6-r0\n")
     w(f"PAQUETS/{P}_apk_installed.txt", "C:Q1abc\nP:busybox\nV:1.37.0-r9\nA:x86_64\n\nC:Q1def\nP:transmission-cli\nV:4.0.6-r0\nA:x86_64\n\n")
     T(f"PAQUETS/{P}_historique.tar.gz", {"etc/apk/world": "alpine-base\nbusybox\ntransmission-cli\n", "etc/apk/repositories": "https://dl-cdn.alpinelinux.org/alpine/v3.21/main\n"})
-    T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/messages": "Jan  6 21:00:00 pc05 daemon.info sudo: alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/sbin/apk add transmission-cli\nJan  6 21:01:00 pc05 auth.info sshd[12]: Accepted publickey for alice from 10.0.0.7 port 5000 ssh2\n"})
+    T(f"JOURNAUX/{P}_var_log.tar.gz", {"var/log/messages": "Jan  6 21:00:00 pc05 daemon.info sudo: alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/sbin/apk add transmission-cli\nJan  6 21:01:00 pc05 auth.info sshd[12]: Accepted publickey for alice from 10.0.0.7 port 5000 ssh2\nJan  6 20:55:00 pc05 authpriv.info login[11]: alice login on \'tty1\'\nJan  6 20:54:00 pc05 authpriv.warn login[10]: invalid password for \'root\' on \'tty1\'\n"})
     T(f"RESEAU/{P}_reseau.tar.gz", {"etc/wpa_supplicant/wpa_supplicant.conf": 'network={\n    ssid="ibis-hotel-wifi"\n}\n', "etc/ssh/sshd_config": "PermitRootLogin prohibit-password\n"})
     print("matrice :", sorted(os.listdir(B)))
     return verifier(B)
@@ -147,12 +156,33 @@ def main():
 # et n'en tirait rien : il n'avait aucune assertion, et il passait aussi bien
 # sur un extracteur cassé que sur un extracteur juste. Les attentes sont celles
 # que les commentaires de chaque bloc annoncent déjà.
+# Et, par famille, les authentifications qu'elle DOIT rendre : chacune les
+# écrit ailleurs et autrement, et c'est là que trois familles sur cinq ne
+# donnaient rien. Fedora et Arch n'ont ni auth.log ni secure ; openSUSE écrit
+# warn et messages ; Alpine a le login de busybox, qui ne dit ni « LOGIN ON »
+# ni « Failed password ».
 ATTENDUS = {
-    "PC01_A1_MAT_fedora":   ["rpm", "dnf"],
-    "PC02_A1_MAT_debian":   ["dpkg", "apt"],
-    "PC03_A1_MAT_opensuse": ["zypp", "rpm"],
-    "PC04_A1_MAT_arch":     ["pacman"],
-    "PC05_A1_MAT_alpine":   ["apk"],
+    "PC01_A1_MAT_fedora":   (["rpm", "dnf"],
+                             ["session ouverte (systemd-logind)",
+                              "échec d'authentification (PAM)",
+                              "échec d'authentification audité (auditd)"]),
+    "PC02_A1_MAT_debian":   (["dpkg", "apt"],
+                             ["connexion sur la console",
+                              "échec de connexion sur la console",
+                              "échec SSH",
+                              # le motif su, plus précis, passe AVANT le motif
+                              # PAM générique : la même ligne ne doit pas
+                              # ressortir en simple « session ouverte »
+                              "changement d'utilisateur (su)"]),
+    "PC03_A1_MAT_opensuse": (["zypp", "rpm"],
+                             ["session ouverte (PAM)",
+                              "échec d'authentification (PAM)"]),
+    "PC04_A1_MAT_arch":     (["pacman"],
+                             ["session ouverte (systemd-logind)",
+                              "compte verrouillé après des échecs"]),
+    "PC05_A1_MAT_alpine":   (["apk"],
+                             ["connexion sur la console",
+                              "échec de connexion sur la console"]),
 }
 
 
@@ -164,7 +194,7 @@ def verifier(base):
     extraire = os.path.join(ici, "..", "forensic-linux", "scripts", "extraire.py")
     controles = os.path.join(ici, "..", "conformite-linux", "scripts", "controles.py")
     manques = 0
-    for prefixe, marqueurs in sorted(ATTENDUS.items()):
+    for prefixe, (marqueurs, connexions) in sorted(ATTENDUS.items()):
         racine = os.path.join(base, prefixe)
         faits = os.path.join(base, prefixe + "-faits.jsonl")
         p = subprocess.run([sys.executable, extraire, racine, "-o", faits],
@@ -184,15 +214,18 @@ def verifier(base):
         utiles = [x for x in lus if x["categorie"] != "limite"]
         sources = " ".join(str(x.get("source", "")) + " " + str(x.get("methode", ""))
                            for x in lus)
+        vus = {x.get("fait") for x in lus}
+        sans = [c for c in connexions if c not in vus]
+        marque = any(m in sources for m in marqueurs)
         ok = (p.returncode == 0 and q.returncode == 0 and not plante
-              and len(utiles) >= 5 and any(m in sources for m in marqueurs))
+              and len(utiles) >= 5 and marque and not sans)
         manques += not ok
-        detail = (f"{len(utiles)} faits hors limite"
+        detail = (f"{len(utiles)} faits hors limite, {len(connexions)} authentifications"
                   if ok else
                   f"code {p.returncode}/{q.returncode}, {len(utiles)} faits utiles"
                   + (f", phases en erreur : {plante[0][:60]}" if plante else "")
-                  + ("" if any(m in sources for m in marqueurs)
-                     else f", aucun marqueur {marqueurs}"))
+                  + ("" if marque else f", aucun marqueur {marqueurs}")
+                  + (f", authentifications manquantes : {sans}" if sans else ""))
         print(f"  {'ok ' if ok else 'MANQUE'}  {prefixe:24s} {detail}")
     if manques:
         print(f"{manques} famille(s) mal traitée(s).", file=sys.stderr)

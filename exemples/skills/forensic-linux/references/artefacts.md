@@ -350,6 +350,16 @@ La sortie de `rpm -qa --last` ou `dpkg-query -l`.
 - **Piège** : les dates sont écrites dans la **langue du poste collecteur**
   (« mar. 27 août 2019 »). L'extracteur les lit sans dépendre de la locale ;
   si vous lisez le fichier à la main, n'en soyez pas surpris.
+- **Piège RPM, corrigé dans la collecte** : `rpm -qa` rend une liste **vide
+  avec un code 0** quand la base qu'on lui désigne ne lui dit rien — dossier
+  vide, base déplacée, format qu'il ne lit pas. L'étape passait alors au vert
+  sans un seul paquet. La collecte cherche désormais le **fichier** de base et
+  non le dossier — `rpmdb.sqlite` (Fedora 33+, RHEL 9), `Packages.db` (ndb,
+  openSUSE), `Packages` (bdb, RHEL 7 et 8) —, d'abord dans
+  `usr/lib/sysimage/rpm`, où elle a déménagé depuis Fedora 36, puis dans
+  `var/lib/rpm`, qui n'est plus qu'un lien et se rencontre vide ; et une liste
+  vide y est maintenant une **erreur**. Si la pièce manque ou est vide,
+  l'extracteur le dit en « limite » : ce n'est pas une machine sans paquets.
 
 ### Les journaux tournés : `.gz`, `.xz`, `.bz2`, `.zst`
 `logrotate` comprime les anciens journaux. `gzip` est le défaut, mais `xz` et
