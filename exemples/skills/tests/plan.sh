@@ -31,6 +31,11 @@ declare -A pieces=(
     [arch]="var/lib/pacman/local/x-1/desc"
     [alpine]="lib/apk/db/installed"
     [rpm_migre]="var/lib/rpm/.rpm.lock"
+    # un dpkg installé en simple OUTIL sur une Fedora : le dossier est là, le
+    # status est vide, et dpkg l'emportait sur une base RPM pleine
+    [fedora_dpkg]="usr/lib/sysimage/rpm/rpmdb.sqlite var/lib/dpkg/status@vide"
+    # un dossier pacman sans un seul paquet
+    [pacman_vide]="var/lib/pacman/local/.keep"
 )
 declare -A attendu=(
     [debian]="dpkg-query"
@@ -38,6 +43,8 @@ declare -A attendu=(
     [opensuse]="rpm --dbpath"
     [arch]="pacman_local"     [alpine]="apk_installed"
     [rpm_migre]="ni base dpkg"
+    [fedora_dpkg]="rpm --dbpath"
+    [pacman_vide]="ni base dpkg"
 )
 plan_de() {   # <montage>
     "$ici/tasker.sh" -c "$conf" -l --set MONTAGE="$1" --set PERIPH=/dev/loop0 \
@@ -46,12 +53,17 @@ plan_de() {   # <montage>
 }
 
 dernier=""
-for f in debian fedora rhel9 rhel7 opensuse arch alpine rpm_migre; do
+for f in debian fedora rhel9 rhel7 opensuse arch alpine rpm_migre fedora_dpkg pacman_vide; do
     m="$travail/faux-$f"
-    rm -rf "$m"; mkdir -p "$m/etc" "$m/$(dirname "${pieces[$f]}")" "$m/home/toto" "$m/var/log"
+    rm -rf "$m"; mkdir -p "$m/etc" "$m/home/toto" "$m/var/log"
     echo "ID=$f" > "$m/etc/os-release"; echo pc > "$m/etc/hostname"
     printf 'root:x:0:0::/root:/bin/sh\ntoto:x:1000:1000::/home/toto:/bin/sh\n' > "$m/etc/passwd"
-    printf 'x' > "$m/${pieces[$f]}"
+    # « chemin@vide » pose un fichier VIDE : un dossier de base qui existe sans
+    # rien dedans ne doit pas faire choisir son gestionnaire.
+    for piece in ${pieces[$f]}; do
+        mkdir -p "$m/$(dirname "${piece%@vide}")"
+        [[ "$piece" == *@vide ]] && : > "$m/${piece%@vide}" || printf 'x' > "$m/$piece"
+    done
     [[ "$f" == debian ]] && echo "Jan  1 00:00:00 pc sshd[1]: Accepted password for toto from 10.0.0.1" > "$m/var/log/auth.log"
     plan="$(plan_de "$m")"
     if grep -q -- "${attendu[$f]}" <<< "$plan"
@@ -97,6 +109,22 @@ poses=$(grep -o ": > '[^']*\.brut'" <<< "$plat" | wc -l)
 if (( poses == 5 ))
 then dire extraits ok "($poses genres, aucun ne peut emporter les suivants)"
 else dire extraits KO "— $poses fichiers bruts posés pour 5 genres"
+fi
+
+# Arch, et toute image récente dont systemd n'écrit plus utmp, n'a ni wtmp, ni
+# btmp, ni lastlog : « cp -aL » se retrouvait SANS SOURCE et l'étape passait au
+# rouge sur une collecte saine. Pas de pièce, pas d'étape — mais l'étape doit
+# revenir dès qu'il y a un fichier à copier.
+sans="$travail/faux-arch"
+if grep -q "Copie des fichiers de connexion" <<< "$(plan_de "$sans")"
+then dire connexions KO "— cp -aL sans source sur une image sans wtmp"
+else
+    avec="$travail/faux-connexions"
+    rm -rf "$avec"; cp -a "$sans" "$avec"; : > "$avec/var/log/wtmp"
+    if grep -q "Copie des fichiers de connexion" <<< "$(plan_de "$avec")"
+    then dire connexions ok "(pas de pièce, pas d'étape ; une pièce, une étape)"
+    else dire connexions KO "— wtmp présent et pourtant aucune étape de copie"
+    fi
 fi
 
 # Les comptes sans session ne sont pas relevés. nologin n'est pas le seul :
