@@ -642,30 +642,30 @@ aussi, sans quoi rien ne correspondra jamais.
 ---
 ## STRINGS/ — les chaînes lisibles des périphériques
 
-Un jeu de fichiers par volume monté sous le point de montage de l'analyse, la
-racine comme un `/home` posé sur un autre disque. La liste est celle qui sert à
+Un fichier par volume monté sous le point de montage de l'analyse, la racine
+comme un `/home` posé sur un autre disque. La liste est celle qui sert à
 photorec : aucun volume ne peut être oublié, aucun n'est nommé à la main.
 
     PREFIX_strings_<volume>.txt           les chaînes brutes, non comprimées
-    PREFIX_strings_<volume>_urls.txt      les adresses web, comptées
-    PREFIX_strings_<volume>_courriels.txt les adresses de courriel
-    PREFIX_strings_<volume>_ip.txt        les adresses IP
-    PREFIX_strings_<volume>_mac.txt       les adresses MAC
-    PREFIX_strings_<volume>_chemins.txt   les chemins sous /home, /root, /media…
 
-Les cinq extraits sont au format `compte valeur` : le nombre d'occurrences,
-puis la chaîne, les plus fréquentes d'abord. Le compte dit à lui seul si une
-chaîne traîne partout ou n'apparaît qu'une fois.
+**`strings` est appelé NU, sans une seule option, et la collecte ne cherche
+RIEN dedans.** La pièce est le texte brut du périphérique tel que l'outil le
+rend par défaut, et un lecteur qui veut la refaire tape exactement la même
+commande. La recherche se fait ensuite, sur la pièce, par
+`extraire.py --indicateurs` — voir « Comment y chercher » plus bas.
 
-**`strings` est appelé NU, sans une seule option.** La pièce est donc le texte
-brut du périphérique tel que l'outil le rend par défaut, et un lecteur qui veut
-la refaire tape exactement la même commande. Ce que cela implique :
+Une collecte plus ancienne peut porter à côté cinq extraits déjà triés
+(`_urls`, `_courriels`, `_ip`, `_mac`, `_chemins`), au format `compte valeur`.
+L'extracteur les lit toujours quand ils sont là ; la collecte ne les produit
+plus.
+
+Ce que « nu » implique :
 
 - **aucun décalage en octets.** On sait qu'une chaîne est sur le volume ; on ne
   peut pas dire où. Pour situer une occurrence, il faut revenir au fichier brut
   et l'y chercher.
 - **longueur minimale de 4 caractères** (le défaut) au lieu de 8 : beaucoup
-  plus de bruit binaire dans le fichier comme dans les extraits.
+  plus de bruit binaire.
 - **pas de compression** : la sortie d'un disque se compte en dizaines de
   gigaoctets, là où le texte se comprimait d'un facteur cinq à dix. Prévoyez la
   place sur le support de destination.

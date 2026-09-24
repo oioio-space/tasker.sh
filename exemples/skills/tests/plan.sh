@@ -94,21 +94,20 @@ then dire auth ok "(succès et échecs relevés dans les journaux)"
 else dire auth KO "— les authentifications ne sont pas relevées"
 fi
 
-# strings NU, sans une option : la pièce est le texte brut du périphérique.
-if grep -q -- "strings '{{volume}}'" <<< "$plat"
+# strings NU : sans une option, et sans rien chercher dans sa sortie. La pièce
+# est le texte brut du périphérique, tel que l'outil le rend. Ce qu'on cherche
+# dedans se cherche ensuite, sur la pièce (extraire.py --indicateurs).
+if grep -q -- "strings '{{volume}}' > " <<< "$plat"
 then dire chaînes ok "(strings nu)"
 else dire chaînes KO "— « strings '{{volume}}' » absent du plan"
 fi
-
-# Chaque fichier brut est posé VIDE avant awk, qui n'y écrit qu'en cas de
-# correspondance. Sans cela un genre sans trouvaille laissait « sort » sans
-# fichier ; sous pipefail la chaîne de && s'arrêtait là et TOUS les genres
-# suivants étaient perdus. Un disque sans une seule adresse de courriel est
-# normal.
-poses=$(grep -o ": > '[^']*\.brut'" <<< "$plat" | wc -l)
-if (( poses == 5 ))
-then dire extraits ok "($poses genres, aucun ne peut emporter les suivants)"
-else dire extraits KO "— $poses fichiers bruts posés pour 5 genres"
+if grep -qE -- "strings '\{\{volume\}\}' -|strings -" <<< "$plat"
+then dire chaînes KO "— strings porte une option"
+fi
+# Aucune recherche sur la sortie de strings : ni awk de motifs, ni extraits.
+if grep -qE -- "Extraits des chaînes|\.brut" <<< "$plat"
+then dire extraits KO "— une recherche particulière est encore faite sur les chaînes"
+else dire extraits ok "(aucune recherche sur la sortie de strings)"
 fi
 
 # Arch, et toute image récente dont systemd n'écrit plus utmp, n'a ni wtmp, ni
