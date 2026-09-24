@@ -144,6 +144,19 @@ EVENEMENTS = ("evenement", "support", "telechargement", "paquet", "suspect",
               "persistance", "usage", "timeline", "plaso")
 # Ce que le § 5 montre déjà : le réimprimer dans la chronologie du § 6 ferait
 # compter deux fois le même identifiant.
+# Une ouverture de session se reconnaît à son RÔLE, jamais au libellé français,
+# qui est du texte de rapport et se reformule. wtmp n'est plus la seule source :
+# PAM, systemd-logind, le login de la console et auditd en posent aussi, et sur
+# Fedora ou Arch — dont les images récentes n'ont plus d'utmp — ce sont les
+# SEULES. Le libellé reste accepté pour les faits produits avant ce rôle.
+ROLE_SESSION = "session-ouverture"
+
+
+def est_ouverture(f):
+    return (f.get("role") == ROLE_SESSION
+            or "ouverture de session" in f.get("fait", ""))
+
+
 ROLES_HORS_CHRONO = ("plaso-recensement", "plaso-famille", "rapprochement-chemin",
                      "plaso-sujet", "plaso-journee",
                      "corroboration", "corroboration-seul")
@@ -247,7 +260,7 @@ def sessions(faits, H):
     for f in faits:
         if f.get("categorie") != "evenement" or not f.get("horodatage"):
             continue
-        if "ouverture de session" in f["fait"]:
+        if est_ouverture(f):
             ouvertures.append(f)
         elif "fermeture de session" in f["fait"] or "fin de la session" in (f.get("note") or ""):
             tty = f.get("tty") or (RE_OU.search(f.get("note") or "") or [None, ""])[1][4:]
@@ -585,13 +598,13 @@ def main():
              "d'un sudo).\n")
     # Le § 5 montre déjà le recensement plaso et le tableau par compte : les
     # réimprimer ici ferait compter deux fois le même identifiant. L'exclusion
-    # se fait sur le RÔLE ; celle des ouvertures et fermetures de session reste
-    # sur le libellé faute d'un rôle de fermeture — à reprendre le jour où il
-    # y en aura un.
+    # se fait sur le RÔLE ; celle des fermetures de session reste sur le
+    # libellé faute d'un rôle de fermeture — à reprendre le jour où il y en
+    # aura un.
     evenements = H.tri([f for f in faits if f.get("categorie") in EVENEMENTS
                         and f.get("horodatage")
                         and f.get("role") not in ROLES_HORS_CHRONO
-                        and "ouverture de session" not in f["fait"]
+                        and not est_ouverture(f)
                         and "fermeture de session" not in f["fait"]])
     cles = [H.cle(f) for f in evenements]
     colonnes = ["quand", "qui", "quoi", "valeur", "où", "comment", "confiance", "id"]

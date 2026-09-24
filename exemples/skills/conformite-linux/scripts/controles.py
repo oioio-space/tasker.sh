@@ -309,7 +309,7 @@ def comptes(c):
                         acteur=nom,
                         question="la charte autorise-t-elle un second compte "
                                  "administrateur, et celui-ci est-il déclaré ?")
-            if uid >= 1000 and not shell.endswith(("nologin", "false")):
+            if uid >= 1000 and ouvre_une_session(shell):
                 homes.setdefault(home, []).append(nom)
     for home, noms in sorted(homes.items()):
         if len(noms) > 1:
@@ -1055,6 +1055,20 @@ def _partage_cles(comptes_):
                              "compte ?",
                     note=f"clé {cle}… ({ou[0][2] or 'sans commentaire'}) : qui détient "
                          "la clé privée agit sous tous ces comptes")
+
+
+# Les interpréteurs qui refusent d'ouvrir une session — la MÊME liste que
+# SHELLS_SANS_SESSION dans collecte-linux.conf et dans extraire.py (les trois
+# sont tenues identiques par tests/matrice.py ; l'air-gap interdit de les
+# partager par un module). nologin n'est pas le seul, et son chemin change
+# d'une distribution à l'autre : on teste le seul NOM. Un champ vide n'est pas
+# un refus, login lance alors /bin/sh.
+SHELLS_SANS_SESSION = frozenset(
+    ("nologin", "false", "sync", "shutdown", "halt", "true", "null", "nonexistent"))
+
+
+def ouvre_une_session(shell):
+    return (shell or "").rsplit("/", 1)[-1] not in SHELLS_SANS_SESSION
 
 
 def _partage_sessions(pieces, locaux):

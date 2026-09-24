@@ -268,7 +268,9 @@ def batir(base):
       # trace qu'une session ait été ouverte.
       "2026-01-07T08:12:00+0100 pc42 systemd-logind[700]: New session 9 of user jdupont.\n"
       "2026-01-07T08:11:00+0100 pc42 sshd[701]: pam_unix(sshd:auth): authentication "
-      "failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.9 user=root\n")
+      "failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.9 user=root\n"
+      "2026-01-07T08:10:59+0100 pc42 sshd[701]: Failed password for root from "
+      "203.0.113.9 port 40000 ssh2\n")
     # Le journal TOURNÉ, comprimé, RANGÉ DANS LE TAR : c'est la forme la plus
     # courante de tout /var/log, et le seul endroit où vit la chaîne ci-dessous.
     # Si les membres d'archive ne sont pas décomprimés avant d'être soumis aux
@@ -702,6 +704,13 @@ ATTENDUS_CHAMPS = [
     ("journal : l'échec PAM nomme le compte et l'origine",
      {"fait": "échec d'authentification (PAM)", "acteur": "root",
       "origine": "203.0.113.9"}),
+    # Cinq libellés français disent un échec d'authentification (SSH, PAM,
+    # console, sudo, auditd) : sans un rôle commun, il faudrait sélectionner
+    # sur la phrase — la faute que le dépôt s'interdit.
+    ("journal : l'échec porte le rôle",
+     {"fait": "échec d'authentification (PAM)", "role": "authentification-echec"}),
+    ("journal : l'échec SSH porte le même rôle",
+     {"fait": "échec SSH", "role": "authentification-echec"}),
 
     # ── l'historique de navigation n'est pas borné ────────────────────
     # Le piège pose 22 pages dans places.sqlite — dont 20 anciennes — et 1 dans

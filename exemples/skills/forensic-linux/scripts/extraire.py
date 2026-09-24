@@ -633,7 +633,7 @@ def comptes(c):
                 uid_n = int(uid)
             except ValueError:
                 continue
-            interactif = not shell.endswith(("nologin", "false"))
+            interactif = ouvre_une_session(shell)
             if uid_n >= 1000 and interactif:
                 humains.append(nom)
                 # « home » en CHAMP, pas seulement dans la phrase : c'est ce
@@ -700,6 +700,21 @@ def comptes(c):
 # Posé sur un seul, il laissait _fenetres_session rendre une liste vide — sans
 # un mot — sur Fedora 40 et Debian 13, qui n'ont plus de wtmp binaire.
 ROLE_SESSION = "session-ouverture"
+ROLE_ECHEC = "authentification-echec"
+# Les interpréteurs qui refusent d'ouvrir une session — la MÊME liste que
+# SHELLS_SANS_SESSION dans collecte-linux.conf, que tests/matrice.py tient
+# identique. nologin n'est pas le seul et son chemin change de distribution en
+# distribution (/sbin, /usr/sbin, /usr/bin) : on teste le seul NOM. openSUSE et
+# Alpine posent /bin/false sur leurs comptes de service, Debian /bin/sync.
+# Un champ VIDE n'est pas un refus : login lance alors /bin/sh.
+SHELLS_SANS_SESSION = frozenset(
+    ("nologin", "false", "sync", "shutdown", "halt", "true", "null", "nonexistent"))
+
+
+def ouvre_une_session(shell):
+    return (shell or "").rsplit("/", 1)[-1] not in SHELLS_SANS_SESSION
+
+
 
 
 def _last(c, chemin, categorie, quoi, methode, role=None):
@@ -860,9 +875,11 @@ def sessions(c):
               "ouverture de session", "last -F -f wtmp", ROLE_SESSION)
         _last(c, c.un("_reboots.txt", "CONNEXIONS"), "evenement",
               "démarrage ou arrêt de la machine", "last -F -x -f wtmp reboot shutdown")
-    if not _utmp_brut(c, "btmp", "evenement", "échec d'authentification"):
+    # Le même rôle que les échecs lus dans les journaux : btmp n'est qu'une
+    # source de plus, et sur trois distributions il n'existe même pas.
+    if not _utmp_brut(c, "btmp", "evenement", "échec d'authentification", ROLE_ECHEC):
         _last(c, c.un("_echecs.txt", "CONNEXIONS"), "evenement",
-              "échec d'authentification", "lastb -F -f btmp")
+              "échec d'authentification", "lastb -F -f btmp", ROLE_ECHEC)
     _bases_connexion(c)
 
     # lastlog n'a pas de forme texte dans la collecte : il se lit ici ou nulle
@@ -898,14 +915,25 @@ RE_AUDIT_ID = re.compile(r"\b(?:auid|id)=(\d+)")
 RE_AUDIT_ADDR = re.compile(r"\b(?:addr|hostname)=(?!\?)(\S+)")
 
 
+RE_DHCP = re.compile(r'dhclient|dhcp4.*address\s+(\d+\.\d+\.\d+\.\d+)', re.I)
+
+
+def _dhcp(m):
+    return (None, m.group(1) if m.lastindex else "bail DHCP")
+
+
 def _pam_echec(m):
     """« pam_unix(sshd:auth): authentication failure; … rhost=… user=… » —
     la ligne d'échec commune à toutes les distributions. Le compte et l'adresse
     sont en fin de ligne, dans un ordre qui varie : on les cueille à part."""
-    ligne, u, r = m.group(0), RE_PAM_USER.search(m.group(0)), RE_PAM_RHOST.search(m.group(0))
-    detail = f"service {m.group(1)}" + (f", depuis {r.group(1)}" if r else "")
-    return (u.group(1) if u else None, detail,
-            {"origine": r.group(1)} if r else {})
+    ligne = m.group(0)
+    u, r = RE_PAM_USER.search(ligne), RE_PAM_RHOST.search(ligne)
+    champs = {"role": ROLE_ECHEC}
+    if r:
+        champs["origine"] = r.group(1)
+    return (u.group(1) if u else None,
+            f"service {m.group(1)}" + (f", depuis {r.group(1)}" if r else ""),
+            champs)
 
 
 def _audit_qui(ligne):
@@ -934,21 +962,31 @@ MOTIFS_JOURNAL = [
      re.compile(r'sshd.*Accepted\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)'),
      lambda m: (m.group(2), f"depuis {m.group(3)} par {m.group(1)}",
                 {"origine": m.group(3), "role": ROLE_SESSION})),
+    # Tous les échecs portent ROLE_ECHEC. Cinq libellés français pour un même
+    # fait, c'est cinq chaînes sur lesquelles un lecteur serait tenté de
+    # sélectionner — la faute que ce fichier s'interdit ailleurs.
     ("evenement", "échec SSH", 'Failed',
      re.compile(r'sshd.*Failed\s+\S+\s+for\s+(?:invalid user\s+)?(\S+)\s+from\s+(\S+)'),
-     lambda m: (m.group(1), f"depuis {m.group(2)}")),
-    ("evenement", "compte inexistant tenté en SSH", 'nvalid user',
+     lambda m: (m.group(1), f"depuis {m.group(2)}", {"role": ROLE_ECHEC})),
+    # Même libellé que ci-dessus : sshd écrit les DEUX lignes pour une seule
+    # tentative sur un compte inconnu, et deux libellés en faisaient deux faits
+    # apparemment distincts.
+    ("evenement", "échec SSH", 'nvalid user',
      re.compile(r"sshd.*[Ii]nvalid user\s+(\S+)\s+from\s+(\S+)"),
-     lambda m: (m.group(1), f"depuis {m.group(2)}")),
+     lambda m: (m.group(1), f"depuis {m.group(2)}, compte inexistant",
+                {"role": ROLE_ECHEC})),
     ("evenement", "échec SSH", 'Connection closed by authenticating user',
      re.compile(r"Connection closed by authenticating user\s+(\S+)\s+(\S+)"),
-     lambda m: (m.group(1), f"depuis {m.group(2)}, coupée avant la fin")),
+     lambda m: (m.group(1), f"depuis {m.group(2)}, coupée avant la fin",
+                {"role": ROLE_ECHEC})),
     ("evenement", "échec SSH", 'maximum authentication attempts',
      re.compile(r"maximum authentication attempts exceeded for\s+(\S+)\s+from\s+(\S+)"),
-     lambda m: (m.group(1), f"depuis {m.group(2)}, trop de tentatives")),
+     lambda m: (m.group(1), f"depuis {m.group(2)}, trop de tentatives",
+                {"role": ROLE_ECHEC})),
     ("evenement", "mot de passe sudo refusé", 'incorrect password attempt',
      re.compile(r"sudo(?:\[\d+\])?:\s*(\S+)\s*:\s*(\d+) incorrect password attempt"),
-     lambda m: (m.group(1), f"{m.group(2)} tentative(s) refusée(s)")),
+     lambda m: (m.group(1), f"{m.group(2)} tentative(s) refusée(s)",
+                {"role": ROLE_ECHEC})),
     ("evenement", "commande sudo", 'COMMAND=',
      re.compile(r'sudo(?:\[\d+\])?:\s+(\S+)\s*:.*COMMAND=(.+)$'),
      lambda m: (m.group(1), f"a lancé {m.group(2).strip()}")),
@@ -979,13 +1017,13 @@ MOTIFS_JOURNAL = [
      _pam_echec),
     ("evenement", "échec de connexion sur la console", 'nvalid password for',
      re.compile(r"[Ii]nvalid password for\s+'?([^'\s]+)'?\s+on\s+'?([^'\s]+)"),
-     lambda m: (m.group(1), f"sur {m.group(2)}")),
+     lambda m: (m.group(1), f"sur {m.group(2)}", {"role": ROLE_ECHEC})),
     ("evenement", "échec de connexion sur la console", 'FAILED LOGIN',
      re.compile(r"FAILED LOGIN\s*(?:\(\d+\))?\s*on\s+'?([^'\s]+)'?\s+FOR\s+'?([^'\s,]+)"),
-     lambda m: (m.group(2), f"sur {m.group(1)}")),
+     lambda m: (m.group(2), f"sur {m.group(1)}", {"role": ROLE_ECHEC})),
     ("evenement", "compte verrouillé après des échecs", 'temporarily locked',
      re.compile(r"pam_faillock.*for user\s+(\S+)\s+account temporarily locked"),
-     lambda m: (m.group(1), "verrouillé par pam_faillock")),
+     lambda m: (m.group(1), "verrouillé par pam_faillock", {"role": ROLE_ECHEC})),
     # auditd : la seule source qui ne dépend pas de syslog, et celle des
     # machines RHEL durcies. res=success ou res=failed tranche à lui seul.
     ("evenement", "connexion auditée (auditd)", 'res=success',
@@ -994,7 +1032,8 @@ MOTIFS_JOURNAL = [
                 {"role": ROLE_SESSION})),
     ("evenement", "échec d'authentification audité (auditd)", 'res=failed',
      re.compile(r"type=USER_(?:LOGIN|AUTH|ACCT)\b.*res=failed"),
-     lambda m: (_audit_qui(m.group(0)), _audit_ou(m.group(0), "authentification refusée"))),
+     lambda m: (_audit_qui(m.group(0)), _audit_ou(m.group(0), "authentification refusée"),
+                {"role": ROLE_ECHEC})),
     # « role » est un nom de MACHINE, que la synthèse et le brouillon peuvent
     # reconnaître. Le libellé en français, lui, est du texte de rapport : le
     # reformuler ne doit pas vider le tableau des supports sans un mot d'erreur,
@@ -1040,9 +1079,15 @@ MOTIFS_JOURNAL = [
     ("machine", "modèle de la machine (DMI du BIOS)", 'DMI:',
      re.compile(r'DMI:\s+(.+?),\s*BIOS\s+(.+)$'),
      lambda m: (None, f"{m.group(1).strip()} — BIOS {m.group(2).strip()}")),
-    ("reseau", "adresse obtenue en DHCP", None,
-     re.compile(r'dhclient|dhcp4.*address\s+(\d+\.\d+\.\d+\.\d+)', re.I),
-     lambda m: (None, m.group(1) if m.lastindex else "bail DHCP")),
+    # Seule entrée de la table à n'avoir PAS de littéral : sa regex tournait
+    # donc sur chaque ligne qu'aucune autre n'avait prise, soit 99,5 % d'un
+    # journal — 0,48 µs des 1,72 µs de la boucle, mesuré, 28 % du coût total.
+    # Trois cribles pour les trois casses rencontrées (dhclient, le dhcp4 de
+    # NetworkManager, les DHCPACK/DHCP4 en capitales), un seul motif compilé :
+    # 150 ns au lieu de 480, et le premier qui prend la ligne coupe la boucle.
+    ("reseau", "adresse obtenue en DHCP", 'dhclient', RE_DHCP, _dhcp),
+    ("reseau", "adresse obtenue en DHCP", 'dhcp4', RE_DHCP, _dhcp),
+    ("reseau", "adresse obtenue en DHCP", 'DHCP', RE_DHCP, _dhcp),
 ]
 RE_ISO = re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+\-]\d{4})\s+(\S+)\s+(.*)$')
 # Une ligne syslog porte l'heure du POSTE, le mtime du fichier est en UTC :
@@ -1050,6 +1095,21 @@ RE_ISO = re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+\-]\d{4})\s+(\S+)\s+(.*)
 MARGE_FUSEAU = timedelta(hours=26)
 RE_SYSLOG = re.compile(r'^(\w{3})\s+(\d{1,2})\s+(\d\d:\d\d:\d\d)\s+(\S+)\s+(.*)$')
 RE_AUDIT_TS = re.compile(r'\baudit\((\d{9,11})\.\d+:\d+\)')
+
+
+# auditd écrit des dizaines de lignes par seconde, toutes sur le même epoch :
+# fromtimestamp() + isoformat() coûtait 1,1 µs par LIGNE d'audit.log (mesuré).
+# Mémoïsé à la seconde, il ne coûte plus que par seconde distincte.
+_ISO_UTC = {}
+
+
+def _iso_utc(sec):
+    iso = _ISO_UTC.get(sec)
+    if iso is None:
+        if len(_ISO_UTC) > 8192:
+            _ISO_UTC.clear()
+        iso = _ISO_UTC[sec] = datetime.fromtimestamp(sec, timezone.utc).isoformat()
+    return iso
 
 
 def _ligne_journal(ligne, fin_fichier=None):
@@ -1085,10 +1145,13 @@ def _ligne_journal(ligne, fin_fichier=None):
         # auditd : « type=USER_LOGIN msg=audit(1767859800.123:456): … ».
         # Un epoch, donc de l'UTC vrai — il sort daté, suffixe compris, à la
         # différence des lignes syslog.
-        m = RE_AUDIT_TS.search(ligne)
-        if m:
-            return (datetime.fromtimestamp(int(m.group(1)), timezone.utc).isoformat(),
-                    ligne, False)
+        # Le « in » d'abord, comme partout ici : sans lui la regex tournait sur
+        # TOUTE ligne qui n'est ni ISO ni syslog — dmesg, continuations, lignes
+        # tronquées —, 0,51 µs contre 0,04 avec le crible (mesuré, facteur 12).
+        if "audit(" in ligne:
+            m = RE_AUDIT_TS.search(ligne)
+            if m:
+                return _iso_utc(int(m.group(1))), ligne, False
         return None, ligne, False
     if fin_fichier is None:
         return None, m.group(5), False
@@ -2103,6 +2166,9 @@ _GENRE_CHAINE = {
     "mac": "adresse MAC",
     "chemins": "chemin personnel",
 }
+# La collecte ne produit PLUS d'extraits : strings y est appelé nu, et rien
+# n'est cherché dans sa sortie. Ce qui suit reste pour les collectes faites
+# avant ce changement — une pièce déjà au scellé doit rester lisible.
 # Le fichier brut et ses extraits portent la MÊME extension. C'est donc le
 # genre, pris dans la liste connue, qui les départage — et lui seul : avec un
 # « [a-z]+ » quelconque, un volume nommé « home_data » se lirait comme un

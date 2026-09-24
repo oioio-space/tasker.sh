@@ -33,9 +33,14 @@ declare -A pieces=(
     [rpm_migre]="var/lib/rpm/.rpm.lock"
     # un dpkg installé en simple OUTIL sur une Fedora : le dossier est là, le
     # status est vide, et dpkg l'emportait sur une base RPM pleine
-    [fedora_dpkg]="usr/lib/sysimage/rpm/rpmdb.sqlite var/lib/dpkg/status@vide"
+    [fedora_dpkg]="usr/lib/sysimage/rpm/rpmdb.sqlite"
     # un dossier pacman sans un seul paquet
     [pacman_vide]="var/lib/pacman/local/.keep"
+)
+# Les pièces posées VIDES : un dossier de base qui existe sans rien dedans ne
+# doit pas faire choisir son gestionnaire.
+declare -A vides=(
+    [fedora_dpkg]="var/lib/dpkg/status"
 )
 declare -A attendu=(
     [debian]="dpkg-query"
@@ -58,12 +63,11 @@ for f in debian fedora rhel9 rhel7 opensuse arch alpine rpm_migre fedora_dpkg pa
     rm -rf "$m"; mkdir -p "$m/etc" "$m/home/toto" "$m/var/log"
     echo "ID=$f" > "$m/etc/os-release"; echo pc > "$m/etc/hostname"
     printf 'root:x:0:0::/root:/bin/sh\ntoto:x:1000:1000::/home/toto:/bin/sh\n' > "$m/etc/passwd"
-    # « chemin@vide » pose un fichier VIDE : un dossier de base qui existe sans
-    # rien dedans ne doit pas faire choisir son gestionnaire.
-    for piece in ${pieces[$f]}; do
-        mkdir -p "$m/$(dirname "${piece%@vide}")"
-        [[ "$piece" == *@vide ]] && : > "$m/${piece%@vide}" || printf 'x' > "$m/$piece"
+    for piece in ${pieces[$f]} ${vides[$f]:-}; do
+        mkdir -p "$m/$(dirname "$piece")"
+        printf 'x' > "$m/$piece"
     done
+    for piece in ${vides[$f]:-}; do : > "$m/$piece"; done
     [[ "$f" == debian ]] && echo "Jan  1 00:00:00 pc sshd[1]: Accepted password for toto from 10.0.0.1" > "$m/var/log/auth.log"
     plan="$(plan_de "$m")"
     if grep -q -- "${attendu[$f]}" <<< "$plan"
@@ -80,18 +84,31 @@ done
 # tasker.sh replie les commandes longues : on remet le plan sur une ligne.
 plat="$(tr '\n' ' ' <<< "$dernier" | tr -s ' ')"
 
-# rpm -qa rend une liste VIDE avec un code 0 quand la base ne lui dit rien :
-# l'étape doit refuser une liste vide, sinon elle passe au vert sans un paquet.
-if grep -q "liste de paquets VIDE" <<< "$plat"
+# Une image qui porte un journal systemd sur disque : c'est la seule source
+# d'authentification de Fedora et d'Arch.
+jour="$travail/faux-journal"
+rm -rf "$jour"; cp -a "$travail/faux-arch" "$jour"
+mkdir -p "$jour/var/log/journal/aaaa"; printf 'x' > "$jour/var/log/journal/aaaa/system.journal"
+
+# Une commande qui rend 0 sans rien produire n'est pas un succès : rpm -qa sur
+# une base qu'il ne sait pas lire en est le cas d'école. Les étapes qui
+# produisent un fichier le passent à « nonvide ».
+if grep -q "nonvide '[^']*_paquets.txt'" <<< "$plat"
 then dire paquets ok "(une liste vide est une erreur)"
 else dire paquets KO "— rien ne refuse une liste de paquets vide"
 fi
 
-# Succès et échecs d'authentification : wtmp et btmp ne suffisent pas, et sur
-# Arch ou Fedora ils n'existent même pas.
-if grep -q "auth_succes.txt" <<< "$plat" && grep -q "auth_echecs.txt" <<< "$plat"
-then dire auth ok "(succès et échecs relevés dans les journaux)"
-else dire auth KO "— les authentifications ne sont pas relevées"
+# Les journaux d'authentification : la conf les COLLECTE, elle ne les trie pas.
+# Un second inventaire de motifs en awk, dans la conf, dériverait de celui
+# d'extraire.py sans que rien ne le détecte — et relirait le journal exporté,
+# plusieurs Go, une fois de plus.
+if grep -q "var_log.tar.gz" <<< "$plat" \
+   && grep -q "journalctl -D" <<< "$(plan_de "$travail/faux-journal")"
+then dire auth ok "(journaux texte et journal systemd collectés)"
+else dire auth KO "— les journaux d'authentification ne sont pas collectés"
+fi
+if grep -qE "RE_AUTH|auth_succes|auth_echecs" "$conf"
+then dire auth KO "— la conf retrie les authentifications : deux inventaires de motifs"
 fi
 
 # strings NU : sans une option, et sans rien chercher dans sa sortie. La pièce
@@ -114,16 +131,16 @@ fi
 # btmp, ni lastlog : « cp -aL » se retrouvait SANS SOURCE et l'étape passait au
 # rouge sur une collecte saine. Pas de pièce, pas d'étape — mais l'étape doit
 # revenir dès qu'il y a un fichier à copier.
-sans="$travail/faux-arch"
+sans="$travail/faux-arch"          # la fixture arch n'a ni wtmp, ni btmp, ni lastlog
+avec="$travail/faux-connexions"
+rm -rf "$avec"; cp -a "$sans" "$avec"; : > "$avec/var/log/wtmp"
 if grep -q "Copie des fichiers de connexion" <<< "$(plan_de "$sans")"
 then dire connexions KO "— cp -aL sans source sur une image sans wtmp"
-else
-    avec="$travail/faux-connexions"
-    rm -rf "$avec"; cp -a "$sans" "$avec"; : > "$avec/var/log/wtmp"
-    if grep -q "Copie des fichiers de connexion" <<< "$(plan_de "$avec")"
-    then dire connexions ok "(pas de pièce, pas d'étape ; une pièce, une étape)"
-    else dire connexions KO "— wtmp présent et pourtant aucune étape de copie"
-    fi
+else dire connexions ok "(pas de pièce, pas d'étape)"
+fi
+if grep -q "Copie des fichiers de connexion" <<< "$(plan_de "$avec")"
+then dire connexions+ ok "(une pièce, une étape)"
+else dire connexions+ KO "— wtmp présent et pourtant aucune étape de copie"
 fi
 
 # Les comptes sans session ne sont pas relevés. nologin n'est pas le seul :

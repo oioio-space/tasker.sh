@@ -50,7 +50,8 @@ sert que si vous voulez l'inventaire complet de ce que la collecte NE dit pas.
 | connexion console (busybox) | `login[…]: <compte> login on 'tty1'` | `var/log/messages` | oui | Alpine ; son `login` ne dit ni `LOGIN ON`, ni `Failed password` |
 | connexion et échec audités | `type=USER_LOGIN … res=success` / `res=failed` | `JOURNAUX/…_var_log.tar.gz` → `var/log/audit/audit.log` | oui | RHEL durci : ne dépend pas de syslog, et l'heure est un **epoch UTC**, datée au suffixe |
 | compte verrouillé | `pam_faillock … account temporarily locked` | le journal | oui | dit qu'une rafale d'échecs a eu lieu, même si `btmp` est vide |
-| relevé prêt à lire | les deux précédents, triés | `CONNEXIONS/…_auth_succes.txt`, `…_auth_echecs.txt` | — | écrits par la collecte : tous les journaux de l'image mis bout à bout, succès d'un côté, échecs de l'autre |
+| toutes les ouvertures, quelle que soit la source | — | — | oui | elles portent toutes le **rôle** `session-ouverture` : c'est lui que la corrélation plaso, le chapitre « session par session » et les contrôles de conformité lisent, jamais le libellé français |
+| tous les échecs, quelle que soit la source | — | — | oui | même chose avec le rôle `authentification-echec` — SSH, PAM, console, sudo, auditd et `btmp` le portent tous, alors que cinq libellés différents les nomment |
 | dernière connexion | `lastlog`, `lastlog2.db` | `CONNEXIONS/` | oui (binaire 292 o et sqlite) | écrasée à chaque fois |
 | sessions (Fedora 40+) | `wtmp.db` sqlite | `CONNEXIONS/wtmp.db` | oui | |
 | qui était au clavier | — | — | — | **aucune pièce ne le dit jamais** |
